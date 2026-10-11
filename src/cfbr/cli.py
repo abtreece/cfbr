@@ -210,7 +210,7 @@ def rank(
 
 
 EXIT_MEANING = {3: "API quota nearly used up", 4: "another run held the lock",
-                6: "paper-bet step, a shadow comparison (prior or totals) or season simulation failed"}
+                6: "paper-bet step, a shadow comparison (prior, totals or calibration) or season simulation failed"}
 
 
 @app.command()
@@ -353,6 +353,16 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     except Exception:
         log.exception("totals shadow comparison failed; continuing")
         shadow_failed = True
+    try:
+        from cfbr.report.shadow import run_calibration_shadow
+
+        if eng.cfg.model.calibration_v2:
+            log.info("calibration v2 is the published model; no calibration shadow")
+        else:
+            run_calibration_shadow(eng, season)
+    except Exception:
+        log.exception("calibration shadow comparison failed; continuing")
+        shadow_failed = True
     # Season simulation: isolated too.
     sim_failed = False
     if cfg.sim.enabled:
@@ -462,14 +472,19 @@ def shadow(
     season: Annotated[int, typer.Option()],
     config: ConfigOpt = None,
 ) -> None:
-    """Write out/{season}/prior_comparison.{csv,md}: v1 vs roster prior, point-in-time."""
+    """Write out/{season}/prior_comparison.{csv,md} (v1 vs roster prior) and
+    calibration_comparison.{csv,md} (base vs calibration v2), point-in-time."""
     from cfbr.data import Dataset
     from cfbr.ingest.fetch import current_season
-    from cfbr.report.shadow import run_shadow
+    from cfbr.model.engine import Engine
+    from cfbr.report.shadow import run_calibration_shadow, run_shadow
 
     cfg = _default_config(config)
-    path = run_shadow(cfg, Dataset.load(cfg), season, last_completed=min(current_season(), season) - 1)
-    typer.echo(f"wrote {path} and {path.with_suffix('.md')}")
+    ds = Dataset.load(cfg)
+    last = min(current_season(), season) - 1
+    path = run_shadow(cfg, ds, season, last_completed=last)
+    cal = run_calibration_shadow(Engine(ds, cfg, last_completed=last), season)
+    typer.echo(f"wrote {path}, {cal} and their .md summaries")
 
 
 @app.command()

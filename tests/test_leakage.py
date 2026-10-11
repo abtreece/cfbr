@@ -138,3 +138,25 @@ def test_canary_future_game_does_not_change_earlier_ratings(cfg, dataset):
     late = clean.games.filter((pl.col("season") == CANARY_SEASON) & pl.col("slot").is_in(after))["game_id"].to_list()
     assert not mc.filter(pl.col("game_id").is_in(late)).sort("game_id").equals(
         md.filter(pl.col("game_id").is_in(late)).sort("game_id"))
+
+
+@pytest.mark.parametrize("target", [2018, 2023, 2026])
+def test_calibration_v2_trains_on_the_same_seasons_as_the_base_calibration(cfg, target, monkeypatch):
+    """The second stage fits on training_seasons(target) only, with each game's own-season prediction."""
+    import numpy as np
+
+    eng = Engine.__new__(Engine)
+    eng.cfg, eng.first_eval, eng.last_completed, eng._stage2 = cfg, cfg.ingest.first_season + 1, 2025, {}
+    seen = []
+
+    def fake(season):
+        seen.append(season)
+        g = pl.DataFrame({"completed": [True] * 3, "margin": [3.0, -7.0, 10.0], "neutral_site": [False] * 3,
+                          "prior_share_h": [0.5] * 3, "prior_share_a": [0.4] * 3, "home_fcs": [False] * 3,
+                          "away_fcs": [False, False, True]})
+        return g, np.array([1.0, -2.0, 6.0])
+
+    monkeypatch.setattr(eng, "base_predictions", fake)
+    eng.stage2(target)
+    assert seen == training_seasons(target, cfg, eng.prior_available())
+    assert target not in seen

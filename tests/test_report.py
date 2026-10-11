@@ -105,3 +105,32 @@ def test_shadow_window_and_paired_gain():
                          home_team=pl.lit("H"), away_team=pl.lit("A"))
     md = summary_markdown(df, 2026)
     assert "Currently meets" in md and "Upcoming window games" in md
+
+
+def test_calibration_v2_stage2_and_shadow_gain():
+    import numpy as np
+
+    from cfbr.model.calibrate import fit_stage2, stage2_design
+    from cfbr.report.shadow import calibration_gain, calibration_markdown, in_window
+
+    rng = np.random.default_rng(0)
+    n = 4000
+    g = pl.DataFrame({"neutral_site": rng.random(n) < 0.1, "prior_share_h": rng.random(n),
+                      "prior_share_a": rng.random(n), "home_fcs": rng.random(n) < 0.03,
+                      "away_fcs": rng.random(n) < 0.08})
+    pred = rng.normal(0, 14, n)
+    true = np.array([-0.18, 0.32, -0.3, 3.0])
+    g = g.with_columns(margin=pl.Series(pred + stage2_design(g, pred) @ true + rng.normal(0, 2, n)))
+    assert np.allclose(fit_stage2(g, pred), true, atol=0.15)
+    # fcs is signed: +1 for a pooled FCS visitor, -1 for a pooled FCS host
+    x = stage2_design(pl.DataFrame({"neutral_site": [False, True, False], "prior_share_h": [1.0, 1.0, 0.0],
+                                    "prior_share_a": [1.0, 0.0, 0.0], "home_fcs": [False, False, True],
+                                    "away_fcs": [True, False, False]}), np.array([10.0, 10.0, 10.0]))
+    assert x.tolist() == [[10.0, 10.0, 1.0, 1.0], [10.0, 5.0, 0.0, 0.0], [10.0, 0.0, 0.0, -1.0]]
+
+    df = pl.DataFrame({"season": [2026] * 3, "week": [6, 7, 8], "season_type": ["regular"] * 3,
+                       "completed": [True, True, False], "margin": [10.0, -3.0, None],
+                       "pred_base": [4.0, 2.0, 1.0], "pred_v2": [8.0, 0.0, 3.0]}).with_columns(in_window=in_window())
+    w = calibration_gain(df.filter(pl.col("in_window")))
+    assert w["n"] == 1 and w["gain"] == 2.0
+    assert "calibration shadow" in calibration_markdown(df, 2026)

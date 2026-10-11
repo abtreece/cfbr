@@ -116,6 +116,8 @@ Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record
 
 The published ratings use the v1 preseason prior. `cfbr weekly` also computes every game's point-in-time prediction with the roster-based prior (player rosters, transfers, defensive returning production) and writes `out/{season}/prior_comparison.csv` and `.md`. The roster predictions are never published. Under a rule fixed in DECISIONS.md, the roster prior becomes the default before 2027 week 1 only if it beats v1 on 2026 games from week 7 onward and the postseason. Run it by hand with `cfbr shadow --season 2026`.
 
+The same job runs a second shadow, calibration v2 (`out/{season}/calibration_comparison.*`): a second stage on each game prediction that corrects for how much of the two ratings is still prior and for games against a pooled FCS side. Ratings are unchanged and v2 predictions are never published; it is adopted for 2027 only under its pre-registered rule (DECISIONS.md, "M2+M3 calibration v2"). `cfbr shadow` writes both.
+
 ## Point-in-time guarantee
 
 Every prediction for a game in slot *w* (regular-season week, or a 7-day postseason window) uses only plays and games that kicked off before that slot's first kickoff. Cross-season models (the preseason prior and the points calibration) use leave-one-season-out within the tuning seasons, and only earlier seasons for the holdout and live seasons. `tests/test_leakage.py` checks this with an explicit max-kickoff assertion and a canary future game.

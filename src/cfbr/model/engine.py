@@ -19,7 +19,7 @@ from scipy.stats import norm
 
 from cfbr.config import Config
 from cfbr.data import Dataset, slot_as_of, training_slice
-from cfbr.model.calibrate import Calibration, fit_calibration, predict_margin
+from cfbr.model.calibrate import Calibration, fit_calibration, fit_stage2, predict_margin, stage2_design
 from cfbr.model.massey import fit_massey
 from cfbr.model.prior import (COMPONENTS, fit_prior_models, pooled_priors, predict_priors,
                               season_features)
@@ -70,6 +70,7 @@ class Engine:
         self._priors: dict[int, pl.DataFrame] = {}
         self._snaps: dict[int, dict[str, pl.DataFrame]] = {}
         self._cal: dict[int, Calibration] = {}
+        self._stage2: dict[int, np.ndarray] = {}
         self._season_plays: dict[int, pl.DataFrame] = {}
         self._arrays: dict[int, SeasonArrays] = {}
         self._games_snap: dict[int, pl.DataFrame] = {}
@@ -219,6 +220,32 @@ class Engine:
             self._cal[season] = fit_calibration(rows)
         return self._cal[season]
 
+    def base_predictions(self, season: int) -> tuple[pl.DataFrame, np.ndarray]:
+        """Season games with snapshots, and each game's base calibrated margin (that season's calibration)."""
+        g = self.season_games_with_snapshots(season)
+        return g, predict_margin(self.calibration(season), g)
+
+    def stage2(self, season: int) -> np.ndarray:
+        """Calibration v2 coefficients for ``season``: OLS of margin − pred on the stage-2 terms over the
+        same training seasons as the base calibration, each game's pred from its own slot snapshot and
+        its own season's calibration (out of sample for the base fit)."""
+        if season not in self._stage2:
+            rows, preds = [], []
+            for s in training_seasons(season, self.cfg, self.prior_available()):
+                g, p = self.base_predictions(s)
+                keep = (g["completed"] & g["margin"].is_not_null()).fill_null(False).to_numpy()
+                rows.append(g.filter(pl.Series(keep)))
+                preds.append(p[keep])
+            self._stage2[season] = fit_stage2(pl.concat(rows, how="diagonal_relaxed"), np.concatenate(preds))
+        return self._stage2[season]
+
+    def game_margin(self, season: int, g: pl.DataFrame) -> np.ndarray:
+        """Predicted home margin for rows of ``g`` (with snapshot ratings and prior shares attached)."""
+        pred = predict_margin(self.calibration(season), g)
+        if self.cfg.model.calibration_v2:
+            pred = pred + stage2_design(g, pred) @ self.stage2(season)
+        return pred
+
     # -- predictions ------------------------------------------------------------
     def massey_predictions(self, season: int) -> pl.DataFrame:
         g = self.games.filter(pl.col("season") == season)
@@ -237,7 +264,7 @@ class Engine:
     def predict(self, season: int) -> pl.DataFrame:
         cal = self.calibration(season)
         g = self.season_games_with_snapshots(season)
-        g = g.with_columns(pred_margin=pl.Series(predict_margin(cal, g)))
+        g = g.with_columns(pred_margin=pl.Series(self.game_margin(season, g)))
         g = g.with_columns(win_prob=pl.Series(norm.cdf(g["pred_margin"].to_numpy() / cal.sigma)))
         prior_g = self._attach(self.games.filter(pl.col("season") == season), self.priors(season))
         prior_g = prior_g.select("game_id", prior_pred=pl.Series(predict_margin(cal, prior_g)))

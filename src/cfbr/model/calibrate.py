@@ -48,3 +48,25 @@ def fit_calibration(games: pl.DataFrame) -> Calibration:
 
 def predict_margin(cal: Calibration, games: pl.DataFrame) -> np.ndarray:
     return design(games) @ np.array([cal.b_home, cal.b_ppa, cal.b_sr])
+
+
+# -- calibration v2 (DECISIONS "M2+M3 calibration v2") ------------------------------
+# A second stage on the calibrated margin: pred' = pred + c . [pred, pred*ps, home*ps, fcs].
+# Prior-heavy predictions (early season) are under-dispersed and data-heavy ones slightly
+# over-dispersed; games against a pooled FCS side are under-predicted. Game predictions
+# only: published ratings keep the base coefficients.
+STAGE2_TERMS = ["pred", "pred_ps", "home_ps", "fcs"]
+
+
+def stage2_design(games: pl.DataFrame, pred: np.ndarray) -> np.ndarray:
+    """``games`` needs neutral_site, prior_share_h/_a and home_fcs/away_fcs."""
+    ps = ((games["prior_share_h"].fill_null(1.0) + games["prior_share_a"].fill_null(1.0)) / 2).to_numpy()
+    home = (~games["neutral_site"]).cast(pl.Float64).to_numpy()
+    fcs = (games["away_fcs"].cast(pl.Float64) - games["home_fcs"].cast(pl.Float64)).fill_null(0.0).to_numpy()
+    return np.column_stack([pred, pred * ps, home * ps, fcs])
+
+
+def fit_stage2(games: pl.DataFrame, pred: np.ndarray) -> np.ndarray:
+    y = games["margin"].to_numpy() - pred
+    coef, *_ = np.linalg.lstsq(stage2_design(games, pred), y, rcond=None)
+    return coef

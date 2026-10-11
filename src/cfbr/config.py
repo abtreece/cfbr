@@ -47,6 +47,8 @@ class Model(BaseModel):
     alpha_sr: float = 300.0
     half_life_weeks: float = 0.0
     prior_k: float = 0.0
+    # Second-stage game calibration (DECISIONS "M2+M3 calibration v2"); shadow only in 2026.
+    calibration_v2: bool = False
 
 
 class Baseline(BaseModel):
