@@ -72,6 +72,18 @@ It listens on 0.0.0.0:8000 and logs to `data/web.log` (also `journalctl --user -
 
 The server never fits a model. It reads `out/web/{season}/` and picks up new files from `cfbr weekly` without a restart. The ratings shown "after week N" are exactly what `cfbr rank` writes to `out/{season}/wNN/`.
 
+### Deploying code changes
+
+The service runs from this checkout, so a merge to `main` goes live in two halves: Jinja reloads templates from disk at once, but the Python already loaded (routes, row builders, filters) stays the old version until the process restarts. In between, a new template can ask for a column the old code never produces and every page using it returns a 500. So after any merge that touches `src/cfbr/`, restart and check before walking away:
+
+```bash
+systemctl --user restart cfbr-web
+for p in / /accuracy /bets /api/bets; do printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:8000$p"; done
+tail -n 30 data/web.log | grep -n Traceback || echo "no tracebacks"
+```
+
+Data-only changes (a `cfbr weekly` run, new files under `out/`) need no restart.
+
 ## Cron (Sunday mornings, Central time)
 
 ```cron
