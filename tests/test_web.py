@@ -441,6 +441,8 @@ def test_bets_page(bets_client):
     assert "No conclusion yet." in html and "3 of the 500 settled bets" in html
     assert "1–1–1" in html  # won-lost-push
     assert "All bets, best line" in html
+    # bet365 has a pricing-only feed now; the page explains the "(pricing only)" marker.
+    assert "has no feed" not in html and '"(pricing only)" marks a line used only to price the bet' in html
     # On phones the Result column is hidden; the amount carries the result as a mark, not by color alone.
     assert '<span class="m-only">✓ </span>' in html and '<span class="m-only">✗ </span>' in html
     # The best-line book's own price shows when the feed has one, and only then.
@@ -448,7 +450,8 @@ def test_bets_page(bets_client):
     assert "−4.5 <span class=\"muted\">TestBook</span>" in html
     # Rules describe the current pricing rule: offshore books never set the best line.
     assert "Bovada" in html and "never sets the best line" in html
-    assert "Only DraftKings, FanDuel, bet365 can set the best line" in html and "bet365 has no feed" in html
+    assert "Only DraftKings, FanDuel, bet365 can set the best line" in html
+    assert "bet365's lines come from a separate feed used only to price bets" in html
     # What-if panel: hypothetical framing, the live plan first and marked, all three plans.
     assert "What if: staking plans" in html and "not a separate record" in html
     assert "Flat 1% (live)" in html.replace('<span class="muted">', "").replace("</span>", "")

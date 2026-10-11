@@ -13,6 +13,11 @@ Everything is open today. To make premium content paid (pay-per-view,
 subscription), implement :func:`is_premium`, e.g. check a session cookie or
 signed token on ``request``. Every route depends on :func:`premium_viewer`, so
 nothing else needs to change.
+
+Before charging, re-review the data sources' terms (DECISIONS.md): the betting
+pages show third-party odds (The Odds API, OddsPapi's bet365 lines), and
+OddsPapi forbids redistributing its data as a standalone product, which a paid
+page could be read as.
 """
 
 from __future__ import annotations

@@ -52,7 +52,7 @@
       Dollar figures start from a {{ rules.bankroll|money(false) }} bankroll; every bet is a flat {{ rules.unit_value|money(false) }} unit ({{ (rules.unit_value / rules.bankroll)|pct(0) }} of the starting bankroll, not compounding), so it risks {{ unit_risk|money(false) }} to win {{ unit_win|money(false) }}.
       Also graded at the best number available ("best line"): the best spread among the books a bet could actually be placed at,
       ties broken by the better price, and graded at that book's own price (shown in brackets; {{ rules.odds }} when the feed has no price).
-      Only {{ rules.pricing_books|join(", ") }} can set the best line{% if "bet365" in rules.pricing_books %} (bet365 has no feed in our data sources yet){% endif %}. Every other book,
+      Only {{ rules.pricing_books|join(", ") }} can set the best line{% if "bet365" in rules.pricing_books %} (bet365's lines come from a separate feed used only to price bets, so they never count toward the consensus){% endif %}. Every other book,
       including offshore books ({{ rules.offshore_books|join(", ") }}), counts toward the consensus but never sets the best line, so a bet can have no best line.</li>
     <li>Closing-line value (CLV) is how many points better the recorded line was than the closing consensus. It is the first sign of a real edge, since win rate is mostly noise at small samples.</li>
     <li>Betting lines are never model inputs; the model's predictions are made first.</li>
@@ -87,7 +87,7 @@
   </tbody>
 </table>
 </div>
-<p class="note">Edge is the gap in points between the model's margin and the consensus line. "Model" is the model's expected margin for the team bet on. Hover over Books to see each book's line.</p>
+<p class="note">Edge is the gap in points between the model's margin and the consensus line. "Model" is the model's expected margin for the team bet on. Hover over Books to see each book's line; "(pricing only)" marks a line used only to price the bet, never in the consensus.</p>
 {% else %}
 <p class="muted">No open bets.</p>
 {% endif %}
