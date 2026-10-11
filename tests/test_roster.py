@@ -71,3 +71,31 @@ def test_roster_prior_falls_back_to_v1_when_features_missing():
     feats = train.head(4).with_columns(def_ret_tackles=pl.lit(None, pl.Float64))
     out = predict_priors(models, feats)
     assert out.select(["o_ppa", "d_ppa", "o_sr", "d_sr"]).null_count().sum_horizontal().item() == 0
+
+
+def test_roster_web_tables_status_departures_and_labels():
+    from types import SimpleNamespace
+
+    from cfbr.report.roster_web import ROSTER_SUMMARY_LABELS, roster_tables
+
+    roster, ppa, d, status = _data()
+    roster = roster.with_columns(name=pl.col("player_id"), jersey=pl.lit(None, pl.Int32), height=pl.lit(74, pl.Int32),
+                                 weight=pl.lit(210, pl.Int32), home_city=pl.lit("X"), home_state=pl.lit("MO"))
+    ds = SimpleNamespace(roster=roster, player_ppa=ppa, player_defense=d, team_status=status,
+                         fbs_teams=lambda s: ["A", "B"])
+    t = roster_tables(ds, 2026)
+    p = {r["player_id"]: r for r in t["roster_players"].iter_rows(named=True)}
+    assert p["rbA"]["status"] == "returner" and p["rbA"]["from_team"] is None
+    assert p["qbB"]["status"] == "transfer_in" and p["qbB"]["from_team"] == "B"
+    assert p["qbB"]["prev_ppa_avg"] == pytest.approx(60 / 350)
+    assert p["qbB"]["prev_pass_ppa_avg"] == pytest.approx(58 / 330)
+    assert p["rbFCS"]["from_team"] == "F"
+    assert set(t["roster_players"]["team"]) <= {"A", "B"}          # FBS teams only
+    dep = {r["player_id"]: r for r in t["roster_departures"].iter_rows(named=True)}
+    assert dep["qbA"]["team"] == "A" and dep["qbA"]["to_team"] is None
+    assert dep["wrA"]["to_team"] == "B" and "rbA" not in dep
+    assert set(ROSTER_SUMMARY_LABELS) == set(ROSTER_FEATURES)
+    assert t["roster_summary"].columns[:3] == ["season", "team", "roster_as_of"]
+    empty = SimpleNamespace(roster=roster.head(0), player_ppa=ppa, player_defense=d, team_status=status,
+                            fbs_teams=lambda s: [])
+    assert roster_tables(empty, 2026) == {}
