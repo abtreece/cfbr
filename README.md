@@ -77,7 +77,7 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 0 20,21 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "15" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 ```
 
-`weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet.
+`weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet. Failures (except 5) and post-run health-check problems send a push alert through ntfy: install the ntfy app and subscribe to the topic in `.keys` (`NTFY_TOPIC`).
 
 ## Paper bets
 

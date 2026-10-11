@@ -97,3 +97,9 @@ enabled = true
 books = ["bet365"]
 monthly_quota = 250
 quota_reserve = 20
+
+[alerts]
+# Push alerts when `cfbr weekly` fails or its post-run check finds a problem, via ntfy
+# (install the ntfy app and subscribe to the topic). Topic: NTFY_TOPIC in the env or .keys.
+enabled = true
+server = "https://ntfy.sh"

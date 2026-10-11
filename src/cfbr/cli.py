@@ -209,6 +209,10 @@ def rank(
     typer.echo(f"wrote {out}")
 
 
+EXIT_MEANING = {3: "API quota nearly used up", 4: "another run held the lock",
+                6: "paper-bet step or prior shadow comparison failed"}
+
+
 @app.command()
 def weekly(config: ConfigOpt = None) -> None:
     """Cron entry point: ingest -> prep -> rank -> season-to-date backtest line.
@@ -216,7 +220,39 @@ def weekly(config: ConfigOpt = None) -> None:
     Safe to re-run: a lock prevents overlapping runs, ingest is cached, and the
     accuracy line for a week is replaced rather than duplicated. Exit code 6
     means everything ran except the paper-bet step or the prior shadow comparison.
+    Failures and post-run health-check problems send a push alert (see ``[alerts]``);
+    exit 5 (no completed weeks yet, e.g. preseason) doesn't.
     """
+    from cfbr.alerts import send
+    from cfbr.bets.health import check
+    from cfbr.ingest.fetch import current_season
+
+    cfg = _default_config(config)
+    code = 0
+    try:
+        _weekly_run(config)
+    except typer.Exit as e:
+        code = e.exit_code
+        if code not in (0, 5):
+            send(cfg, f"cfbr weekly failed (exit {code})", f"{EXIT_MEANING.get(code, 'see data/weekly.log')}. "
+                 "Details in data/weekly.log.")
+        raise
+    except Exception as e:
+        code = -1
+        send(cfg, "cfbr weekly crashed", f"{type(e).__name__}: {e}"[:300] + " See data/weekly.log.")
+        raise
+    finally:
+        if code in (0, 6):
+            try:
+                problems = check(cfg, current_season())
+            except Exception as e:  # noqa: BLE001 - the check itself must not fail the run
+                problems = [f"health check crashed: {type(e).__name__}: {e}"]
+            if problems:
+                log.warning("post-run check: %s", "; ".join(problems))
+                send(cfg, "cfbr weekly: check found problems", "; ".join(problems))
+
+
+def _weekly_run(config: ConfigOpt = None) -> None:
     import fcntl
     import json
     from datetime import UTC, datetime

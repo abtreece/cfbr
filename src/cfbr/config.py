@@ -119,6 +119,12 @@ class OddsPapi(BaseModel):
     quota_reserve: int = 20
 
 
+class Alerts(BaseModel):
+    """Push alerts from unattended runs via ntfy; the topic is NTFY_TOPIC in the env or .keys."""
+    enabled: bool = True
+    server: str = "https://ntfy.sh"
+
+
 class Config(BaseModel):
     paths: Paths = Paths()
     ingest: Ingest = Ingest()
@@ -131,6 +137,7 @@ class Config(BaseModel):
     bets: Bets = Bets()
     odds: Odds = Odds()
     oddspapi: OddsPapi = OddsPapi()
+    alerts: Alerts = Alerts()
     source: str | None = Field(default=None, exclude=True)
 
 
