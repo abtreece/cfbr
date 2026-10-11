@@ -566,3 +566,9 @@ def test_premium_viewers_see_live_model_output(web_cfg):
     html = " ".join(c.get("/games?season=2026&slot=r01").text.split())
     assert "by 10.0" in html and "for subscribers" not in html
     assert c.get("/games?season=2026&slot=r01").headers["cache-control"] == "private, no-store"
+
+
+
+def test_templates_do_not_hot_reload(web_cfg):
+    """Templates change only on restart, together with the code that renders them."""
+    assert create_app(web_cfg).state.templates.env.auto_reload is False

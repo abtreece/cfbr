@@ -61,7 +61,7 @@
 <div class="table-wrap">
 <table class="data">
   <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Model</th><th class="num">Edge</th><th>Tier</th><th class="num opt">Risk / to win</th>
-    <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded</th></tr></thead>
+    <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded ({{ tz_label }})</th></tr></thead>
   <tbody>
   {% for b in open_bets %}
     <tr>
@@ -74,7 +74,7 @@
       <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
       <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
       <td class="num opt" {% if b.books %}title="{{ b.books }}"{% endif %}>{{ b.n_providers }}</td>
-      <td class="opt">{{ b.placed|kickoff }}</td>
+      <td class="opt">{{ b.placed|short_ts }}</td>
     </tr>
   {% endfor %}
   </tbody>

@@ -63,6 +63,14 @@ def kickoff(ts: datetime | None) -> str:
     return f"{local:%a %b} {local.day}, {local:%I:%M %p}".replace(" 0", " ") + f" {DISPLAY_TZ_LABEL}"
 
 
+def short_ts(ts: datetime | None) -> str:
+    """Compact local timestamp for narrow columns, e.g. "Oct 11, 11:24 AM"."""
+    if ts is None:
+        return "—"
+    local = ts.astimezone(DISPLAY_TZ)
+    return f"{local:%b} {local.day}, {local:%I:%M %p}".replace(" 0", " ")
+
+
 def slot_label(slot: str) -> str:
     return f"Week {int(slot[1:])}" if slot.startswith("r") else f"Postseason {int(slot[1:])}"
 
@@ -256,7 +264,12 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     env = templates.env
-    env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "slot_label": slot_label,
+    # Templates load once per process, like the Python code. With auto-reload, a template
+    # landing on main went live immediately against the old code still running (e.g. a
+    # filter the old process didn't define) and broke the page until a restart.
+    env.auto_reload = False
+    app.state.templates = templates
+    env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
                     "spread": spread_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL}
