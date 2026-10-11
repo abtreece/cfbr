@@ -215,7 +215,7 @@ def weekly(config: ConfigOpt = None) -> None:
 
     Safe to re-run: a lock prevents overlapping runs, ingest is cached, and the
     accuracy line for a week is replaced rather than duplicated. Exit code 6
-    means everything ran except the paper-bet step.
+    means everything ran except the paper-bet step or the prior shadow comparison.
     """
     import fcntl
     import json
@@ -283,10 +283,19 @@ def weekly(config: ConfigOpt = None) -> None:
         except Exception:
             log.exception("paper-bet step failed; continuing")
             bets_failed = True
+    # Shadow prior comparison: also isolated, never affects published output.
+    shadow_failed = False
+    try:
+        from cfbr.report.shadow import run_shadow
+
+        run_shadow(cfg, ds, season, last_completed=season - 1)
+    except Exception:
+        log.exception("prior shadow comparison failed; continuing")
+        shadow_failed = True
     # Last, so a web-data failure can't cost the rankings or the accuracy line.
     web_out = build_season(eng, season, web_dir(cfg))
     typer.echo(f"wrote {out}, {acc_path} and {web_out}")
-    if bets_failed:
+    if bets_failed or shadow_failed:
         raise typer.Exit(code=6)
 
 
@@ -303,6 +312,21 @@ def bets(
     cfg = _default_config(config)
     path = run_bets(cfg, Dataset.load(cfg), season, week)
     typer.echo(f"wrote {path} and {path.with_name('bets.md')}")
+
+
+@app.command()
+def shadow(
+    season: Annotated[int, typer.Option()],
+    config: ConfigOpt = None,
+) -> None:
+    """Write out/{season}/prior_comparison.{csv,md}: v1 vs roster prior, point-in-time."""
+    from cfbr.data import Dataset
+    from cfbr.ingest.fetch import current_season
+    from cfbr.report.shadow import run_shadow
+
+    cfg = _default_config(config)
+    path = run_shadow(cfg, Dataset.load(cfg), season, last_completed=min(current_season(), season) - 1)
+    typer.echo(f"wrote {path} and {path.with_suffix('.md')}")
 
 
 @app.command()

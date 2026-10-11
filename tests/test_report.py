@@ -83,3 +83,25 @@ def test_market_spread_prefers_books_and_never_uses_numberfire():
     assert (out[1]["spread"], out[1]["source"], out[1]["n_providers"]) == (-3.5, "books", 2)
     assert (out[2]["spread"], out[2]["source"]) == (-7.0, "consensus")
     assert (out[3]["spread"], out[3]["source"]) == (-2.5, "teamrankings")
+
+
+def test_shadow_window_and_paired_gain():
+    from cfbr.report.shadow import in_window, paired_gain, summary_markdown
+
+    df = pl.DataFrame({
+        "season": [2026, 2026, 2026, 2026, 2025],
+        "week": [6, 7, 1, 9, 9],
+        "season_type": ["regular", "regular", "postseason", "regular", "regular"],
+        "completed": [True, True, True, False, True],
+        "margin": [10.0, -3.0, 7.0, None, 3.0],
+        "pred_v1": [4.0, 2.0, 1.0, 5.0, 0.0],
+        "pred_roster": [8.0, 0.0, 3.0, 6.0, 0.0],
+    }).with_columns(in_window=in_window())
+    assert df["in_window"].to_list() == [False, True, True, True, False]
+    g = paired_gain(df.filter(pl.col("in_window")))
+    # wk7: |2-(-3)|=5 vs |0-(-3)|=3 -> +2 ; post: |1-7|=6 vs |3-7|=4 -> +2 ; wk9 not completed
+    assert g["n"] == 2 and g["gain"] == 2.0
+    df = df.with_columns(kickoff_ts=pl.lit("2026-10-17T19:00:00").str.to_datetime(),
+                         home_team=pl.lit("H"), away_team=pl.lit("A"))
+    md = summary_markdown(df, 2026)
+    assert "Currently meets" in md and "Upcoming window games" in md
