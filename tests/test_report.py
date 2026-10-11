@@ -35,6 +35,36 @@ def test_ats_excludes_pushes_and_ties():
     assert m["ats_n"] == 2 and m["ats_wins"] == 1
 
 
+def test_diagnostics_tables():
+    import numpy as np
+
+    from cfbr.backtest.metrics import diagnostics
+    rng = np.random.default_rng(0)
+    n = 400
+    pred = rng.normal(0, 10, n)
+    line = pred + rng.normal(0, 2, n)
+    margin = 2.0 + 1.1 * pred + rng.normal(0, 12, n)   # under-dispersed, biased predictions
+    df = pl.DataFrame({
+        "season": [2020] * n, "season_type": ["regular"] * (n - 20) + ["postseason"] * 20,
+        "week": [1] * 50 + [2] * 50 + [6] * 150 + [10] * 150,
+        "margin": margin, "pred_margin": pred, "win_prob": 1 / (1 + np.exp(-pred / 8)),
+        "prior_share_h": np.linspace(0, 1, n), "prior_share_a": np.linspace(0, 1, n), "spread": -line,
+    })
+    d = diagnostics(df)
+    assert d["n_games"] == n
+    assert [r["bucket"] for r in d["by_week"]] == ["w01", "w02", "w05-08", "w09-12", "post"]
+    assert sum(r["n"] for r in d["by_week"]) == n
+    overall_slope = np.cov(pred, margin, ddof=0)[0, 1] / np.var(pred)
+    assert overall_slope > 1.0 and abs(sum(r["bias"] * r["n"] for r in d["by_week"]) / n - np.mean(margin - pred)) < 1e-9
+    assert [r["bucket"] for r in d["by_prior_share"]] == ["<0.3", "0.3-0.5", "0.5-0.7", "0.7-0.9", ">=0.9"]
+    assert len(d["reliability"]) == 10 and sum(r["n"] for r in d["reliability"]) == int((margin != 0).sum())
+    assert abs(d["blend"]["w_line"] + d["blend"]["w_model"] - 1.1) < 0.1   # recovers the 1.1 scale on the line
+    assert [r["bucket"] for r in d["ats_by_edge"]] == ["0-3", "3-6", "6-10", "10+"]
+    assert sum(r["n"] for r in d["ats_by_edge"]) <= n
+    assert diagnostics(df.clear()) == {"n_games": 0}
+    assert "blend" not in diagnostics(df.drop("spread"))
+
+
 def _polls(rows):
     return pl.DataFrame(rows, schema={"season": pl.Int32, "season_type": pl.Utf8, "week": pl.Int32, "poll": pl.Utf8,
                                       "rank": pl.Int32, "team": pl.Utf8}, orient="row")

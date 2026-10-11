@@ -102,11 +102,21 @@ def client(web_cfg):
     run.mkdir(parents=True)
     (run / "metrics.json").write_text(json.dumps({"seasons": [2015, 2021], "overall": {
         "n_games": 10, "mae": 13.0, "line_mae": 12.0, "massey_mae": 15.0, "ats_n": 9, "ats_win_rate": 0.5,
-        "ats_ci95_low": 0.2, "ats_ci95_high": 0.8}}))
+        "ats_ci95_low": 0.2, "ats_ci95_high": 0.8}, "diagnostics": {
+        "n_games": 10, "by_week": [{"bucket": "w01", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
+        "by_prior_share": [{"bucket": ">=0.9", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
+        "ats_by_edge": [{"bucket": "0-3", "n": 9, "wins": 4, "win_rate": 0.444, "ci95_low": 0.2, "ci95_high": 0.7}],
+        "blend": {"n": 9, "w_line": 0.95, "w_model": 0.05, "mae_line": 12.0, "mae_model": 13.0, "mae_blend": 12.0},
+        "reliability": [{"bin": "0.5-0.6", "n": 10, "predicted": 0.55, "observed": 0.5}]}}))
     return TestClient(create_app(web_cfg))
 
 
 # -- pages ------------------------------------------------------------------------
+
+def test_accuracy_shows_run_diagnostics(client):
+    html = client.get("/accuracy").text
+    assert "Diagnostics" in html and "0.950·line + 0.050·model" in html and "w01" in html
+
 
 @pytest.mark.parametrize("url", [
     "/rankings", "/rankings?season=2026&week=0", "/rankings?season=2026&week=1&conf=SEC",
