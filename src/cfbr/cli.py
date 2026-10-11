@@ -326,6 +326,26 @@ def bets(
     typer.echo(f"wrote {path} and {path.with_name('bets.md')}")
 
 
+@app.command("bets-retro")
+def bets_retro(
+    season: Annotated[int, typer.Option()],
+    through_week: Annotated[int, typer.Option(help="Last regular-season week to replay")],
+    config: ConfigOpt = None,
+) -> None:
+    """Replay the paper-bet rules on weeks already played (v1 and roster models) into a
+    separate out/{season}/bets_retro.* file. Makes no API calls."""
+    from cfbr.bets.retro import retro_markdown, run_retro
+    from cfbr.data import Dataset
+
+    cfg = _default_config(config)
+    led = run_retro(cfg, Dataset.load(cfg), season, through_week, last_completed=season - 1)
+    out = cfg.paths.out_dir / str(season)
+    out.mkdir(parents=True, exist_ok=True)
+    led.write_csv(out / "bets_retro.csv")
+    (out / "bets_retro.md").write_text(retro_markdown(led, cfg.bets, season, through_week))
+    typer.echo(f"wrote {out / 'bets_retro.csv'} and {out / 'bets_retro.md'}")
+
+
 @app.command()
 def shadow(
     season: Annotated[int, typer.Option()],
