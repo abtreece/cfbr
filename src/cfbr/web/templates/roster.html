@@ -67,23 +67,25 @@
     <th data-sort="num" class="num opt" title="Expected points added per play last season">PPA/play</th>
     <th data-sort="num" class="num opt-xs" title="Tackles last season, at any school">Tkl</th>
     <th data-sort="num" class="num opt" title="Tackles for loss + passes defended + interceptions last season">Havoc</th>
+    <th data-sort="num" class="opt" title="Prior seasons with recorded stats; for QBs, prior-season starts (games leading his team in pass attempts, 5+)">Career</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}
     <tr data-pos="{{ r.position or '' }}" data-status="{{ r.status }}">
       <td class="num opt" data-v="{{ r.jersey if r.jersey is not none else 999 }}">{{ r.jersey if r.jersey is not none else "—" }}</td>
-      <td class="team strong">{{ r.name }}</td>
+      <td class="team strong"><a href="/player/{{ season }}/{{ r.player_id|q }}">{{ r.name }}</a></td>
       <td data-v="{{ r.pos_order }}">{{ r.position or "—" }}</td>
       <td class="num opt" data-v="{{ r.class_year or 9 }}">{{ r.class_label }}</td>
       <td class="num opt" data-v="{{ r.height or 0 }}">{{ r.height_label }}</td>
       <td class="num opt" data-v="{{ r.weight or 0 }}">{{ r.weight or "—" }}</td>
-      <td class="opt">{{ r.hometown }}</td>
-      <td class="team">{% if r.status == "transfer_in" %}Transfer{% if r.from_team %} from {{ team_link(r.from_team, season - 1, fbs_teams) }}{% endif %}
+      <td class="opt wrap">{{ r.hometown }}</td>
+      <td class="team wrap">{% if r.status == "transfer_in" %}Transfer{% if r.from_team %} from {{ team_link(r.from_team, season - 1, fbs_teams) }}{% endif %}
           {% elif r.status == "returner" %}Returner{% else %}<span class="muted">No prior stats</span>{% endif %}</td>
       <td class="num" data-v="{{ r.prev_plays or 0 }}">{{ r.prev_plays|count }}</td>
       <td class="num opt" data-v="{{ r.prev_ppa_avg if r.prev_ppa_avg is not none else -99 }}">{{ r.prev_ppa_avg|signed(2) }}</td>
       <td class="num opt-xs" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
       <td class="num opt" data-v="{{ r.prev_havoc or 0 }}">{{ r.prev_havoc|count }}</td>
+      <td class="opt" data-v="{{ (r.career_seasons or 0) * 1000 + (r.career_qb_starts or 0) }}">{% if r.career_seasons %}{{ r.career_seasons|count }} season{{ "s" if r.career_seasons != 1 }}{% if r.career_qb_starts %} · {{ r.career_qb_starts|count }} starts{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -98,7 +100,7 @@
 <table class="data sortable">
   <thead><tr><th data-sort="text">Name</th><th data-sort="text">Pos</th><th data-sort="text">Now at</th>
     <th data-sort="num" class="num">Plays</th><th data-sort="num" class="num opt">PPA total</th>
-    <th data-sort="num" class="num">Tkl</th><th data-sort="num" class="num opt">Havoc</th></tr></thead>
+    <th data-sort="num" class="num opt-xs">Tkl</th><th data-sort="num" class="num opt">Havoc</th></tr></thead>
   <tbody>
   {% for r in departures %}
     <tr>
@@ -106,7 +108,7 @@
       <td class="team">{% if r.to_team %}{{ team_link(r.to_team, season, fbs_teams) }}{% else %}<span class="muted">not on a roster</span>{% endif %}</td>
       <td class="num" data-v="{{ r.prev_plays or 0 }}">{{ r.prev_plays|count }}</td>
       <td class="num opt" data-v="{{ r.prev_ppa_total if r.prev_ppa_total is not none else -999 }}">{{ r.prev_ppa_total|signed(0) }}</td>
-      <td class="num" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
+      <td class="num opt-xs" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
       <td class="num opt" data-v="{{ r.prev_havoc or 0 }}">{{ r.prev_havoc|count }}</td>
     </tr>
   {% endfor %}

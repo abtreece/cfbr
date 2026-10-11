@@ -680,6 +680,21 @@ def test_templates_do_not_hot_reload(web_cfg):
 
 # -- rosters: public facts, free even for a live season ----------------------------------
 
+def _write_careers(season_dir):
+    """Career rows for player 1 (two completed seasons at Hawai'i, then this season to date)."""
+    base = {"season": SEASON, "team": "Texas A&M", "player_id": "1", "games": 12, "qb_starts": 12, "plays": 500,
+            "pass_att": 450, "rush_car": 40, "rec": 0, "ppa_total": 120.0, "ppa_avg": 0.24, "pass_ppa_total": 110.0,
+            "pass_ppa_avg": 0.244, "tackles": None, "tfl": None, "sacks": None, "pd": None, "hurries": None,
+            "ints": None}
+    rows = [base | {"career_season": 2024, "career_team": "Hawai'i", "source": "season stats"},
+            base | {"career_season": 2025, "career_team": "Hawai'i", "source": "season stats", "pass_att": 734},
+            base | {"career_season": 2026, "career_team": "Texas A&M", "source": "box scores (to date)", "games": 1,
+                    "qb_starts": 1, "pass_att": 30, "ppa_total": None, "ppa_avg": None, "pass_ppa_total": None,
+                    "pass_ppa_avg": None}]
+    pl.DataFrame(rows, schema_overrides={"season": pl.Int32, "career_season": pl.Int32}).write_parquet(
+        season_dir / "roster_careers.parquet")
+
+
 def _write_roster(season_dir):
     """Synthetic roster files next to a season's ratings, then touch meta.json (the reload signal)."""
     from cfbr.report.roster_web import ROSTER_SUMMARY_LABELS
@@ -695,6 +710,7 @@ def _write_roster(season_dir):
         "prev_pass_plays": [380, 260, None, 0], "prev_pass_ppa_total": [120.0, 60.0, None, 0.0],
         "prev_pass_ppa_avg": [0.316, 0.231, None, None], "prev_tackles": [None, None, None, 2.0],
         "prev_havoc": [None, None, None, 0.5],
+        "career_seasons": [3, 2, 0, 1], "career_pass_att": [1184, 260, 0, 0], "career_qb_starts": [31, 4, 0, 0],
     }, schema_overrides={"season": pl.Int32, "jersey": pl.Int32, "class_year": pl.Int32, "height": pl.Int32,
                          "weight": pl.Int32, "prev_plays": pl.Int64, "prev_pass_plays": pl.Int64})
     departures = pl.DataFrame({
@@ -734,6 +750,8 @@ def test_roster_page(roster_client):
     # Departures, with the destination linked when it's an FBS team this season.
     assert "Gone Pro" in html and "not on a roster" in html and '<a href="/team/2026/Ohio%20State">Ohio State</a>' in html
     # Summary: shares as percentages, QB back as Yes, no transfer QB as None.
+    assert '<a href="/player/2026/1">Sam Starter</a>' in html  # names link to player pages
+    assert "3 seasons · 31 starts" in html
     assert "62%" in html and "Starting QB back" in html and ">Yes<" in html
     # qb_in_ppa = 0 means no 100+-attempt transfer QB, which is not the same as no transfer QB.
     assert ">None with 100+ att.<" in html and ">None<" not in html
@@ -788,3 +806,28 @@ def test_build_survives_roster_failure(engine, tmp_path, monkeypatch):
     out = build_season(engine, 2023, tmp_path, now=datetime.now(UTC))
     meta = json.loads((out / "meta.json").read_text())
     assert meta["roster"] is False and (out / "ratings.parquet").exists()
+
+
+def test_player_page_with_career(web_cfg):
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
+    _write_careers(d)
+    _write_roster(d)
+    c = TestClient(create_app(web_cfg))
+    r = c.get("/player/2026/1")
+    assert r.status_code == 200
+    html = " ".join(r.text.split())
+    assert "Sam Starter" in html and 'href="/roster/2026/Texas%20A%26M">← Texas A&amp;M 2026 roster</a>' in html
+    assert ">1,184<" in html and ">31<" in html  # career pass attempts and starts (tiles, with separators)
+    assert "2026 <span class=\"muted\">to date</span>" in html and "734" in html
+    # Only column groups with data: passing yes, defense no.
+    assert ">Pass att<" in html and ">Tkl<" not in html
+    body = c.get("/api/player/2026/1").json()
+    assert [row["career_season"] for row in body["career"]] == [2024, 2025, 2026]
+    assert body["career_labels"]["qb_starts"]["label"] == "QB starts"
+
+
+def test_player_page_without_career_file(roster_client):
+    r = roster_client.get("/player/2026/3")
+    assert r.status_code == 200 and "Career history isn't available" in r.text
+    assert roster_client.get("/player/2026/nope").status_code == 404
+    assert roster_client.get("/api/player/2026/nope").status_code == 404

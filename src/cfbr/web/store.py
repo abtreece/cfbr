@@ -41,6 +41,7 @@ class Roster:
     players: pl.DataFrame
     departures: pl.DataFrame
     summary: pl.DataFrame
+    careers: pl.DataFrame | None = None  # season-by-season history; optional (older builds lack it)
 
 
 @dataclass(frozen=True)
@@ -158,7 +159,11 @@ class Store:
                 return hit[1]
             d = meta_path.parent
             files = [d / f"{n}.parquet" for n in ("roster_players", "roster_departures", "roster_summary")]
-            r = Roster(*(pl.read_parquet(f) for f in files)) if all(f.exists() for f in files) else None
+            r = None
+            if all(f.exists() for f in files):
+                careers = d / "roster_careers.parquet"
+                r = Roster(*(pl.read_parquet(f) for f in files),
+                           careers=pl.read_parquet(careers) if careers.exists() else None)
             self._rosters[season] = (mtime, r)
             return r
 

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "macros.html" import tile, team_link %}
+{% block title %}{{ player.name }} · {{ player.team }} {{ season }} · CFB Ratings{% endblock %}
+{% block content %}
+<p><a class="back" href="/roster/{{ season }}/{{ player.team|q }}">← {{ player.team }} {{ season }} roster</a></p>
+
+<h1>{{ player.name }}{% if player.jersey is not none %} <span class="muted">#{{ player.jersey }}</span>{% endif %}</h1>
+<p class="lede">
+  {{ player.position or "—" }} · {{ team_link(player.team, season, fbs_by_season[season]) }} · {{ player.class_label }}
+  {% if player.height_label != "—" %} · {{ player.height_label }}{% endif %}{% if player.weight %}, {{ player.weight }} lbs{% endif %}
+  {% if player.hometown != "—" %} · {{ player.hometown }}{% endif %}
+</p>
+
+<div class="tiles">
+  {{ tile("Status", "Transfer" if player.status == "transfer_in" else "Returner" if player.status == "returner" else "No prior stats",
+          ("from " ~ player.from_team) if player.status == "transfer_in" and player.from_team else "") }}
+  {{ tile(extra_labels.career_seasons[0], player.career_seasons|count) }}
+  {% if player.position == "QB" or (player.career_pass_att or 0) > 0 %}
+  {{ tile(extra_labels.career_pass_att[0], player.career_pass_att|count) }}
+  {{ tile(extra_labels.career_qb_starts[0], player.career_qb_starts|count, "games leading his team in pass attempts (5+)") }}
+  {% endif %}
+</div>
+
+<h2>Career</h2>
+{% if rows %}
+<div class="table-wrap">
+<table class="data">
+  <thead><tr>
+    <th>Season</th><th>Team</th><th class="num" title="Games with a recorded stat (FBS-involved games only)">G</th>
+    {% for c in cols %}<th class="num{% if c.opt %} opt{% endif %}" title="{{ c.definition }}">{{ c.label }}</th>{% endfor %}
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr {% if r.source != "season stats" %}class="upcoming"{% endif %}>
+      <td class="team">{{ r.career_season }}{% if r.source != "season stats" %} <span class="muted">to date</span>{% endif %}</td>
+      <td class="team">{{ team_link(r.career_team, r.career_season, fbs_by_season.get(r.career_season, [])) }}</td>
+      <td class="num">{{ r.games|count }}</td>
+      {% for c in cols %}<td class="num{% if c.opt %} opt{% endif %}">{{ cell(c.key, r[c.key]) }}</td>{% endfor %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Completed seasons come from CFBD season stats; the current season's line is from box scores to date, which have no PPA, sacks or hurries.
+  Games and QB starts count FBS-involved games only. Defensive stats start in 2016. Hover a column header for its definition.</p>
+{% elif has_careers %}
+<p class="muted">No recorded stats in any season yet.</p>
+{% else %}
+<p class="muted">Career history isn't available for this season's data yet.</p>
+{% endif %}
+{% endblock %}

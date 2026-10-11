@@ -16,7 +16,7 @@ import polars as pl
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from cfbr.report.roster_web import ROSTER_SUMMARY_LABELS
+from cfbr.report.roster_web import CAREER_LABELS, PLAYER_EXTRA_LABELS, ROSTER_SUMMARY_LABELS
 from cfbr.web.store import Roster, Store
 
 CLASS = {1: "Fr", 2: "So", 3: "Jr", 4: "Sr", 5: "Gr"}
@@ -40,7 +40,7 @@ def count_str(x) -> str:
     """Counts as whole numbers; half-credit stats (e.g. 0.5 TFL) keep one decimal."""
     if _missing(x):
         return "—"
-    return f"{x:.0f}" if abs(x - round(x)) < 0.05 else f"{x:.1f}"
+    return f"{x:,.0f}" if abs(x - round(x)) < 0.05 else f"{x:,.1f}"
 
 
 def feature_value(key: str, x) -> str:
@@ -110,6 +110,39 @@ def roster_card(roster: Roster | None, team: str) -> dict | None:
             "as_of": s.get("roster_as_of") if s else None}
 
 
+# Career table column groups; a group is shown only if the player has any value in it.
+CAREER_GROUPS = {
+    "Passing": ["qb_starts", "pass_att", "pass_ppa_avg"],
+    "Rushing / receiving": ["rush_car", "rec"],
+    "Offense": ["plays", "ppa_avg"],
+    "Defense": ["tackles", "tfl", "sacks", "pd", "hurries", "ints"],
+}
+
+
+def career_view(careers: pl.DataFrame | None, player_id: str) -> tuple[list[dict], list[dict]]:
+    """(rows, columns) for a player's career table, oldest season first. Columns carry
+    their CAREER_LABELS label and definition; empty groups are left out."""
+    if careers is None:
+        return [], []
+    rows = careers.filter(pl.col("player_id") == player_id).sort("career_season").to_dicts()
+    passer = any((r.get("pass_att") or 0) > 0 for r in rows)
+    phone = {"qb_starts", "pass_att"} if passer else {"plays", "tackles"}  # columns kept on phones
+    cols = []
+    for group, keys in CAREER_GROUPS.items():
+        present = [k for k in keys if any(not _missing(r.get(k)) and r.get(k) != 0 for r in rows)]
+        cols += [{"key": k, "group": group, "label": CAREER_LABELS[k][0], "definition": CAREER_LABELS[k][1],
+                  "opt": k not in phone} for k in present]
+    return rows, cols
+
+
+def career_cell(key: str, x) -> str:
+    if _missing(x):
+        return "—"
+    if key.endswith("_avg"):
+        return f"{x:+.2f}".replace("-", "−")
+    return count_str(x)
+
+
 def make_router(store: Store, render: Callable[..., HTMLResponse]) -> APIRouter:
     router = APIRouter()
 
@@ -145,5 +178,38 @@ def make_router(store: Store, render: Callable[..., HTMLResponse]) -> APIRouter:
         return clean({"season": season, "team": team, "summary": s,
                       "summary_labels": {k: {"label": a, "definition": b} for k, (a, b) in ROSTER_SUMMARY_LABELS.items()},
                       "players": p.to_dicts(), "departures": d.to_dicts()})
+
+    def load_player(season: int, player_id: str) -> tuple[dict, Roster]:
+        roster = store.roster(season)
+        if roster is None:
+            raise HTTPException(404, f"No roster data for {season}.")
+        p = roster.players.filter(pl.col("player_id") == player_id)
+        if p.height == 0:
+            raise HTTPException(404, f"No player {player_id!r} on a {season} roster.")
+        return player_rows(p)[0], roster
+
+    @router.get("/player/{season}/{player_id}", response_class=HTMLResponse, include_in_schema=False)
+    def player_page(request: Request, season: int, player_id: str):
+        player, roster = load_player(season, player_id)
+        rows, cols = career_view(roster.careers, player_id)
+        # Link a career team to its team page when we have that season and it was FBS then.
+        fbs_by_season = {}
+        for y in {r["career_season"] for r in rows} | {season}:
+            s = store.season(y)
+            fbs_by_season[y] = set(s.ratings.filter(pl.col("fbs"))["team"].to_list()) if s is not None else set()
+        return render(request, "player.html", season=season, player=player, rows=rows, cols=cols,
+                      fbs_by_season=fbs_by_season, extra_labels=PLAYER_EXTRA_LABELS,
+                      has_careers=roster.careers is not None, cell=career_cell)
+
+    @router.get("/api/player/{season}/{player_id}")
+    def api_player(season: int, player_id: str):
+        from cfbr.web.app import clean
+
+        player, roster = load_player(season, player_id)
+        rows, _ = career_view(roster.careers, player_id)
+        drop = {"pos_order", "class_label", "height_label", "hometown"}
+        return clean({"season": season, "player": {k: v for k, v in player.items() if k not in drop},
+                      "career": rows,
+                      "career_labels": {k: {"label": a, "definition": b} for k, (a, b) in CAREER_LABELS.items()}})
 
     return router
