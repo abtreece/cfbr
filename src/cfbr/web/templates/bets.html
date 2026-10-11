@@ -54,7 +54,7 @@
       ties broken by the better price, and graded at that book's own price (shown in brackets; {{ rules.odds }} when the feed has no price).
       Only {{ rules.pricing_books|join(", ") }} can set the best line{% if "bet365" in rules.pricing_books %} (bet365's lines come from a separate feed used only to price bets, so they never count toward the consensus){% endif %}. Every other book,
       including offshore books ({{ rules.offshore_books|join(", ") }}), counts toward the consensus but never sets the best line, so a bet can have no best line.</li>
-    <li>Closing-line value (CLV) is how many points better the recorded line was than the closing consensus. It is the first sign of a real edge, since win rate is mostly noise at small samples.</li>
+    <li>Closing-line value (CLV) is how many points better the recorded line was than the closing consensus: the median spread across sportsbooks in the last odds snapshot before kickoff (at most 12 hours earlier), or CFBD's post-game consensus when no snapshot qualifies. It is the first sign of a real edge, since win rate is mostly noise at small samples.</li>
     <li>Betting lines are never model inputs; the model's predictions are made first.</li>
   </ul>
 </details>
@@ -216,7 +216,7 @@
   </tbody>
 </table>
 </div>
-<p class="note">Final score is away–home. Close is the closing consensus line for the team bet on; CLV &gt; 0 means the recorded line beat it.</p>
+<p class="note">Final score is away–home. Close is the closing consensus line for the team bet on (across sportsbooks shortly before kickoff, or CFBD's when no pre-kickoff snapshot exists); CLV &gt; 0 means the recorded line beat it.</p>
 {% endif %}
 {% endif %}
 {% endblock %}
