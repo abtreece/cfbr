@@ -1,24 +1,26 @@
 # News/availability archive sources. Every fetch is stored with the time it was
 # fetched, which is what makes the archive usable point-in-time.
 #
-# Policy (checked live on every run, see src/cfbr/news/policy.py):
-#   - robots.txt must allow the URL for our user agent;
-#   - sites whose robots.txt names an AI agent (anthropic-ai, ClaudeBot, GPTBot,
-#     Google-Extended, ...) are skipped, because this archive feeds a language model.
-#     Blocking only CCBot (Common Crawl) is not treated as an AI opt-out;
-#   - bot challenges are never bypassed: a challenged source is skipped.
-# Excluded on that basis (2026-10-11): secsports.com (incl. SEC reports served via
-# the HD Intelligence embed), espn.com, sports.yahoo.com, cbssports.com, theathletic.com.
+# Policy (src/cfbr/news/policy.py):
+#   - robots.txt must allow the URL for our user agent (checked live every run);
+#   - every source needs a recorded terms-of-use review (`terms`) before it is
+#     collected; terms that prohibit automated collection exclude the source;
+#   - bot challenges are never bypassed and private vendor APIs are never called
+#     directly; official reports are captured by rendering the conference's own page.
 #
-# SEC/ESPN note: secsports.com and espn.com are governed by the Disney Terms of Use,
-# which prohibit automated access to compile any data set or database (and name machine
-# learning explicitly). That, not robots.txt, is the binding reason they're excluded.
+# Excluded after terms review (2026-10-11), all prohibiting automated collection:
+#   secsports.com and espn.com (Disney Terms of Use: no automated access to compile any
+#   data set, machine learning named), on3.com (no scraping/crawling by automated tool,
+#   incl. for AI/ML), cbssports.com (CBS Interactive: no unauthorized scraping, data
+#   mining or automated gathering), sports.yahoo.com (Yahoo: no automated data collection
+#   for any purpose without permission), The Athletic / nytimes.com (NYT: no automated
+#   collection; no use for ML/AI).
 #
 # Official availability coverage (2026-10-11): Big Ten, ACC, Big 12, American, MAC
 # (all via the HD Intelligence embed on the conference's own page). Not yet collected:
-# SEC (Disney Terms of Use), Pac-12, Mountain West, Sun Belt (no report found on the linked
-# pages yet), Conference USA (different vendor, image graphics), independents. Coverage
-# is expected to stay incomplete; the model must treat "no report" as unknown.
+# SEC (Disney Terms of Use), Pac-12, Mountain West, Sun Belt (no report found on the
+# linked pages yet), Conference USA (different vendor, image graphics), independents.
+# Coverage is expected to stay incomplete; the model must treat "no report" as unknown.
 
 user_agent = "cfb-ratings-news-collector/0.1 (personal research; low-frequency)"
 min_seconds_between_requests_per_host = 5
@@ -28,51 +30,53 @@ name = "big_ten_availability"
 kind = "availability_page"   # official report, rendered in a headless browser
 url = "https://bigten.org/fb/availability-reports/"
 tier = "official"
+terms = "2026-10-11: site runs on SIDEARM; SIDEARM Terms of Service contain no restriction on automated access; bigten.org publishes no separate terms; report embed (HD Intelligence) publishes no terms"
 
 [[source]]
 name = "acc_availability"
 kind = "availability_page"
 url = "https://theacc.com/sports/2025/8/28/availability-reporting-football.aspx"
 tier = "official"
-
-[[source]]
-name = "on3"
-kind = "rss"
-url = "https://www.on3.com/feed/"
-tier = "outlet"
-
-[[source]]
-name = "college_football_network"
-kind = "rss"
-url = "https://collegefootballnetwork.com/feed/"
-tier = "outlet"
-
-[[source]]
-name = "saturday_down_south"
-kind = "rss"
-url = "https://www.saturdaydownsouth.com/feed/"
-tier = "outlet"
-
-[[source]]
-name = "fbschedules"
-kind = "rss"
-url = "https://fbschedules.com/feed/"
-tier = "outlet"
+terms = "2026-10-11: SIDEARM site; SIDEARM Terms of Service contain no restriction on automated access; HD Intelligence embed publishes no terms"
 
 [[source]]
 name = "big_12_availability"
 kind = "availability_page"
 url = "https://big12sports.com/sports/2025/8/14/FBreporting.aspx"
 tier = "official"
+terms = "2026-10-11: SIDEARM site; SIDEARM Terms of Service contain no restriction on automated access; HD Intelligence embed publishes no terms"
 
 [[source]]
 name = "american_availability"
 kind = "availability_page"
 url = "https://theamerican.org/sports/2026/8/6/football_player_availability.aspx"
 tier = "official"
+terms = "2026-10-11: SIDEARM site; SIDEARM Terms of Service contain no restriction on automated access; HD Intelligence embed publishes no terms"
 
 [[source]]
 name = "mac_availability"
 kind = "availability_page"
 url = "https://getsomemaction.com/sports/2026/7/28/FB_0728265050.aspx.aspx"
 tier = "official"
+terms = "2026-10-11: SIDEARM site; SIDEARM Terms of Service contain no restriction on automated access; HD Intelligence embed publishes no terms"
+
+[[source]]
+name = "college_football_network"
+kind = "rss"
+url = "https://collegefootballnetwork.com/feed/"
+tier = "outlet"
+terms = "2026-10-11: no terms of use published on the site (none linked; common paths 404); robots.txt allows the feed; RSS headline/summary only"
+
+[[source]]
+name = "saturday_down_south"
+kind = "rss"
+url = "https://www.saturdaydownsouth.com/feed/"
+tier = "outlet"
+terms = "2026-10-11: no terms of use published on the site (none linked; common paths 404); robots.txt allows the feed; RSS headline/summary only"
+
+[[source]]
+name = "fbschedules"
+kind = "rss"
+url = "https://fbschedules.com/feed/"
+tier = "outlet"
+terms = "2026-10-11: no terms of use published (privacy policy only, no automated-access clause); robots.txt allows the feed; RSS headline/summary only"

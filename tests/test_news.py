@@ -42,3 +42,13 @@ def test_archive_dedupes_items_and_is_append_only(tmp_path):
     assert Archive(tmp_path).add_item(dict(row, first_seen_at="later")) is False  # survives restart
     lines = (tmp_path / "items.jsonl").read_text().splitlines()
     assert len(lines) == 1 and json.loads(lines[0])["first_seen_at"] == t.isoformat()
+
+
+def test_sources_without_terms_review_are_skipped(tmp_path):
+    from cfbr.news.collect import collect
+
+    cfg = tmp_path / "news.toml"
+    cfg.write_text('user_agent = "t"\n[[source]]\nname = "x"\nkind = "rss"\n'
+                   'url = "https://example.invalid/feed"\ntier = "outlet"\n')
+    res = collect(config=cfg, root=tmp_path / "news")
+    assert res["x"].startswith("skipped: terms of use not reviewed")

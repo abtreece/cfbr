@@ -1,4 +1,11 @@
-"""Collection policy: robots.txt, AI opt-outs, per-host pacing."""
+"""Collection policy: robots.txt for our user agent, per-host pacing.
+
+Terms of use are the binding constraint and are reviewed per source by a person
+before it is added (recorded as ``terms`` in config/news.toml); the collector
+refuses sources without a recorded review. AI agents named in a site's
+robots.txt are reported for information but are not, by themselves, a reason
+to skip (they target other parties' crawlers, not this collector).
+"""
 
 from __future__ import annotations
 
@@ -9,9 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-# Agents whose presence in robots.txt signals an AI opt-out. CCBot (Common
-# Crawl) alone is not counted: blocking it keeps content out of public crawl
-# datasets, which this private archive is not.
+# AI agents a robots.txt may name; reported by ``ai_opt_out`` for information.
 AI_AGENTS = (
     "anthropic-ai", "claudebot", "claude-web", "gptbot", "chatgpt-user", "google-extended", "perplexitybot",
     "perplexity-user", "cohere-ai", "bytespider", "applebot-extended", "meta-externalagent", "ai2bot", "diffbot",
@@ -44,7 +49,7 @@ class Policy:
         return f"{p.scheme}://{p.netloc}"
 
     def check(self, url: str) -> str | None:
-        """None if allowed, else the reason it isn't."""
+        """None if robots.txt allows our user agent to fetch ``url``, else the reason."""
         host = self._host(url)
         if host not in self._robots:
             rp = urllib.robotparser.RobotFileParser()
@@ -57,9 +62,7 @@ class Policy:
             rp.parse(text.splitlines())
             ai = ai_opt_out(text)
             self._robots[host] = (rp, ai)
-        rp, ai = self._robots[host]
-        if ai:
-            return f"robots.txt names AI agents {ai}"
+        rp, _ai = self._robots[host]
         if not rp.can_fetch(self.user_agent, url):
             return "disallowed by robots.txt"
         return None

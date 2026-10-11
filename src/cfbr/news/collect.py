@@ -38,6 +38,7 @@ class Source:
     kind: str
     url: str
     tier: str
+    terms: str = ""  # recorded terms-of-use review; required before collecting
 
 
 def load_sources(path: Path = NEWS_CONFIG) -> tuple[dict, list[Source]]:
@@ -221,17 +222,18 @@ def collect_availability(src: Source, policy: Policy, archive: Archive, user_age
     return f"stored ({len(text)} chars of report text)"
 
 
-def collect(only: list[str] | None = None) -> dict[str, str]:
-    cfg, sources = load_sources()
+def collect(only: list[str] | None = None, config: Path | None = None, root: Path | None = None) -> dict[str, str]:
+    cfg, sources = load_sources(config or NEWS_CONFIG)
     ua = cfg.get("user_agent", "cfb-ratings-news-collector")
-    archive = Archive()
+    archive = Archive(root or NEWS_DIR)
     results: dict[str, str] = {}
     with httpx.Client(headers={"User-Agent": ua}, timeout=30, follow_redirects=True) as client:
         policy = Policy(client, ua, float(cfg.get("min_seconds_between_requests_per_host", 5)))
         for src in sources:
             if only and src.name not in only:
                 continue
-            reason = policy.check(src.url)
+            reason = None if src.terms.strip() else "terms of use not reviewed (add `terms` in config/news.toml)"
+            reason = reason or policy.check(src.url)
             if reason:
                 results[src.name] = f"skipped: {reason}"
             else:
