@@ -131,6 +131,29 @@ def test_rankings_default_to_latest_week_and_link_teams(client):
     assert "FCS:Big Sky" not in html  # pooled FCS entities are not ranked
 
 
+def test_top25_filter():
+    from cfbr.web.app import rankings_rows
+    from cfbr.web.store import Season
+
+    n = 30
+    ratings = pl.DataFrame({
+        "week": [1] * n, "team": [f"Team {i:02d}" for i in range(1, n + 1)], "fbs": [True] * n,
+        "rank": list(range(1, n + 1)), "conference": ["SEC" if i % 2 else "ACC" for i in range(1, n + 1)],
+        "rating": [30.0 - i for i in range(1, n + 1)],
+    }, schema_overrides={"rank": pl.Int32})
+    s = Season({"weeks": [1], "labels": {"1": "Week 1"}}, ratings, pl.DataFrame())
+    rows = rankings_rows(s, 1, "top25")
+    assert [r["rank"] for r in rows] == list(range(1, 26))
+    assert len(rankings_rows(s, 1, "SEC")) == 15 and len(rankings_rows(s, 1, None)) == n
+
+
+def test_top25_option_on_rankings_page(client):
+    html = " ".join(client.get("/rankings?season=2026&week=1&conf=top25").text.split())
+    assert '<option value="top25" selected>Top 25</option>' in html
+    assert "2026 ratings · Week 1 · Top 25" in html
+    assert client.get("/api/rankings?season=2026&week=1&conf=top25").status_code == 200
+
+
 def test_conference_filter(client):
     html = client.get("/rankings?season=2026&week=1&conf=SEC").text
     assert "Hawai&#39;i" in html and "Texas A&amp;M" not in html.split("<tbody>")[1]
@@ -709,7 +732,9 @@ def test_roster_page(roster_client):
     # Departures, with the destination linked when it's an FBS team this season.
     assert "Gone Pro" in html and "not on a roster" in html and '<a href="/team/2026/Ohio%20State">Ohio State</a>' in html
     # Summary: shares as percentages, QB back as Yes, no transfer QB as None.
-    assert "62%" in html and "Starting QB back" in html and ">Yes<" in html and ">None<" in html
+    assert "62%" in html and "Starting QB back" in html and ">Yes<" in html
+    # qb_in_ppa = 0 means no 100+-attempt transfer QB, which is not the same as no transfer QB.
+    assert ">None with 100+ att.<" in html and ">None<" not in html
 
 
 def test_team_page_shows_roster_card(roster_client):

@@ -136,12 +136,17 @@ def default_week(s: Season) -> int:
     return s.weeks[-1]
 
 
+TOP25 = "top25"  # pseudo-conference on the rankings filter: the model's top 25
+
+
 def rankings_rows(s: Season, week: int, conference: str | None = None) -> list[dict]:
     r = s.ratings.filter(pl.col("fbs"))
     trend = (r.filter(pl.col("week") <= week).sort("week").group_by("team")
              .agg(trend=pl.col("rating")))
     cur = r.filter(pl.col("week") == week)
-    if conference:
+    if conference == TOP25:
+        cur = cur.filter(pl.col("rank") <= 25)
+    elif conference:
         cur = cur.filter(pl.col("conference") == conference)
     return cur.join(trend, on="team", how="left").sort("rank").to_dicts()
 

@@ -51,7 +51,8 @@ def feature_value(key: str, x) -> str:
     if key == "qb_returns":
         return "Yes" if x >= 0.5 else "No"
     if key == "qb_in_ppa" and x == 0:
-        return "None"  # defined as 0 when no 100+-attempt QB transferred in
+        # 0 means no incoming QB with 100+ pass attempts, not "no transfer QB".
+        return "None with 100+ att."
     if key in PPA_TOTALS:
         return f"{x:.0f} PPA".replace("-", "−")
     return count_str(x)

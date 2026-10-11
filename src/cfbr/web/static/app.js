@@ -112,15 +112,34 @@ function lineChart(fig) {
   function render() {
     body.textContent = "";
     const W = Math.max(body.clientWidth, 280), H = 240;
-    const m = { l: 40, r: 92, t: 10, b: 24 };
+    const m = { l: 40, r: 16, t: 10, b: 24 };
     const all = spec.series.flatMap((s) => s.values).filter((v) => v != null);
     let lo = Math.min(...all), hi = Math.max(...all);
     if (signedValues) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); } else { lo = Math.min(lo, Math.floor(lo)); }
     const ticks = niceTicks(lo, hi);
     lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
-    const x = (i) => m.l + (n === 1 ? (W - m.l - m.r) / 2 : (i * (W - m.l - m.r)) / (n - 1));
     const y = (v) => m.t + (1 - (v - lo) / (hi - lo || 1)) * (H - m.t - m.b);
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": fig.getAttribute("aria-label") }, body);
+
+    // End labels: shown only when they don't collide vertically and fit in at most 35% of the
+    // width. The right margin is sized to the widest label so labels never clip at the card
+    // edge; otherwise the legend and tooltip carry identity.
+    const ends = spec.series.map((s, si) => {
+      let i = s.values.length - 1;
+      while (i >= 0 && s.values[i] == null) i--;
+      const text = i < 0 ? "" : spec.series.length > 1 ? `${s.name} ${f(s.values[i])}` : f(s.values[i]);
+      return { si, i, v: s.values[i], yy: i >= 0 ? y(s.values[i]) : null, text };
+    }).filter((e) => e.i >= 0);
+    const sorted = [...ends].sort((a, b) => a.yy - b.yy);
+    let showLabels = sorted.every((e, k) => k === 0 || e.yy - sorted[k - 1].yy >= 13);
+    if (showLabels && ends.length) {
+      const probe = el("text", { class: "endlabel", x: 0, y: -100 }, svg);
+      const widest = Math.max(...ends.map((e) => { probe.textContent = e.text; return probe.getComputedTextLength(); }));
+      probe.remove();
+      const need = Math.ceil(widest) + 14;
+      if (need <= W * 0.35) m.r = Math.max(m.r, need); else showLabels = false;
+    }
+    const x = (i) => m.l + (n === 1 ? (W - m.l - m.r) / 2 : (i * (W - m.l - m.r)) / (n - 1));
 
     ticks.forEach((t) => {
       el("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: t === 0 && signedValues ? "zero" : "gridline" }, svg);
@@ -144,20 +163,12 @@ function lineChart(fig) {
       path.style.stroke = color;
     });
 
-    // End labels only when they don't collide; otherwise legend + tooltip carry identity.
-    const ends = spec.series.map((s, si) => {
-      let i = s.values.length - 1;
-      while (i >= 0 && s.values[i] == null) i--;
-      return { si, i, v: s.values[i], yy: i >= 0 ? y(s.values[i]) : null };
-    }).filter((e) => e.i >= 0);
-    const sorted = [...ends].sort((a, b) => a.yy - b.yy);
-    const clear = sorted.every((e, k) => k === 0 || e.yy - sorted[k - 1].yy >= 13);
     ends.forEach((e) => {
       const dot = el("circle", { cx: x(e.i), cy: e.yy, r: 4, class: "dot" }, svg);
       dot.style.fill = `var(--series-${e.si + 1})`;
-      if (clear) {
+      if (showLabels) {
         const t = el("text", { x: x(e.i) + 8, y: e.yy + 4, class: "endlabel" }, svg);
-        t.textContent = spec.series.length > 1 ? `${spec.series[e.si].name} ${f(e.v)}` : f(e.v);
+        t.textContent = e.text;
       }
     });
 

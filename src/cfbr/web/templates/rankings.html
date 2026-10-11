@@ -22,13 +22,16 @@
   <label>Conference
     <select name="conf" data-autosubmit>
       <option value="">All FBS</option>
+      <option value="top25" {% if conf == "top25" %}selected{% endif %}>Top 25</option>
+      <optgroup label="Conferences">
       {% for c in conferences %}<option {% if c == conf %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </optgroup>
     </select>
   </label>
   <noscript><button type="submit">Show</button></noscript>
 </form>
 
-<h1>{{ season }} ratings · {{ s.label(week) }}{% if conf %} · {{ conf }}{% endif %}</h1>
+<h1>{{ season }} ratings · {{ s.label(week) }}{% if conf %} · {{ "Top 25" if conf == "top25" else conf }}{% endif %}</h1>
 <p class="lede">
   {% if week == 0 %}Preseason prior, before any {{ season }} games.
   {% elif week == FINAL %}After all {{ season }} games, including the postseason.
