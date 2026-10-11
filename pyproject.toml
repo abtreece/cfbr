@@ -24,6 +24,11 @@ dependencies = [
 [project.scripts]
 cfbr = "cfbr.cli:app"
 
+[project.optional-dependencies]
+# GPU (NVIDIA T4) stack for the Bayesian rating model and season simulations.
+# Opt-in: `uv sync --extra gpu`. Pinned versions, verified on the T4 (Turing, sm_75).
+gpu = ["jax[cuda12]==0.6.2", "numpyro==0.18.0"]
+
 [dependency-groups]
 dev = ["pytest>=8.3"]
 
