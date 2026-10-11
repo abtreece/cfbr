@@ -357,7 +357,8 @@ def test_completed_season_timeline(engine, tmp_path):
 
 # -- paper bets ---------------------------------------------------------------------
 
-def _bet(gid, side, line, status="open", hp=None, ap=None, closing=None, week=7, provider="TestBook"):
+def _bet(gid, side, line, status="open", hp=None, ap=None, closing=None, week=7, provider="TestBook",
+         best_odds=None):
     from cfbr.bets.ledger import clv, risk
 
     risked, won = risk(-110, 1.0)
@@ -370,14 +371,14 @@ def _bet(gid, side, line, status="open", hp=None, ap=None, closing=None, week=7,
         "edge": (10.0 + line) if side == "home" else (-10.0 + line), "n_providers": 3, "best_line": line + 0.5,
         "best_provider": provider, "odds": -110, "stake": 1.0, "status": status, "home_points": hp,
         "away_points": ap, "closing_line": closing, "clv": None if closing is None else clv(side, line, closing),
-        "units": units,
+        "units": units, "best_odds": best_odds,
     }
 
 
 def _write_ledger(cfg):
     from cfbr.bets.ledger import LEDGER_SCHEMA
 
-    rows = [_bet(1, "home", -3.5), _bet(2, "away", 4.0),
+    rows = [_bet(1, "home", -3.5, best_odds=-105), _bet(2, "away", 4.0),
             _bet(3, "home", -7.0, "won", 31, 14, -8.0, week=6), _bet(4, "away", 3.0, "lost", 28, 10, 2.0, week=6),
             _bet(5, "home", -3.0, "push", 24, 21, -3.0, week=6)]
     d = cfg.paths.out_dir / str(SEASON)
@@ -402,6 +403,9 @@ def test_bets_page(bets_client):
     assert "No conclusion yet." in html and "3 of the 500 settled bets" in html
     assert "1–1–1" in html  # won-lost-push
     assert "All bets, best line" in html
+    # The best-line book's own price shows when the feed has one, and only then.
+    assert "−3 (−105) <span class=\"muted\">TestBook</span>" in html
+    assert "−4.5 <span class=\"muted\">TestBook</span>" in html
     # Rules describe the current pricing rule: offshore books never set the best line.
     assert "Bovada" in html and "never set the best line" in html
     # Lines are shown from the bet team's side: an away bet at home +4 is "−4".

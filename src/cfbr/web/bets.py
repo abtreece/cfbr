@@ -30,6 +30,13 @@ def spread_str(x: float | None) -> str:
     return "PK" if x == 0 else f"{x:+g}".replace("-", "−")
 
 
+def price_str(odds: int | None) -> str:
+    """American odds for display, e.g. +105 or −115."""
+    if odds is None or (isinstance(odds, float) and math.isnan(odds)):
+        return ""
+    return f"{int(odds):+d}".replace("-", "−")
+
+
 def _ts(s: str | None) -> datetime | None:
     return datetime.fromisoformat(s) if s else None  # 3.11+ parses a trailing "Z"
 

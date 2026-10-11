@@ -21,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 from cfbr.backtest.metrics import summarize
 from cfbr.config import Config
 from cfbr.web.access import premium_viewer
-from cfbr.web.bets import NO_STORE, spread_str
+from cfbr.web.bets import NO_STORE, price_str, spread_str
 from cfbr.web.bets import make_router as bets_router
 from cfbr.web.build import FINAL, STALE_GAME, web_dir
 from cfbr.web.store import Season, Store
@@ -270,7 +270,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     env.auto_reload = False
     app.state.templates = templates
     env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
-                    "spread": spread_str,
+                    "spread": spread_str, "price": price_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL}
 

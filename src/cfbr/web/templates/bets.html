@@ -45,7 +45,8 @@
     <li>Each bet is recorded once, before kickoff, at that line, and never changed.</li>
     <li>Graded at the recorded consensus line, {{ rules.odds }} odds, {{ rules.stake|num }} unit to win. Break-even win rate {{ summary.breakeven|pct }}.
       Dollar figures count one unit as {{ rules.unit_value|money(false) }}, so every bet risks {{ unit_risk|money(false) }} to win {{ unit_win|money(false) }}.
-      Also graded at the best number available ("best line"): the best spread among the books a bet could actually be placed at.
+      Also graded at the best number available ("best line"): the best spread among the books a bet could actually be placed at,
+      ties broken by the better price, and graded at that book's own price (shown in brackets; {{ rules.odds }} when the feed has no price).
       Offshore books ({{ rules.offshore_books|join(", ") }}) count toward the consensus but never set the best line, so a bet can have no best line.</li>
     <li>Closing-line value (CLV) is how many points better the recorded line was than the closing consensus. It is the first sign of a real edge, since win rate is mostly noise at small samples.</li>
     <li>Betting lines are never model inputs; the model's predictions are made first.</li>
@@ -72,7 +73,7 @@
       <td class="num">{{ b.edge_pts|num }}</td>
       <td>{{ b.tier }}</td>
       <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
-      <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
+      <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_odds is not none %} ({{ b.best_odds|price }}){% endif %}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
       <td class="num opt" {% if b.books %}title="{{ b.books }}"{% endif %}>{{ b.n_providers }}</td>
       <td class="opt">{{ b.placed|short_ts }}</td>
     </tr>
