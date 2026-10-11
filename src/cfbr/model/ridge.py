@@ -27,6 +27,11 @@ class EffFit:
     intercept: float
     n_off: np.ndarray  # plays on offense per team (for prior share)
     n_def: np.ndarray
+    # Only with keep_posterior=True (uncertainty): the penalized normal-equation
+    # matrix A = XᵀWX + diag(reg), the penalty vector, and the play residuals.
+    precision: np.ndarray | None = None
+    reg: np.ndarray | None = None
+    resid: np.ndarray | None = None
 
     def frame(self, prefix: str = "") -> pl.DataFrame:
         return pl.DataFrame({
@@ -78,9 +83,13 @@ def fit_efficiency_arrays(
     prior_d: np.ndarray | None = None,
     weights: np.ndarray | None = None,
     center: np.ndarray | None = None,
+    keep_posterior: bool = False,
 ) -> EffFit:
     """Array form of :func:`fit_efficiency`: ``off``/``de`` are team indices,
-    ``h`` the home indicator, ``center`` a boolean mask of FBS teams."""
+    ``h`` the home indicator, ``center`` a boolean mask of FBS teams.
+
+    ``keep_posterior`` also returns what the Gaussian posterior needs
+    (see model/uncertainty.py); the point estimates are identical either way."""
     n = len(teams)
     p_o = np.zeros(n) if prior_o is None else np.asarray(prior_o, dtype=float)
     p_d = np.zeros(n) if prior_d is None else np.asarray(prior_d, dtype=float)
@@ -111,10 +120,13 @@ def fit_efficiency_arrays(
     o = p_o + coef[:n]
     d = p_d + coef[n:2 * n]
     home, intercept = float(coef[2 * n]), float(coef[2 * n + 1])
+    resid = (y - X @ coef) if (keep_posterior and m) else (np.zeros(0) if keep_posterior else None)
     if center is not None and center.any():
         mo, md = o[center].mean(), d[center].mean()
         o, d = o - mo, d - md
         intercept += mo - md
+    if keep_posterior:
+        return EffFit(teams, o, d, home, intercept, n_off, n_def, precision=A, reg=reg, resid=resid)
     return EffFit(teams, o, d, home, intercept, n_off, n_def)
 
 
