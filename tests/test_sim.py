@@ -81,3 +81,15 @@ def test_title_games_are_found_and_army_navy_is_not_one():
     })
     assert title_game_ids(games, {1, 2, 3, 4, 5}) == {2, 5}
     assert title_game_ids(games.filter(pl.col("game_id") != 5), {1, 2, 3, 4}) == {2}  # AAC title not scheduled yet
+
+
+def test_output_contract_read_by_the_web_odds_page():
+    from cfbr.config import Config
+    from cfbr.sim.report import CSV_COLUMNS, markdown
+
+    inp = _league()
+    s = summary(inp, simulate(inp, n_sims=1000, seed=1, rules=Rules(power_conferences=["SEC"], field_size=4, byes=2)))
+    assert s.columns == CSV_COLUMNS
+    md = markdown(s, Config(), 2026, 6, len(inp.g_mean))
+    head = md.split("| team |")[0]
+    assert "Probabilities, not predictions." in head and "**Approximations:**" in head

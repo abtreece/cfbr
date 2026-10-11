@@ -21,6 +21,12 @@ def rules_from(cfg: Config) -> Rules:
                  losses_weight=s.losses_weight, champion_bonus=s.champion_bonus, power_bonus=s.power_bonus)
 
 
+# The web app's /odds page reads these CSV columns and the notes paragraph(s) above the
+# table in season_sim.md. Keep both stable, or tell the web app's owner first.
+CSV_COLUMNS = ["team", "conference", "rating", "wins_now", "losses_now", "exp_wins", "wins_p10", "wins_p90",
+               "p_undefeated", "p_bowl_eligible", "p_title_game", "p_conf_title", "p_playoff", "p_bye", "p_champion"]
+
+
 def run_sim(eng: Engine, season: int, week: int) -> Path:
     """Simulate the rest of ``season`` from the ratings available after regular-season
     ``week`` (the snapshot used for week ``week + 1`` predictions)."""
