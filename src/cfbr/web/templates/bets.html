@@ -30,11 +30,11 @@
   {{ tile("Record", summary.won ~ "–" ~ summary.lost ~ "–" ~ summary.push, "won–lost–push") }}
   {% set ci = ("95% CI " ~ summary.ci95[0]|pct(0) ~ "–" ~ summary.ci95[1]|pct(0) ~ " · ") if summary.won + summary.lost else "" %}
   {{ tile("Win rate", summary.win_rate|pct, ci ~ "break-even " ~ summary.breakeven|pct) }}
-  {{ tile("Units", summary.units|signed(2), "ROI " ~ summary.roi|pct) }}
+  {{ tile("Net", summary.dollars|money, summary.units|signed(2) ~ " units · ROI " ~ summary.roi|pct) }}
   {{ tile("Avg CLV", (summary.avg_clv|signed(2) ~ " pts") if summary.n_clv else "—",
           ("beat the close " ~ summary.beat_close|pct(0) ~ " of " ~ summary.n_clv) if summary.n_clv else "after games close") }}
   {{ tile("Best line", best.units|signed(2), "units at the best non-offshore book · " ~ best.won ~ "–" ~ best.lost ~ "–" ~ best.push) }}
-  {{ tile("Open bets", summary.open, "awaiting kickoff or result") }}
+  {{ tile("Open bets", summary.open, summary.open_risk_dollars|money(false) ~ " at risk") }}
 </div>
 
 <details class="rules">
@@ -44,6 +44,7 @@
       The consensus is the median spread across sportsbooks in the newest line snapshot, offshore books included; projection and aggregator feeds are not books and are left out.</li>
     <li>Each bet is recorded once, before kickoff, at that line, and never changed.</li>
     <li>Graded at the recorded consensus line, {{ rules.odds }} odds, {{ rules.stake|num }} unit to win. Break-even win rate {{ summary.breakeven|pct }}.
+      Dollar figures count one unit as {{ rules.unit_value|money(false) }}, so every bet risks {{ unit_risk|money(false) }} to win {{ unit_win|money(false) }}.
       Also graded at the best number available ("best line"): the best spread among the books a bet could actually be placed at.
       Offshore books ({{ rules.offshore_books|join(", ") }}) count toward the consensus but never set the best line, so a bet can have no best line.</li>
     <li>Closing-line value (CLV) is how many points better the recorded line was than the closing consensus. It is the first sign of a real edge, since win rate is mostly noise at small samples.</li>
@@ -52,14 +53,14 @@
 </details>
 
 {% if chart %}
-{{ line_chart("units-chart", chart, "Cumulative units by week", "units") }}
+{{ line_chart("units-chart", chart, "Running total by week", "dollars") }}
 {% endif %}
 
 <h2>Open bets</h2>
 {% if open_bets %}
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Model</th><th class="num">Edge</th>
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Model</th><th class="num">Edge</th><th>Tier</th><th class="num opt">Risk / to win</th>
     <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded</th></tr></thead>
   <tbody>
   {% for b in open_bets %}
@@ -69,6 +70,8 @@
       <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
       <td class="num opt" title="Model's expected margin for {{ b.team }}">{{ b.model_team|signed }}</td>
       <td class="num">{{ b.edge_pts|num }}</td>
+      <td>{{ b.tier }}</td>
+      <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
       <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
       <td class="num opt" {% if b.books %}title="{{ b.books }}"{% endif %}>{{ b.n_providers }}</td>
       <td class="opt">{{ b.placed|kickoff }}</td>
@@ -86,14 +89,60 @@
 <div class="table-wrap">
 <table class="data">
   <thead><tr><th>Slice</th><th class="num opt">Settled</th><th class="num">W–L–P</th><th class="num">Win %<span class="ci"> [95% CI]</span></th>
-    <th class="num">Units</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th><th class="num opt">Beat close</th></tr></thead>
+    <th class="num">Units</th><th class="num">$</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th><th class="num opt">Beat close</th></tr></thead>
   <tbody>
   {% for g in breakdown %}
     <tr {% if loop.first %}class="selected"{% endif %}>
       <td class="team">{{ g.label }}</td><td class="num opt">{{ g.settled }}</td><td class="num">{{ g.won }}–{{ g.lost }}–{{ g.push }}</td>
       <td class="num">{% if g.won + g.lost %}{{ g.win_rate|pct }}<span class="ci"> [{{ g.ci95[0]|pct }}, {{ g.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
-      <td class="num strong">{{ g.units|signed(2) }}</td><td class="num opt">{{ g.roi|pct }}</td>
+      <td class="num">{{ g.units|signed(2) }}</td><td class="num strong">{{ g.dollars|money }}</td><td class="num opt">{{ g.roi|pct }}</td>
       <td class="num opt">{{ g.avg_clv|signed(2) if g.n_clv else "—" }}</td><td class="num opt">{{ g.beat_close|pct(0) if g.n_clv else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Week by week</h2>
+{% if weeks %}
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Week</th><th class="num opt">Settled</th><th class="num">W–L–P</th><th class="num opt">Units</th>
+    <th class="num">Won / lost</th><th class="num">Running total</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th></tr></thead>
+  <tbody>
+  {% for w in weeks %}
+    <tr>
+      <td class="team">{{ w.label }}</td><td class="num opt">{{ w.settled }}</td><td class="num">{{ w.won }}–{{ w.lost }}–{{ w.push }}</td>
+      <td class="num opt">{{ w.units|signed(2) }}</td>
+      <td class="num strong"><span class="{{ 'up' if w.dollars > 0 else 'down' if w.dollars < 0 else 'muted' }}">{{ w.dollars|money }}</span></td>
+      <td class="num">{{ w.cum_dollars|money }}</td><td class="num opt">{{ w.roi|pct }}</td>
+      <td class="num opt">{{ w.avg_clv|signed(2) if w.n_clv else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No settled bets yet.</p>
+{% endif %}
+
+<h2>By edge tier</h2>
+<p class="note">Every bet is the same flat stake at {{ rules.odds }}, so each pays the same if it wins. Tiers group bets by how far
+  the model is from the market. <strong>Backtest</strong> is how often each tier covered the closing line in the 2015–2021
+  walk-forward backtest. No tier cleared the {{ summary.breakeven|pct }} break-even with confidence there, and the
+  model's own probabilities overstate its edge against the market.</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Tier</th><th class="num">Bets</th><th class="num opt">Open</th><th class="num">W–L–P</th><th class="num">Win %</th>
+    <th class="num">$</th><th class="num opt">ROI</th><th class="num">Backtest<span class="ci"> [95% CI]</span></th></tr></thead>
+  <tbody>
+  {% for t in tiers %}
+    <tr>
+      <td class="team">{{ t.label }}</td><td class="num">{{ t.bets }}</td><td class="num opt">{{ t.open }}</td>
+      <td class="num">{{ t.won }}–{{ t.lost }}–{{ t.push }}</td>
+      <td class="num">{{ t.win_rate|pct if t.won + t.lost else "—" }}</td>
+      <td class="num strong">{{ t.dollars|money }}</td><td class="num opt">{{ t.roi|pct }}</td>
+      <td class="num">{% if t.backtest %}{{ t.backtest.rate|pct }}<span class="ci"> [{{ t.backtest.ci95[0]|pct }}, {{ t.backtest.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -104,7 +153,7 @@
 <h2>Settled bets</h2>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="opt">Final</th><th>Result</th><th class="num">Units</th>
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="opt">Final</th><th class="opt">Tier</th><th>Result</th><th class="num">Won / lost</th>
     <th class="num opt">Close</th><th class="num opt">CLV</th></tr></thead>
   <tbody>
   {% for b in settled %}
@@ -113,8 +162,9 @@
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
       <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
       <td class="opt">{{ b.away_points }}–{{ b.home_points }}</td>
+      <td class="opt">{{ b.tier }}</td>
       <td>{% if b.status == "won" %}<span class="up">✓ won</span>{% elif b.status == "lost" %}<span class="down">✗ lost</span>{% else %}<span class="muted">push</span>{% endif %}</td>
-      <td class="num strong">{{ b.units|signed(2) }}</td>
+      <td class="num strong">{{ b.dollars|money }}</td>
       <td class="num opt">{{ b.close|spread }}</td>
       <td class="num opt">{{ b.clv|signed(1) if b.clv is not none else "—" }}</td>
     </tr>

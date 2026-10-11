@@ -38,7 +38,17 @@ LEDGER_SCHEMA = {
     "clv": pl.Float64, "units": pl.Float64,
     # Added later; older ledgers get these as nulls.
     "books": pl.Utf8, "best_status": pl.Utf8, "best_units": pl.Float64, "best_clv": pl.Float64,
+    "season_type": pl.Utf8,
 }
+
+SETTLED = ["won", "lost", "push"]
+
+# Walk-forward backtest cover rate by edge tier, as (wins, decided bets): the frozen
+# tuned config over the tuning seasons 2015-2021, model side vs the closing consensus,
+# pushes excluded. Keyed by (min edge, max edge or None). A reference for what each
+# tier has historically returned; the model's own cover probabilities are far more
+# confident than this. See DECISIONS.md.
+BACKTEST_TIER_COVER = {(3.0, 6.0): (860, 1706), (6.0, 10.0): (493, 972), (10.0, None): (284, 524)}
 
 # Non-books (numberfire projections, teamrankings/consensus aggregates) can't be
 # bet, so they never price a bet.
@@ -101,8 +111,43 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         pl.lit(None, pl.Float64).alias("closing_line"), pl.lit(None, pl.Float64).alias("clv"),
         pl.lit(None, pl.Float64).alias("units"),
         "books", pl.lit(None, pl.Utf8).alias("best_status"), pl.lit(None, pl.Float64).alias("best_units"),
-        pl.lit(None, pl.Float64).alias("best_clv"),
+        pl.lit(None, pl.Float64).alias("best_clv"), pl.lit(None, pl.Utf8).alias("season_type"),
     )
+
+
+def tiers(cfg: Bets) -> list[dict]:
+    """Edge tiers in ascending order: name, lo (min |edge|), hi (exclusive, None for the top), label."""
+    items = sorted(cfg.tiers.items(), key=lambda kv: kv[1])
+    out = []
+    for i, (name, lo) in enumerate(items):
+        hi = items[i + 1][1] if i + 1 < len(items) else None
+        span = f"{lo:g}+" if hi is None else f"{lo:g}–{hi:g}"
+        out.append({"name": name, "lo": lo, "hi": hi, "label": f"{name} edge ({span} pts)"})
+    return out
+
+
+def tier_expr(cfg: Bets) -> pl.Expr:
+    """Tier name from |edge|; anything below the lowest tier falls into it."""
+    ts = tiers(cfg)
+    expr = pl.lit(ts[0]["name"])
+    for t in ts[1:]:
+        expr = pl.when(pl.col("edge").abs() >= t["lo"]).then(pl.lit(t["name"])).otherwise(expr)
+    return expr
+
+
+def week_label(week: int | None, season_type: str | None) -> str:
+    # CFBD numbers postseason weeks from 1 again, so they get their own bucket.
+    if season_type == "postseason":
+        return "Postseason"
+    return "Week ?" if week is None else f"Week {week}"
+
+
+def by_week(ledger: pl.DataFrame) -> list[tuple[str, pl.DataFrame]]:
+    """Bets grouped by week in calendar order, all postseason games in one bucket last."""
+    post = (pl.col("season_type") == "postseason").fill_null(False)
+    d = ledger.with_columns(_post=post, _wk=pl.when(post).then(None).otherwise(pl.col("week")))
+    return [(week_label(wk, "postseason" if p else None), g.drop("_post", "_wk"))
+            for (p, wk), g in d.sort("_post", "_wk", nulls_last=True).group_by("_post", "_wk", maintain_order=True)]
 
 
 def risk(odds: int, stake: float) -> tuple[float, float]:
@@ -170,23 +215,64 @@ def add_bets(ledger: pl.DataFrame, new: pl.DataFrame) -> tuple[pl.DataFrame, int
 def summarize(ledger: pl.DataFrame, cfg: Bets, basis: str = "consensus") -> dict:
     """Record at the consensus line, or at the best number across books (basis="best")."""
     st, un, cv = ("status", "units", "clv") if basis == "consensus" else ("best_status", "best_units", "best_clv")
-    s = ledger.filter(pl.col(st).is_in(["won", "lost", "push"]))
+    s = ledger.filter(pl.col(st).is_in(SETTLED))
     w = int((s[st] == "won").sum())
     l = int((s[st] == "lost").sum())
     p = int((s[st] == "push").sum())
     lo, hi = wilson_ci(w, w + l)
-    risked = float(sum(risk(o, st)[0] for o, st in s.select("odds", "stake").iter_rows())) if s.height else 0.0
+    risked = float(sum(risk(o, k)[0] for o, k in s.select("odds", "stake").iter_rows())) if s.height else 0.0
     units = float(s[un].sum()) if s.height else 0.0
     c = s.filter(pl.col(cv).is_not_null())
     be = (-cfg.odds / (100 - cfg.odds)) if cfg.odds < 0 else 100 / (100 + cfg.odds)
+    opn = ledger.filter(pl.col("status") == "open")
+    at_risk = float(sum(risk(o, k)[0] for o, k in opn.select("odds", "stake").iter_rows()))
     return {
-        "open": int((ledger["status"] == "open").sum()), "settled": s.height, "won": w, "lost": l, "push": p,
+        "open": opn.height, "settled": s.height, "won": w, "lost": l, "push": p,
         "win_rate": w / (w + l) if w + l else math.nan, "ci95": (lo, hi), "breakeven": be,
         "units": units, "risked": risked, "roi": units / risked if risked else math.nan,
+        # Dollar figures are units x unit_value; reporting only.
+        "dollars": units * cfg.unit_value, "risked_dollars": risked * cfg.unit_value,
+        "open_risk_dollars": at_risk * cfg.unit_value,
         "avg_clv": float(c[cv].mean()) if c.height else math.nan,
         "beat_close": float((c[cv] > 0).mean()) if c.height else math.nan,
         "n_clv": c.height,
     }
+
+
+def weekly(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
+    """Win/loss by week for weeks with settled bets, with running totals."""
+    out, cum_u = [], 0.0
+    for label, g in by_week(ledger):
+        m = summarize(g, cfg)
+        if m["settled"] == 0:
+            continue
+        cum_u += m["units"]
+        out.append({"label": label, **m, "cum_units": cum_u, "cum_dollars": cum_u * cfg.unit_value})
+    return out
+
+
+def by_tier(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
+    """Record per edge tier, with the backtest cover rate for that tier when one exists."""
+    d = ledger.with_columns(_tier=tier_expr(cfg))
+    out = []
+    for t in tiers(cfg):
+        m = summarize(d.filter(pl.col("_tier") == t["name"]).drop("_tier"), cfg)
+        ref = BACKTEST_TIER_COVER.get((t["lo"], t["hi"]))
+        bt = None
+        if ref:
+            w, n = ref
+            bt = {"wins": w, "n": n, "rate": w / n, "ci95": wilson_ci(w, n)}
+        out.append({**t, **m, "bets": m["open"] + m["settled"], "backtest": bt})
+    return out
+
+
+def money(x: float | None, signed: bool = True) -> str:
+    if x is None or (isinstance(x, float) and math.isnan(x)):
+        return "–"
+    s = f"${abs(x):,.0f}"
+    if not signed:
+        return s
+    return ("+" if x > 0 else "-" if x < 0 else "") + s
 
 
 def _fmt(x: float, pct: bool = False, signed: bool = False) -> str:
@@ -198,48 +284,70 @@ def _fmt(x: float, pct: bool = False, signed: bool = False) -> str:
 
 
 def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
-    def block(title: str, df: pl.DataFrame, basis: str = "consensus") -> list[str]:
-        m = summarize(df, cfg, basis)
-        return [f"| {title} | {m['settled']} | {m['won']}-{m['lost']}-{m['push']} | {_fmt(m['win_rate'], pct=True)} "
+    def row(title: str, m: dict) -> str:
+        return (f"| {title} | {m['settled']} | {m['won']}-{m['lost']}-{m['push']} | {_fmt(m['win_rate'], pct=True)} "
                 f"[{_fmt(m['ci95'][0], pct=True)}, {_fmt(m['ci95'][1], pct=True)}] | {_fmt(m['units'], signed=True)} | "
-                f"{_fmt(m['roi'], pct=True)} | {_fmt(m['avg_clv'], signed=True)} | {_fmt(m['beat_close'], pct=True)} |"]
+                f"{money(m['dollars'])} | {_fmt(m['roi'], pct=True)} | {_fmt(m['avg_clv'], signed=True)} | "
+                f"{_fmt(m['beat_close'], pct=True)} |")
+
+    def block(title: str, df: pl.DataFrame, basis: str = "consensus") -> list[str]:
+        return [row(title, summarize(df, cfg, basis))]
 
     m = summarize(ledger, cfg)
+    risked, to_win = risk(cfg.odds, cfg.stake)
     if m["settled"] < cfg.min_sample:
         verdict = (f"**No conclusion yet.** {m['settled']} settled bets; the pre-set minimum is {cfg.min_sample}. "
                    "Treat these numbers as noise until then.")
     else:
         verdict = ("Minimum sample reached. An edge needs both positive average CLV and a win-rate interval "
                    f"whose lower bound clears break-even ({_fmt(m['breakeven'], pct=True)}).")
-    head = ["| bets | settled | W-L-P | win % [95% CI] | units | ROI | avg CLV (pts) | beat close |",
-            "|---|---|---|---|---|---|---|---|"]
+    head = ["| bets | settled | W-L-P | win % [95% CI] | units | $ | ROI | avg CLV (pts) | beat close |",
+            "|---|---|---|---|---|---|---|---|---|"]
     lines = [
         f"# {season} paper bets", "",
         "Hypothetical flat bets only; nothing is wagered. Rules: bet the model's side when it differs from the "
         f"consensus line by ≥ {cfg.threshold:g} points, at the line captured when flagged, {cfg.odds} odds, "
-        f"{cfg.stake:g} unit to win. Break-even win rate: {_fmt(m['breakeven'], pct=True)}.", "",
+        f"{cfg.stake:g} unit to win. Break-even win rate: {_fmt(m['breakeven'], pct=True)}. "
+        f"One unit = {money(cfg.unit_value, signed=False)}, so each bet risks {money(risked * cfg.unit_value, signed=False)} "
+        f"to win {money(to_win * cfg.unit_value, signed=False)}.", "",
         verdict, "",
         "Two records: **at consensus** (median line across books, measures whether the model beats the market) "
         "and **best line** (the best number across non-offshore books, what shopping them would get; offshore books "
         "count toward the consensus but are never used to price a bet).",
         "",
         *head, *block("all — at consensus", ledger), *block("all — best line", ledger, "best"),
-        *block(f"edge {cfg.threshold:g}–6", ledger.filter(pl.col("edge").abs() < 6)),
-        *block("edge 6+", ledger.filter(pl.col("edge").abs() >= 6)),
         *block("home side", ledger.filter(pl.col("side") == "home")),
         *block("away side", ledger.filter(pl.col("side") == "away")), "",
-        f"Open bets: {m['open']}. CLV > 0 means the recorded line was better than where the market closed.", "",
+        f"Open bets: {m['open']} ({money(m['open_risk_dollars'], signed=False)} at risk). "
+        "CLV > 0 means the recorded line was better than where the market closed.", "",
     ]
-    weeks = sorted(ledger.filter(pl.col("status") != "open")["week"].unique().to_list())
-    if weeks:
-        lines += ["## By week", "", *head]
-        for wk in weeks:
-            lines += block(f"week {wk}", ledger.filter(pl.col("week") == wk))
-        lines.append("")
-    opn = ledger.filter(pl.col("status") == "open").sort("kickoff_ts")
-    if opn.height:
-        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | home spread | model (home margin) | edge | best available | all books (home spread) |",
+    wk = weekly(ledger, cfg)
+    if wk:
+        lines += ["## Week by week", "",
+                  "| week | settled | W-L-P | units | $ | running $ | ROI | avg CLV (pts) |",
                   "|---|---|---|---|---|---|---|---|"]
+        lines += [f"| {w['label']} | {w['settled']} | {w['won']}-{w['lost']}-{w['push']} | {_fmt(w['units'], signed=True)} | "
+                  f"{money(w['dollars'])} | {money(w['cum_dollars'])} | {_fmt(w['roi'], pct=True)} | "
+                  f"{_fmt(w['avg_clv'], signed=True)} |" for w in wk]
+        lines.append("")
+    lines += ["## By edge tier", "",
+              "Every bet is the same flat stake, so the payout per bet is identical; tiers group bets by how far the "
+              "model is from the market. Backtest = how often that tier covered the closing line in the 2015–2021 "
+              "walk-forward backtest (pushes excluded). No tier has cleared break-even there with confidence.", "",
+              "| tier | bets | open | settled | W-L-P | win % [95% CI] | units | $ | ROI | backtest cover [95% CI] |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
+    for t in by_tier(ledger, cfg):
+        bt = t["backtest"]
+        bt_txt = "–" if bt is None else (f"{_fmt(bt['rate'], pct=True)} [{_fmt(bt['ci95'][0], pct=True)}, "
+                                          f"{_fmt(bt['ci95'][1], pct=True)}] (n={bt['n']})")
+        lines.append(f"| {t['label']} | {t['bets']} | {t['open']} | {t['settled']} | {t['won']}-{t['lost']}-{t['push']} | "
+                     f"{_fmt(t['win_rate'], pct=True)} [{_fmt(t['ci95'][0], pct=True)}, {_fmt(t['ci95'][1], pct=True)}] | "
+                     f"{_fmt(t['units'], signed=True)} | {money(t['dollars'])} | {_fmt(t['roi'], pct=True)} | {bt_txt} |")
+    lines.append("")
+    opn = ledger.filter(pl.col("status") == "open").with_columns(tier=tier_expr(cfg)).sort("kickoff_ts")
+    if opn.height:
+        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | model (home margin) | edge | best available | all books (home spread) |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for r in opn.iter_rows(named=True):
             team_line = r["line"] if r["side"] == "home" else -r["line"]
             if r["best_line"] is None:
@@ -248,7 +356,7 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
                 best = r["best_line"] if r["side"] == "home" else -r["best_line"]
                 best_txt = f"{best:+g} ({r['best_provider']})"
             lines.append(f"| {r['kickoff_ts'][:16].replace('T', ' ')} | {r['away_team']} @ {r['home_team']} | "
-                         f"{r['team']} {team_line:+g} | {r['line']:+g} | {r['model_margin']:+.1f} | {r['edge']:+.1f} | "
+                         f"{r['team']} {team_line:+g} | {r['tier']} | {r['line']:+g} | {r['model_margin']:+.1f} | {r['edge']:+.1f} | "
                          f"{best_txt} | {r['books'] or '–'} |")
         lines.append("")
     return "\n".join(lines)

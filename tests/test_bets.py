@@ -4,8 +4,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from cfbr.bets.ledger import (LEDGER_SCHEMA, add_bets, candidate_bets, clv, grade, market, read_ledger, risk, settle,
-                              snapshot_frame, summarize, summary_markdown)
+from cfbr.bets.ledger import (LEDGER_SCHEMA, add_bets, by_tier, candidate_bets, clv, grade, market, money, read_ledger,
+                              risk, settle, snapshot_frame, summarize, summary_markdown, tier_expr, tiers, weekly)
 from cfbr.config import Bets
 
 CFG = Bets()
@@ -158,3 +158,58 @@ def test_offshore_books_feed_consensus_but_never_price_a_bet():
                                                                          "closing_line": [-3.0, 2.0]})).iter_rows(named=True)}
     assert out[2]["status"] == "won" and out[2]["best_status"] is None and out[2]["best_clv"] is None
     assert out[1]["best_status"] == "won"
+
+
+def _settled(gid, week, edge, status, season_type="regular"):
+    units = {"won": 1.0, "lost": -1.1, "push": 0.0, "open": None}[status]
+    return {"game_id": gid, "season": 2026, "week": week, "side": "home", "edge": edge, "odds": -110, "stake": 1.0,
+            "line": -3.0, "status": status, "units": units, "season_type": season_type,
+            "kickoff_ts": "2026-10-17T19:00:00Z", "home_team": f"H{gid}", "away_team": f"A{gid}", "team": f"H{gid}",
+            "model_margin": edge + 3.0}
+
+
+def _ledger(rows):
+    return pl.DataFrame(rows, schema=LEDGER_SCHEMA)
+
+
+def test_tiers_from_edge_size():
+    ts = tiers(CFG)
+    assert [t["label"] for t in ts] == ["Small edge (3–6 pts)", "Medium edge (6–10 pts)", "Large edge (10+ pts)"]
+    d = _ledger([_settled(i, 7, e, "open") for i, e in enumerate([3.0, -5.9, 6.0, -9.5, 10.0, 14.5])])
+    assert d.select(tier_expr(CFG))["literal"].to_list() == ["Small", "Small", "Medium", "Medium", "Large", "Large"]
+    out = {t["name"]: t for t in by_tier(d, CFG)}
+    assert out["Small"]["bets"] == 2 and out["Large"]["open"] == 2
+    # Every configured default tier has a backtest reference rate.
+    assert all(t["backtest"] is not None for t in out.values())
+    assert out["Small"]["backtest"]["rate"] == pytest.approx(860 / 1706)
+
+
+def test_dollars_scale_units_by_unit_value():
+    d = _ledger([_settled(1, 7, 4, "won"), _settled(2, 7, 4, "lost"), _settled(3, 7, 4, "open")])
+    m = summarize(d, CFG)
+    assert m["dollars"] == pytest.approx(-10.0) and m["risked_dollars"] == pytest.approx(220.0)
+    assert m["open_risk_dollars"] == pytest.approx(110.0)
+    assert summarize(d, Bets(unit_value=25.0))["dollars"] == pytest.approx(-2.5)
+    assert money(-10.0) == "-$10" and money(1234.4) == "+$1,234" and money(0.0) == "$0"
+
+
+def test_weekly_record_runs_in_calendar_order_with_postseason_last():
+    d = _ledger([
+        _settled(1, 1, 4, "won", "postseason"),  # CFBD restarts postseason weeks at 1
+        _settled(2, 8, 4, "lost"), _settled(3, 7, 4, "won"), _settled(4, 7, 4, "won"),
+        _settled(5, 1, 4, "push"), _settled(6, 9, 4, "open"),  # week 9 has nothing settled yet
+    ])
+    wk = weekly(d, CFG)
+    assert [w["label"] for w in wk] == ["Week 1", "Week 7", "Week 8", "Postseason"]
+    assert [(w["won"], w["lost"], w["push"]) for w in wk] == [(0, 0, 1), (2, 0, 0), (0, 1, 0), (1, 0, 0)]
+    assert [w["dollars"] for w in wk] == pytest.approx([0.0, 200.0, -110.0, 100.0])
+    assert [w["cum_dollars"] for w in wk] == pytest.approx([0.0, 200.0, 90.0, 190.0])
+    md = summary_markdown(d, CFG, 2026)
+    assert "## Week by week" in md and "| Postseason | 1 | 1-0-0 |" in md and "+$190" in md
+    assert "## By edge tier" in md
+
+
+def test_bets_with_unknown_week_dont_break_the_summary():
+    d = _ledger([_settled(1, None, 4, "won", None), _settled(2, 7, 4, "lost", None)])
+    assert [w["label"] for w in weekly(d, CFG)] == ["Week 7", "Week ?"]
+    summary_markdown(d, CFG, 2026)

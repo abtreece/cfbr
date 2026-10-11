@@ -63,3 +63,11 @@ stake = 1.0
 min_sample = 500
 # Offshore books count as market data (consensus line) but are never used to price a bet.
 offshore_books = ["Bovada", "BetOnline", "MyBookie", "BetUS", "Bookmaker", "5Dimes", "SportsBetting", "Heritage"]
+# Dollar value of one unit (reporting only): a 1-unit bet at -110 risks $110 to win $100.
+unit_value = 100.0
+
+# Reporting tiers by edge size (name = minimum |edge| in points). Stakes stay flat.
+[bets.tiers]
+Small = 3.0
+Medium = 6.0
+Large = 10.0

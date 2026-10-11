@@ -27,6 +27,9 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     ledger = fill_books(read_ledger(ledger_path), cfg.paths.raw_dir, season, cfg.bets.offshore_books)
 
     games = ds.games.filter(pl.col("season") == season)
+    # season_type is game metadata, not a bet term, so bets recorded before the column existed get it filled.
+    ledger = (ledger.join(games.select("game_id", pl.col("season_type").alias("_st")), on="game_id", how="left")
+              .with_columns(season_type=pl.coalesce("season_type", "_st")).drop("_st"))
     closing = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
         "game_id", closing_line="spread")
     ledger = settle(ledger, games.select("game_id", "completed", "home_points", "away_points"), closing)
@@ -42,8 +45,9 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
         placed_at, lines_json = snap
         preds = pl.read_csv(preds_path)
         new = candidate_bets(preds, snapshot_frame(lines_json), placed_at, cfg.bets)
-        new = (new.drop("season", "week")
-               .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32)),
+        new = (new.drop("season", "week", "season_type")
+               .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32),
+                                  "season_type"),
                      on="game_id", how="left"))
         ledger, added = add_bets(ledger, new)
 

@@ -45,6 +45,13 @@ def signed(x, digits: int = 1) -> str:
     return "—" if _missing(x) else f"{x:+.{digits}f}".replace("-", "−")
 
 
+def money(x, signed: bool = True) -> str:
+    if _missing(x):
+        return "—"
+    s = f"${abs(x):,.0f}"
+    return (("+" if x > 0 else "−" if x < 0 else "") + s) if signed else s
+
+
 def pct(x, digits: int = 1) -> str:
     return "—" if _missing(x) else f"{100 * x:.{digits}f}%".replace("-", "−")
 
@@ -249,7 +256,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     env = templates.env
-    env.filters |= {"num": num, "signed": signed, "pct": pct, "kickoff": kickoff, "slot_label": slot_label,
+    env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "slot_label": slot_label,
                     "spread": spread_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL}
