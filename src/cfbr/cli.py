@@ -407,6 +407,18 @@ def news_collect(
         typer.echo(f"{name:28s} {res}")
 
 
+@news_app.command("purge")
+def news_purge(
+    source: Annotated[str, typer.Argument(help="Source name to delete from the archive")],
+    apply: Annotated[bool, typer.Option(help="Actually delete (default: report only)")] = False,
+) -> None:
+    """Delete everything archived from a source that can't be relied on going forward."""
+    from cfbr.news.collect import purge_source
+
+    report = purge_source(source, apply=apply)
+    typer.echo(("deleted: " if apply else "would delete (pass --apply): ") + str(report))
+
+
 @news_app.command("status")
 def news_status() -> None:
     """Per-source last run, result, and archive size."""

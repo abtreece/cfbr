@@ -52,3 +52,22 @@ def test_sources_without_terms_review_are_skipped(tmp_path):
                    'url = "https://example.invalid/feed"\ntier = "outlet"\n')
     res = collect(config=cfg, root=tmp_path / "news")
     assert res["x"].startswith("skipped: terms of use not reviewed")
+
+
+def test_purge_source_removes_everything_for_that_source(tmp_path):
+    from datetime import UTC, datetime
+
+    from cfbr.news.collect import purge_source
+
+    arc = Archive(tmp_path)
+    t = datetime(2026, 10, 11, 17, 0, tzinfo=UTC)
+    for src in ("bad", "good"):
+        arc.store(src, "https://ex.com/feed", t, RSS + src.encode(), "xml")
+        arc.add_item({"source": src, "guid": "g1", "first_seen_at": t.isoformat()})
+        arc.state[src] = {"sha256": "x"}
+    arc.save_state()
+    assert purge_source("bad", tmp_path) == {"raw_files": 1, "items.jsonl": 1, "snapshots.jsonl": 1, "state": 1}
+    assert purge_source("bad", tmp_path, apply=True)["items.jsonl"] == 1
+    assert not (tmp_path / "raw" / "bad").exists() and (tmp_path / "raw" / "good").exists()
+    assert all(json.loads(line)["source"] == "good" for line in (tmp_path / "items.jsonl").read_text().splitlines())
+    assert "bad" not in json.loads((tmp_path / "state.json").read_text())

@@ -251,3 +251,40 @@ def collect(only: list[str] | None = None, config: Path | None = None, root: Pat
             log.info("news %-26s %s", src.name, results[src.name])
     archive.save_state()
     return results
+
+
+def purge_source(source: str, root: Path | None = None, apply: bool = False) -> dict[str, int]:
+    """Remove a source's raw files, index lines and state. Used when a source is
+    dropped because it can't be relied on going forward (e.g. its terms forbid
+    automated collection). Takes the collector's lock so it can't race a run."""
+    import fcntl
+    import shutil
+
+    root = root or NEWS_DIR
+    if not root.exists():
+        return {}
+    with open(root / ".collect.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        raw = root / "raw" / source
+        report = {"raw_files": sum(1 for p in raw.rglob("*") if p.is_file()) if raw.exists() else 0}
+        for name in ("items.jsonl", "snapshots.jsonl"):
+            p = root / name
+            lines = p.read_text().splitlines() if p.exists() else []
+            keep = [line for line in lines if json.loads(line).get("source") != source]
+            report[name] = len(lines) - len(keep)
+            if apply and len(keep) != len(lines):
+                tmp = p.with_suffix(".tmp")
+                tmp.write_text("".join(line + "\n" for line in keep))
+                tmp.replace(p)
+        st_path = root / "state.json"
+        state = json.loads(st_path.read_text()) if st_path.exists() else {}
+        report["state"] = int(source in state)
+        if apply:
+            if raw.exists():
+                shutil.rmtree(raw)
+            if source in state:
+                del state[source]
+                tmp = st_path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
+                tmp.replace(st_path)
+    return report
