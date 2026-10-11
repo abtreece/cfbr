@@ -14,6 +14,7 @@ from cfbr.bets.closing import snapshot_closing
 from cfbr.bets.integrity import record
 from cfbr.bets.ledger import (add_bets, candidate_bets, combine_books, market, read_ledger, settle,
                               snapshot_frame, summarize, summary_markdown)
+from cfbr.bets.pricing import PricingTable, table_from_dataset
 from cfbr.config import Config
 from cfbr.data import Dataset
 from cfbr.ingest.fetch import latest_lines_snapshot
@@ -38,8 +39,9 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     ledger = (ledger.join(meta, on="game_id", how="left")
               .with_columns(season_type=pl.coalesce("season_type", "_st"), fbs_game=pl.coalesce("fbs_game", "_fbs"))
               .drop("_st", "_fbs"))
+    table = pricing_table(cfg, ds, season)
     closing = closing_lines(cfg, ds, games, ledger, season)
-    ledger = settle(ledger, games.select("game_id", "completed", "home_points", "away_points"), closing)
+    ledger = settle(ledger, games.select("game_id", "completed", "home_points", "away_points"), closing, table)
 
     books = current_books(cfg, games, season)
     preds_path = out_dir / f"w{week:02d}" / "predictions.csv"
@@ -52,11 +54,11 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
         placed_at, book_lines = books
         now = datetime.now(UTC)
         preds = pl.read_csv(preds_path)
-        new = candidate_bets(preds, book_lines, placed_at, cfg.bets, now=now)
+        new = candidate_bets(preds, book_lines, placed_at, cfg.bets, now=now, table=table)
         fresh = new.filter(~pl.col("game_id").is_in(ledger["game_id"].to_list()))
         extra = extra_pricing_lines(cfg, games, season, fresh["game_id"].to_list())
         if extra is not None and extra.height:
-            new = candidate_bets(preds, book_lines, placed_at, cfg.bets, extra, now=now)
+            new = candidate_bets(preds, book_lines, placed_at, cfg.bets, extra, now=now, table=table)
         new = (new.drop("season", "week", "season_type", "fbs_game")
                .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32),
                                   "season_type", fbs_game=~(pl.col("home_fcs") | pl.col("away_fcs"))),
@@ -70,13 +72,31 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     tmp.replace(ledger_path)
     record(cfg.paths.out_dir, season)
     md_tmp = out_dir / "bets.md.tmp"
-    md_tmp.write_text(summary_markdown(ledger, cfg.bets, season))
+    md_tmp.write_text(summary_markdown(ledger, cfg.bets, season, table))
     md_tmp.replace(out_dir / "bets.md")
     m = summarize(ledger, cfg.bets)
     log.info("paper bets: %d new, %d open, %d settled (%d-%d-%d), units %+.2f, avg CLV %s",
              added, m["open"], m["settled"], m["won"], m["lost"], m["push"], m["units"],
              "n/a" if m["n_clv"] == 0 else f"{m['avg_clv']:+.2f}")
     return ledger_path
+
+
+def pricing_table(cfg: Config, ds: Dataset, season: int) -> PricingTable:
+    """Points-to-cents table from every completed season before ``season`` with closing lines,
+    cached at out/pricing_table.json (rebuilt when its seasons change). Lines never feed the ratings."""
+    path = cfg.paths.out_dir / "pricing_table.json"
+    want = sorted(ds.lines.filter(pl.col("season") < season)["season"].unique().to_list())
+    if path.exists():
+        try:
+            t = PricingTable.load(path)
+            if t.seasons == want:
+                return t
+        except (ValueError, KeyError) as e:  # a bad cache is just rebuilt
+            log.warning("pricing table at %s unreadable (%s); rebuilding", path, e)
+    t = table_from_dataset(ds, cfg, season - 1)
+    t.save(path)
+    log.info("pricing table built from %d games, seasons %s", t.n_games, t.seasons)
+    return t
 
 
 def closing_lines(cfg: Config, ds: Dataset, games: pl.DataFrame, ledger: pl.DataFrame, season: int) -> pl.DataFrame:

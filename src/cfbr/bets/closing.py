@@ -26,9 +26,18 @@ def _snapshots(raw_dir: Path, season: int) -> list[tuple[datetime, Path]]:
 
 
 def snapshot_closing(cfg: Config, games: pl.DataFrame, season: int) -> pl.DataFrame:
-    """game_id, closing_line, closing_books for ``games`` (game_id, home_team, away_team,
-    kickoff_ts) that have a qualifying pre-kickoff snapshot."""
-    schema = {"game_id": pl.Int64, "closing_line": pl.Float64, "closing_books": pl.Int32}
+    """game_id, closing_line, closing_books, closing_best_home, closing_best_away for ``games``
+    (game_id, home_team, away_team, kickoff_ts) that have a qualifying pre-kickoff snapshot.
+    The best closing numbers come from the pricing books only (the best-line record's close);
+    they are null when none posted."""
+    from cfbr.bets.ledger import book_key
+
+    schema = {"game_id": pl.Int64, "closing_line": pl.Float64, "closing_books": pl.Int32,
+              "closing_best_home": pl.Float64, "closing_best_away": pl.Float64}
+    off = {book_key(b) for b in cfg.bets.offshore_books}
+    allowed = {book_key(b) for b in cfg.bets.pricing_books}
+    priceable = pl.col("provider").map_elements(
+        lambda b: book_key(b) not in off and (not allowed or book_key(b) in allowed), return_dtype=pl.Boolean)
     snaps = _snapshots(cfg.paths.raw_dir, season)
     if not snaps or games.height == 0:
         return pl.DataFrame(schema=schema)
@@ -44,8 +53,10 @@ def snapshot_closing(cfg: Config, games: pl.DataFrame, season: int) -> pl.DataFr
     parts = []
     for path, gids in pick.items():
         f = odds_frame(json.loads(path.read_text()), games.filter(pl.col("game_id").is_in(gids)), aliases)
-        parts.append(f.filter(pl.col("game_id").is_in(gids)).group_by("game_id").agg(
-            closing_line=pl.col("spread").median(), closing_books=pl.len().cast(pl.Int32)))
+        parts.append(f.filter(pl.col("game_id").is_in(gids)).with_columns(_ok=priceable).group_by("game_id").agg(
+            closing_line=pl.col("spread").median(), closing_books=pl.len().cast(pl.Int32),
+            closing_best_home=pl.col("spread").filter(pl.col("_ok")).max(),
+            closing_best_away=pl.col("spread").filter(pl.col("_ok")).min()))
     return pl.concat(parts).cast(schema) if parts else pl.DataFrame(schema=schema)
 
 

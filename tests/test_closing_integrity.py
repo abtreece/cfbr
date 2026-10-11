@@ -42,6 +42,11 @@ def test_closing_uses_the_last_snapshot_before_kickoff(tmp_path):
     _snap(cfg, KICK + timedelta(minutes=5), {"DraftKings": 1.0})             # after kickoff: ignored
     r = snapshot_closing(cfg, games, 2026).row(0, named=True)
     assert (r["closing_line"], r["closing_books"]) == (6.5, 3)
+    # Best closing numbers per side come from the pricing books only (BetMGM's 5.5 is not one).
+    assert (r["closing_best_home"], r["closing_best_away"]) == (6.5, 6.5)
+    _snap(cfg, KICK - timedelta(hours=2), {"Bovada": 8.0, "BetMGM": 5.5})
+    r = snapshot_closing(cfg, games, 2026).row(0, named=True)
+    assert r["closing_line"] == 6.75 and r["closing_best_home"] is None and r["closing_best_away"] is None
 
 
 def _ledger(cfg, rows):

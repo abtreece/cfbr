@@ -323,3 +323,96 @@ def test_coin_roi_chance_and_holdout_tiers():
     t = {x["name"]: x for x in by_tier(read_ledger(Path("/nonexistent")), CFG)}
     assert all(x["holdout"]["rate"] < 0.51 for x in t.values())
     assert "holdout 2022–25" in summary_markdown(read_ledger(Path("/nonexistent")), CFG, 2026)
+
+
+# -- points-to-cents pricing (review B3) ----------------------------------------------
+
+def _table():
+    """A toy margin distribution: favorites win by exactly 3 a fifth of the time, by 7 a tenth."""
+    from cfbr.bets.pricing import PricingTable
+    pmf = {3: 0.2, 7: 0.1, -3: 0.05, 1: 0.1, 4: 0.1, 10: 0.15, 14: 0.1, 2: 0.1, -10: 0.1}
+    return PricingTable(seasons=[2018, 2025], n_games=1000, window=2.0, min_games=300,
+                        pmf={m: pmf for m in range(36)})
+
+
+def test_pricing_half_points_cost_what_the_margin_mass_says():
+    from cfbr.bets.pricing import bets_for_power, fair_american, from_cents, to_cents
+
+    t = _table()
+    # Home favored by 3: at -2.5 the home bettor also wins the exact-3 games (20% mass).
+    pw, pp = t.win_push("home", -3.0, -3.0)
+    assert pp == pytest.approx(0.2) and pw == pytest.approx(0.1 + 0.1 + 0.15 + 0.1)
+    pw2, pp2 = t.win_push("home", -2.5, -3.0)
+    assert pp2 == 0 and pw2 == pytest.approx(pw + 0.2)
+    # The away bettor at +3 pushes the same games and wins the rest.
+    aw, ap = t.win_push("away", -3.0, -3.0)
+    assert ap == pytest.approx(0.2) and aw == pytest.approx(1 - 0.2 - pw)
+    # Cents: moving through 3 is worth a lot, moving from -17 to -16.5 (no mass) is worth nothing.
+    assert t.number_value_cents("home", -2.5, -3.0) > 30
+    assert t.number_value_cents("home", -10.5, -11.0) == pytest.approx(0.0)   # no mass at 11
+    assert t.number_value_cents("home", -3.5, -3.0) < 0
+    # A bet at the consensus is fair at 50/50 when there is no push mass.
+    assert to_cents(fair_american(0.5)) == pytest.approx(0) and fair_american(0.6) == pytest.approx(-150)
+    assert fair_american(0.4) == pytest.approx(150)
+    assert to_cents(-110) == -10 and to_cents(105) == 5 and from_cents(-10) == -110 and from_cents(5) == 105
+    # Power: a 55% true rate needs far fewer bets than a 53% one.
+    assert bets_for_power(0.55, 110 / 210) < bets_for_power(0.53, 110 / 210)
+    assert bets_for_power(0.50, 110 / 210) == 0
+
+
+def test_pricing_table_round_trips_and_builds_from_games(tmp_path):
+    from cfbr.bets.pricing import PricingTable
+
+    rng = __import__("numpy").random.default_rng(1)
+    n = 2000
+    spread = rng.choice([-3.0, -3.5, -7.0, -10.0, -14.0, 3.0, 6.5], n)
+    margin = (-spread + rng.normal(0, 14, n)).round()
+    t = PricingTable.build(pl.DataFrame({"season": [2020] * n, "margin": margin, "spread": spread}), min_games=200)
+    assert t.n_games == n and all(abs(sum(row.values()) - 1) < 1e-9 for row in t.pmf.values() if row)
+    t.save(tmp_path / "t.json")
+    t2 = PricingTable.load(tmp_path / "t.json")
+    assert t2.pmf == t.pmf and t2.seasons == [2020]
+
+
+def test_best_line_is_the_highest_expected_value_not_the_best_number():
+    t = _table()
+    # Home favored by 3 everywhere. For the away bettor +3 pushes 20% and wins 35%: at -140 that is
+    # EV -0.20, at -110 (C) -0.13; +2.5 at +150 (B) wins 35% for 1.5 and is EV -0.125, the best of the three.
+    snap = pl.DataFrame({"game_id": [1, 1, 1], "provider": ["A", "B", "C"], "spread": [-3.0, -2.5, -3.0],
+                         "home_price": [-100, -118, -110], "away_price": [-140, 150, -110]})
+    legacy = market(snap).row(0, named=True)
+    assert (legacy["best_away"], legacy["best_away_provider"]) == (-3.0, "C")   # best number, then price
+    m = market(snap, table=t).row(0, named=True)
+    assert (m["best_away"], m["best_away_provider"]) == (-2.5, "B")
+    assert m["line"] == -3.0 and m["n_providers"] == 3                           # consensus unchanged
+    # Home side: -2.5 at -118 (wins the 20% mass at 3) beats -3 at -100 and -3 at -110 on EV and on number.
+    assert (m["best_home"], m["best_home_provider"]) == (-2.5, "B")
+    # With a price so bad that the number can't pay for it, EV picks the worse number.
+    snap2 = snap.with_columns(home_price=pl.Series([-100, -400, -110]))
+    assert market(snap2, table=t).row(0, named=True)["best_home_provider"] == "A"
+
+
+def test_cents_recorded_and_settled_against_the_best_book_close():
+    t = _table()
+    new = candidate_bets(_preds(), _snapshot(), PLACED, CFG, table=t).with_columns(
+        season=pl.lit(2026, pl.Int32), week=pl.lit(7, pl.Int32))
+    assert new.filter(pl.col("edge_cents").is_null()).height == 0
+    r1 = new.filter(pl.col("game_id") == 1).row(0, named=True)
+    assert r1["edge_cents"] > 0        # home -3 with the model at +8: worth more than -110
+    ledger, _ = add_bets(read_ledger(Path("/nonexistent")), new)
+    games = pl.DataFrame({"game_id": [1], "completed": [True], "home_points": [31], "away_points": [21]})
+    close = pl.DataFrame({"game_id": [1], "closing_line": [-4.0], "closing_source": ["snapshot"], "closing_books": [5],
+                          "closing_best_home": [-3.5], "closing_best_away": [-4.5]})
+    r = settle(ledger, games, close, t).row(0, named=True)
+    assert r["clv"] == pytest.approx(1.0) and r["clv_cents"] > 0
+    # Best line -2.5 closes against the best book's -3.5, not the consensus -4.
+    assert (r["best_line"], r["best_closing_line"], r["best_clv"]) == (-2.5, -3.5, pytest.approx(1.0))
+    assert r["best_clv_cents"] > 0
+    # Without best closing numbers (older closes) the best line still closes against the consensus.
+    r = settle(ledger, games, close.drop("closing_best_home", "closing_best_away"), t).row(0, named=True)
+    assert r["best_closing_line"] is None and r["best_clv"] == pytest.approx(1.5)
+    # Without a table everything in cents is null and nothing else changes.
+    r = settle(ledger, games, close).row(0, named=True)
+    assert r["clv_cents"] is None and r["best_clv_cents"] is None and r["best_clv"] == pytest.approx(1.0)
+    md = summary_markdown(settle(ledger, games, close, t), CFG, 2026, t)
+    assert "avg CLV (¢)" in md and "80% power" in md
