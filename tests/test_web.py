@@ -703,7 +703,9 @@ def _write_roster(season_dir):
         "prev_ppa_total": [22.0, None], "prev_tackles": [None, 61.0], "prev_havoc": [None, 7.5],
     }, schema_overrides={"season": pl.Int32, "prev_plays": pl.Int64})
     summary = pl.DataFrame([{"season": SEASON, "team": "Texas A&M", "roster_as_of": T0,
-                             **({k: 0.0 for k in ROSTER_SUMMARY_LABELS} | {"off_ret_share": 0.62, "qb_returns": 1.0})}],
+                             **({k: 0.0 for k in ROSTER_SUMMARY_LABELS} | {"off_ret_share": 0.62, "qb_returns": 1.0}),
+                             "in_qb_name": "Tom Transfer", "in_qb_from": "Hawai'i", "in_qb_pass_att": 75,
+                             "in_qb_pass_ppa_avg": 0.123, "in_qb_pass_ppa_total": 9.2}],
                            schema_overrides={"season": pl.Int32})
     players.write_parquet(season_dir / "roster_players.parquet")
     departures.write_parquet(season_dir / "roster_departures.parquet")
@@ -735,6 +737,8 @@ def test_roster_page(roster_client):
     assert "62%" in html and "Starting QB back" in html and ">Yes<" in html
     # qb_in_ppa = 0 means no 100+-attempt transfer QB, which is not the same as no transfer QB.
     assert ">None with 100+ att.<" in html and ">None<" not in html
+    # ...and the incoming QB below that cutoff is still shown.
+    assert "Incoming transfer QB" in html and "from Hawai&#39;i · 75 pass att. · +0.12 PPA/att." in html
 
 
 def test_team_page_shows_roster_card(roster_client):

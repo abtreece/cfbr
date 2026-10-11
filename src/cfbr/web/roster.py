@@ -63,6 +63,18 @@ def summary_tiles(row: dict) -> list[dict]:
             for k, (label, definition) in ROSTER_SUMMARY_LABELS.items()]
 
 
+def incoming_qb(summary: dict | None) -> dict | None:
+    """The incoming transfer QB with the most pass attempts last season (any count), if any.
+    Complements qb_in_ppa, which only counts QBs with 100+ attempts."""
+    if not summary or not summary.get("in_qb_name"):
+        return None
+    att, avg = summary.get("in_qb_pass_att"), summary.get("in_qb_pass_ppa_avg")
+    parts = [f"from {summary['in_qb_from']}" if summary.get("in_qb_from") else None,
+             f"{count_str(att)} pass att." if not _missing(att) else None,
+             f"{avg:+.2f} PPA/att.".replace("-", "−") if not _missing(avg) else None]
+    return {"name": summary["in_qb_name"], "detail": " · ".join(p for p in parts if p)}
+
+
 def player_rows(players: pl.DataFrame) -> list[dict]:
     order = {p: i for i, p in enumerate(POSITION_ORDER)}
     rows = []
@@ -121,6 +133,7 @@ def make_router(store: Store, render: Callable[..., HTMLResponse]) -> APIRouter:
         return render(request, "roster.html", season=season, team=team, rows=rows, positions=positions,
                       departures=d.sort("prev_plays", "prev_tackles", descending=True, nulls_last=True).to_dicts(),
                       tiles=summary_tiles(s) if s else [], as_of=s.get("roster_as_of") if s else None,
+                      in_qb=incoming_qb(s),
                       card=roster_card(store.roster(season), team), fbs_teams=fbs,
                       roster_seasons=[y for y in store.seasons() if store.roster(y) is not None])
 
