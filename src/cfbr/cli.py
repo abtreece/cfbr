@@ -64,6 +64,15 @@ def ingest(
 
 
 @app.command()
+def prep(config: ConfigOpt = None) -> None:
+    """Build scrimmage_plays and model_plays from plays_raw."""
+    from cfbr.prep.plays import build_prep
+
+    cfg = load_config(config)
+    log.info("prep: %s", build_prep(cfg))
+
+
+@app.command()
 def quota(config: ConfigOpt = None) -> None:
     """Show this month's API call usage (local ledger and CFBD /info)."""
     from cfbr.ingest.client import CFBDClient
