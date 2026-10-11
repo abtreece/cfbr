@@ -83,12 +83,13 @@ def closing_lines(cfg: Config, ds: Dataset, games: pl.DataFrame, ledger: pl.Data
     """Closing line per game: the pre-kickoff multi-book snapshot consensus where one exists
     (see bets.closing), otherwise CFBD's post-game consensus."""
     cfbd = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
-        "game_id", closing_line="spread").with_columns(closing_source=pl.lit("cfbd"))
+        "game_id", closing_line="spread", closing_books=pl.col("n_providers").cast(pl.Int32)).with_columns(
+        closing_source=pl.lit("cfbd"))
     todo = games.filter(pl.col("game_id").is_in(ledger.filter(pl.col("status") == "open")["game_id"].to_list())
                         & pl.col("completed"))
     snap = snapshot_closing(cfg, todo.select("game_id", "home_team", "away_team", "kickoff_ts"), season)
-    snap = snap.select("game_id", "closing_line").with_columns(closing_source=pl.lit("snapshot"))
-    return pl.concat([snap, cfbd.filter(~pl.col("game_id").is_in(snap["game_id"].to_list()))])
+    snap = snap.select("game_id", "closing_line", "closing_books").with_columns(closing_source=pl.lit("snapshot"))
+    return pl.concat([snap, cfbd.filter(~pl.col("game_id").is_in(snap["game_id"].to_list()))], how="diagonal_relaxed")
 
 
 def extra_pricing_lines(cfg: Config, games: pl.DataFrame, season: int, game_ids: list[int]) -> pl.DataFrame | None:

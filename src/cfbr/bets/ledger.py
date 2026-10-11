@@ -44,6 +44,8 @@ LEDGER_SCHEMA = {
     "season_type": pl.Utf8, "best_odds": pl.Int32, "fbs_game": pl.Boolean, "closing_source": pl.Utf8,
     # Wall-clock time the bet was written (placed_at is the line-capture time).
     "recorded_at": pl.Utf8,
+    # Books in the closing consensus that graded the CLV (set at settlement).
+    "closing_books": pl.Int32,
 }
 
 SETTLED = ["won", "lost", "push"]
@@ -54,6 +56,9 @@ SETTLED = ["won", "lost", "push"]
 # tier has historically returned; the model's own cover probabilities are far more
 # confident than this. See DECISIONS.md.
 BACKTEST_TIER_COVER = {(3.0, 6.0): (860, 1706), (6.0, 10.0): (493, 972), (10.0, None): (284, 524)}
+# The same, over the 2022-2025 holdout (results/20261011T145524Z-tuned-holdout). These seasons were
+# never tuned on; the tuning-season Large-tier 54.2% does not carry over.
+HOLDOUT_TIER_COVER = {(3.0, 6.0): (525, 1041), (6.0, 10.0): (334, 681), (10.0, None): (176, 364)}
 
 # Non-books (numberfire projections, teamrankings/consensus aggregates) can't be
 # bet, so they never price a bet.
@@ -166,7 +171,7 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         pl.lit(None, pl.Float64).alias("best_clv"), pl.lit(None, pl.Utf8).alias("season_type"),
         pl.when(home).then(pl.col("best_home_price")).otherwise(pl.col("best_away_price")).alias("best_odds"),
         pl.lit(None, pl.Boolean).alias("fbs_game"), pl.lit(None, pl.Utf8).alias("closing_source"),
-        pl.lit(now.isoformat(timespec="seconds")).alias("recorded_at"),
+        pl.lit(now.isoformat(timespec="seconds")).alias("recorded_at"), pl.lit(None, pl.Int32).alias("closing_books"),
     )
 
 
@@ -234,7 +239,9 @@ def settle(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame) -> 
     g = games.select("game_id", "completed", pl.col("home_points").alias("hp"), pl.col("away_points").alias("ap"))
     c = closing.select("game_id", pl.col("closing_line").alias("cl"),
                        (pl.col("closing_source") if "closing_source" in closing.columns
-                        else pl.lit(None, pl.Utf8)).alias("cs"))
+                        else pl.lit(None, pl.Utf8)).alias("cs"),
+                       (pl.col("closing_books") if "closing_books" in closing.columns
+                        else pl.lit(None, pl.Int32)).alias("cb"))
     d = ledger.join(g, on="game_id", how="left").join(c, on="game_id", how="left")
     rows = []
     for r in d.iter_rows(named=True):
@@ -252,6 +259,7 @@ def settle(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame) -> 
             if r["cl"] is not None:
                 r["closing_line"] = r["cl"]
                 r["closing_source"] = r["cs"]
+                r["closing_books"] = r["cb"]
                 r["clv"] = clv(r["side"], r["line"], r["cl"])
                 if best is not None:
                     r["best_clv"] = clv(r["side"], best, r["cl"])
@@ -356,13 +364,36 @@ def by_tier(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
     out = []
     for t in tiers(cfg):
         m = summarize(d.filter(pl.col("_tier") == t["name"]).drop("_tier"), cfg)
-        ref = BACKTEST_TIER_COVER.get((t["lo"], t["hi"]))
-        bt = None
-        if ref:
-            w, n = ref
-            bt = {"wins": w, "n": n, "rate": w / n, "ci95": wilson_ci(w, n)}
-        out.append({**t, **m, "bets": m["open"] + m["settled"], "backtest": bt})
+        def ref(table: dict) -> dict | None:
+            r = table.get((t["lo"], t["hi"]))
+            return None if r is None else {"wins": r[0], "n": r[1], "rate": r[0] / r[1], "ci95": wilson_ci(*r)}
+        out.append({**t, **m, "bets": m["open"] + m["settled"], "backtest": ref(BACKTEST_TIER_COVER),
+                    "holdout": ref(HOLDOUT_TIER_COVER)})
     return out
+
+
+def coin_roi_chance(n: int, odds: int, roi: float) -> float:
+    """Chance that ``n`` flat bets at ``odds`` on a fair coin (no edge at all) finish with ROI >= ``roi``.
+    Exact binomial, pushes ignored."""
+    lose = -odds / 100 if odds < 0 else 1.0
+    win = 1.0 if odds < 0 else odds / 100
+    return sum(math.comb(n, w) for w in range(n + 1)
+               if (w * win - (n - w) * lose) / (n * lose) >= roi - 1e-12) / 2 ** n
+
+
+def sample_size_note(ledger: pl.DataFrame, cfg: Bets) -> str:
+    """What the minimum sample can and can't tell apart (review B2)."""
+    n = cfg.min_sample
+    c = ledger.filter(pl.col("clv").is_not_null())["clv"]
+    clv_txt = (f"With the per-bet CLV spread seen so far (SD {c.std():.2f} pts over {c.len()} bets), {n} bets pin "
+               f"average CLV down to about ±{1.96 * c.std() / math.sqrt(n):.2f} pts, so CLV is the metric this "
+               "sample can actually answer." if c.len() >= 30 else
+               f"If per-bet CLV varies by about 1.5 pts, {n} bets pin average CLV down to about "
+               f"±{1.96 * 1.5 / math.sqrt(n):.2f} pts, so CLV is the metric this sample can actually answer.")
+    return (f"{clv_txt} Win rate is not: a fair coin over {n} flat {cfg.odds} bets finishes with ROI ≥ 0 "
+            f"{100 * coin_roi_chance(n, cfg.odds, 0.0):.0f}% of the time and ROI ≥ +5% "
+            f"{100 * coin_roi_chance(n, cfg.odds, 0.05):.1f}% of the time, so a profitable {n}-bet record is weak "
+            "evidence by itself. The 2022–2025 backtest (never tuned on) covered 48.5–50.5% in every edge tier.")
 
 
 def money(x: float | None, signed: bool = True) -> str:
@@ -450,7 +481,7 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
         f"({100 * cfg.unit_value / cfg.bankroll:g}% of the starting bankroll, not compounding), "
         f"so each bet risks {money(risked * cfg.unit_value, signed=False)} to win {money(to_win * cfg.unit_value, signed=False)}. "
         f"Bankroll now: {money(m['balance'], signed=False)}.", "",
-        verdict, "",
+        verdict, "", sample_size_note(ledger, cfg), "",
         "Two records: **at consensus** (median line across books, measures whether the model beats the market) "
         f"and **best line** (the best number across {', '.join(cfg.pricing_books) or 'non-offshore books'} at that "
         "book's own price when known; every other book, offshore included, counts toward the consensus but never "
@@ -474,14 +505,19 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
         lines.append("")
     lines += ["## By edge tier", "",
               "Every bet is the same flat stake, so the payout per bet is identical; tiers group bets by how far the "
-              "model is from the market. Backtest = how often that tier covered the closing line in the 2015–2021 "
-              "walk-forward backtest (pushes excluded). No tier has cleared break-even there with confidence.", "",
-              "| tier | bets | open | settled | W-L-P | win % [95% CI] | units | $ | ROI | backtest cover [95% CI] |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+              "model is from the market. Backtest = how often that tier covered the closing line in the walk-forward "
+              "backtest (pushes excluded): 2015–2021 are the seasons the model was tuned on, 2022–2025 the holdout it "
+              "never saw. No tier has cleared break-even with confidence in either, and none is above 50.5% in the "
+              "holdout.", "",
+              "| tier | bets | open | settled | W-L-P | win % [95% CI] | units | $ | ROI | backtest 2015–21 [95% CI] "
+              "| holdout 2022–25 [95% CI] |",
+              "|---|---|---|---|---|---|---|---|---|---|---|"]
+    def cover_txt(bt: dict | None) -> str:
+        return "–" if bt is None else (f"{_fmt(bt['rate'], pct=True)} [{_fmt(bt['ci95'][0], pct=True)}, "
+                                       f"{_fmt(bt['ci95'][1], pct=True)}] (n={bt['n']})")
+
     for t in by_tier(ledger, cfg):
-        bt = t["backtest"]
-        bt_txt = "–" if bt is None else (f"{_fmt(bt['rate'], pct=True)} [{_fmt(bt['ci95'][0], pct=True)}, "
-                                          f"{_fmt(bt['ci95'][1], pct=True)}] (n={bt['n']})")
+        bt_txt = f"{cover_txt(t['backtest'])} | {cover_txt(t['holdout'])}"
         lines.append(f"| {t['label']} | {t['bets']} | {t['open']} | {t['settled']} | {t['won']}-{t['lost']}-{t['push']} | "
                      f"{_fmt(t['win_rate'], pct=True)} [{_fmt(t['ci95'][0], pct=True)}, {_fmt(t['ci95'][1], pct=True)}] | "
                      f"{_fmt(t['units'], signed=True)} | {money(t['dollars'])} | {_fmt(t['roi'], pct=True)} | {bt_txt} |")
@@ -490,8 +526,8 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
     lines += tests_markdown(ledger, cfg)
     opn = ledger.filter(pl.col("status") == "open").with_columns(tier=tier_expr(cfg)).sort("kickoff_ts")
     if opn.height:
-        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | model (home margin) | edge | best available | all books (home spread, home/away price) |",
-                  "|---|---|---|---|---|---|---|---|---|"]
+        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | books | model (home margin) | edge | best available | all books (home spread, home/away price) |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
         for r in opn.iter_rows(named=True):
             team_line = r["line"] if r["side"] == "home" else -r["line"]
             if r["best_line"] is None:
@@ -501,7 +537,7 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
                 price = f" {r['best_odds']:+d}" if r["best_odds"] is not None else ""
                 best_txt = f"{best:+g}{price} ({r['best_provider']})"
             lines.append(f"| {r['kickoff_ts'][:16].replace('T', ' ')} | {r['away_team']} @ {r['home_team']} | "
-                         f"{r['team']} {team_line:+g} | {r['tier']} | {r['line']:+g} | {r['model_margin']:+.1f} | {r['edge']:+.1f} | "
+                         f"{r['team']} {team_line:+g} | {r['tier']} | {r['line']:+g} | {r['n_providers']} | {r['model_margin']:+.1f} | {r['edge']:+.1f} | "
                          f"{best_txt} | {r['books'] or '–'} |")
         lines.append("")
     return "\n".join(lines)

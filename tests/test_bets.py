@@ -305,8 +305,21 @@ def test_settle_records_the_closing_source():
                                                                           week=pl.lit(7, pl.Int32))
     ledger, _ = add_bets(read_ledger(Path("/nonexistent")), new)
     games = pl.DataFrame({"game_id": [1], "completed": [True], "home_points": [31], "away_points": [21]})
-    snap = pl.DataFrame({"game_id": [1], "closing_line": [-4.0], "closing_source": ["snapshot"]})
+    snap = pl.DataFrame({"game_id": [1], "closing_line": [-4.0], "closing_source": ["snapshot"], "closing_books": [5]})
     r = settle(ledger, games, snap).row(0, named=True)
     assert (r["closing_line"], r["closing_source"], r["clv"]) == (-4.0, "snapshot", pytest.approx(1.0))
+    assert (r["closing_books"], r["n_providers"]) == (5, 3)
     r = settle(ledger, games, pl.DataFrame({"game_id": [1], "closing_line": [-4.0]})).row(0, named=True)
     assert r["closing_source"] is None   # older callers without a source
+
+
+def test_coin_roi_chance_and_holdout_tiers():
+    from cfbr.bets.ledger import coin_roi_chance
+
+    # 500 fair-coin bets at -110 need 262+ wins to break even: about a 15% chance.
+    assert coin_roi_chance(500, -110, 0.0) == pytest.approx(0.152, abs=0.005)
+    assert coin_roi_chance(500, -110, 0.05) < coin_roi_chance(500, -110, 0.0)
+    assert coin_roi_chance(10, 100, -1.0) == pytest.approx(1.0)
+    t = {x["name"]: x for x in by_tier(read_ledger(Path("/nonexistent")), CFG)}
+    assert all(x["holdout"]["rate"] < 0.51 for x in t.values())
+    assert "holdout 2022–25" in summary_markdown(read_ledger(Path("/nonexistent")), CFG, 2026)
