@@ -2,6 +2,8 @@
 
 Implementation handoff from a full review of `cfbr`. Everything below was verified by reading code or by running the checks in the appendix against the frozen backtest runs. Nothing here has been built yet.
 
+*Revised 2026-10-11 after a second review: the M1 day-mode as-of rule fixed (the first draft leaked plays from games still in progress), the M1 shadow clarified, W1 downgraded (CFBD normally renumbers a rescheduled game's week), the M2 spec matched to what was measured, the O1 timestamp option corrected, the priority table aligned with the sections, line references fixed.*
+
 Read `CLAUDE.md` and `DECISIONS.md` first. Rules that bind every item:
 
 - **Pre-register before you look.** Any model or bet-rule change gets an evaluation rule written into `DECISIONS.md` *before* the result is computed, with the metric, the data window, and the adopt/reject threshold. Follow the pattern of DECISIONS lines 71–73 and 106–110.
@@ -27,23 +29,25 @@ The paper-bet program is testing a hypothesis the backtest already rejects. That
 
 ## Priority order
 
-Do these in order. P0 is correctness and data safety; P1 is the two model items with real measured headroom; P2 is the betting EV machinery; P3 is site features that are cheap because the data is already precomputed.
+Do these in order. P0 is correctness and data safety; P1 is the two model items with real measured headroom; P2 is the betting EV machinery; P3 is site features that are cheap because the data is already precomputed, plus W1 (moved down from P0: rarer than first thought).
 
 | # | item | size | why first |
 |---|---|---|---|
 | O1 | backups of `data/raw`, ledger, chain | S | irreplaceable data, no copy |
 | B1 | `cfbr bets` can record bets after kickoff | S | correctness |
-| W1 | postponed game freezes rankings | M | live-site failure mode |
+| B2 | honest holdout numbers in bets.md (do with B1) | S | reporting integrity |
 | M1 | finer as-of times (intra-week plays) | M | largest legal information gap |
 | M2 | shrinkage-aware calibration | S | measured −0.07 MAE holdout |
 | M3 | FCS indicator in calibration | S | measured +3–4 pt bias |
 | M5 | backtest report diagnostics | S | would have caught M2/M3 at tuning |
-| B2 | honest holdout numbers in bets.md | S | reporting integrity |
+| M4 | cheap ceiling checks (optional) | S each | check, then decide |
+| M6 | weekly-run efficiency (optional) | S | ops speed |
 | B3 | points→cents table and key numbers | M | prerequisite for B4–B6 |
 | B4 | calibrated cover probability | M | prerequisite for any sizing |
 | B5 | market-implied power ratings | M | diagnostic |
 | B6 | consensus consistency, snapshot cron gaps | S | CLV quality |
-| W2–W6 | site robustness and features | S–M | visitor value |
+| W1 | postponed/rescheduled game handling | S | rare live-site edge case (see W1) |
+| W2–W4 | site robustness, features, tests | S–M | visitor value |
 | O2–O3 | heartbeat, news archive decision | S | ops hygiene |
 
 ---
@@ -55,7 +59,7 @@ Do these in order. P0 is correctness and data safety; P1 is the two model items 
 `data/raw` (2.3 GB, cannot be refetched under the quota), `out/{season}/bets.csv`, `out/{season}/ledger_chain.jsonl`, `out/{season}/ledger_history/`, `data/news/` are all gitignored and no rsync/restic/snapshot exists in crontab, `README.md` or `deploy/`.
 
 - Add a nightly cron (`deploy/` + README) that syncs `data/raw`, `data/cfb.duckdb` (optional, rebuildable), `out/*/bets*.csv`, `out/*/ledger_chain.jsonl`, `out/*/ledger_history/` and `data/news` to an off-machine target. Restic or `rsync -a --delete` to a second disk/NAS/S3 bucket are all fine; the user picks the target.
-- **Outside timestamp for the ledger chain** (DECISIONS 116 asks for this): at the end of `_weekly_run` in `src/cfbr/cli.py`, commit `out/{season}/ledger_chain.jsonl` to a dedicated branch or push it in the ntfy health message body. Either gives a timestamp not on the same disk. Keep `out/` gitignored for everything else.
+- **Outside timestamp for the ledger chain** (DECISIONS 116 asks for this): at the end of `_weekly_run` in `src/cfbr/cli.py`, include the chain's latest entry hash (and entry count) in the ntfy message body. ntfy's server keeps the message timestamp, so this is off-machine. Committing the chain to a local git branch does **not** give an outside timestamp (same disk, rewritable); it only counts if pushed to a remote, and a cron job committing in the shared repo conflicts with the worktree workflow, so prefer ntfy. Keep `out/` gitignored for everything else.
 - Acceptance: restore drill documented in README; health check (`src/cfbr/bets/health.py`) flags a backup older than 8 days.
 
 ### B1. Standalone `cfbr bets` can record a bet after kickoff
@@ -65,15 +69,6 @@ Do these in order. P0 is correctness and data safety; P1 is the two model items 
 - In `run_bets` (`src/cfbr/bets/run.py`) also require `kickoff_ts > now_utc`; add a `recorded_at` column (ISO, UTC) to the ledger schema. Keep `placed_at` as the line-capture time. `read_ledger` must load old ledgers without the column (forward-compatible, like `season_type` in DECISIONS 77).
 - Add `recorded_at` to the immutable-terms list in `src/cfbr/bets/integrity.py`.
 - Test in `tests/test_bets.py`: a snapshot older than a game's kickoff produces no bet for that game.
-
-### W1. One postponed game freezes the rankings
-
-`completed_weeks` (`src/cfbr/web/build.py:296-303`) and `fetch.completed_play_weeks` (`src/cfbr/ingest/fetch.py:138-150`) require every game in a CFBD week to be `completed`. A game rescheduled weeks out keeps the week "pending", so `weekly` ranks week N−1 (`cli.py:307-311`) and the site shows no new table until the makeup is played. Only orphaned games are rescued by `STALE_GAME` (`build.py:285`, 4 days).
-
-- Define a week complete when every game **whose kickoff is within the week's slot window** is completed; a game whose `kickoff_ts` has moved past the next slot's as-of belongs to that later slot. Do this in `assign_slots` (`src/cfbr/data.py`) so rank, backtest, web and bets all agree, and make `completed_play_weeks` use the same rule.
-- Mind the plays-fetch rule (DECISIONS 12): plays for a week are fetched only once all its FBS games are completed. With the new rule the moved game is simply not part of that week any more.
-- Also surface cancelled/postponed state: `templates/team.html:90` and `games.html:141` key only on `completed`; show "postponed"/"cancelled" for stale games, and make `sim/season.py:125-133` skip stale games in live mode as it does in historical mode.
-- Tests: `completed_weeks` with one game moved three weeks out; `default_slot` with a stale game; a leakage test that a moved game's plays never reach a slot before its new kickoff.
 
 ---
 
@@ -85,14 +80,21 @@ Do these in order. P0 is correctness and data safety; P1 is the two model items 
 
 Two layers:
 
-1. **Backtest/eval variant (no API cost).** Add `Engine.predict(season, as_of_mode="slot" | "day")`. In "day" mode, the as-of for a game is the start of its kickoff **day** (UTC date, or the earliest kickoff that day) rather than the slot's. Implementation: `SeasonArrays.n_before` already takes any timestamp; group games by (slot, kickoff date), fit one snapshot per group (~5 extra ridge pairs per week, ~50 ms each), attach. Keep the "ratings for week w" display convention unchanged (`ratings()`, `report/rank.py`, the site) — only `predict()` changes.
+1. **Backtest/eval variant (no API cost).** Add `Engine.predict(season, as_of_mode="slot" | "day")`. In "day" mode, a game's as-of is the start of its kickoff day in **US Eastern time** (local midnight, as a UTC instant), never the slot's. Implementation: `SeasonArrays.n_before` already takes any timestamp; group games by (slot, Eastern kickoff date), fit one snapshot per group (~5 extra ridge pairs per week, ~50 ms each), attach.
+
+   **The as-of must exclude games still in progress.** The engine selects training plays by *game kickoff* < as-of (`engine.py:48-52`), and the calibration and Massey baselines select games by kickoff < as-of plus `completed` (`engine.py:228`), where `completed` is the game's eventual state. So any as-of falling mid-game leaks that game's full result. With UTC midnight, a 10:30 PM ET Saturday kickoff (02:30 UTC Sunday) would get every play of a 7 PM ET game still being played. Eastern midnight has the same problem one day over: a 10:30 PM ET Friday game is still running at midnight Saturday. (The slot as-of is safe only because it is the week's first kickoff.) **Hard rule, enforced in code:** the effective cutoff for a day group is `max(slot_as_of, day_as_of − GAME_DURATION_BOUND)` with `GAME_DURATION_BOUND = 5h` (a constant in `data.py`), applied to plays (`n_before(cutoff)`, still a kickoff prefix), recency weights, the calibration set and the Massey set alike. A game is then used only if it kicked off at least 5 h before the target day starts, which covers late-night and Hawaii games.
+
+   Keep the "ratings for week w" display convention unchanged (`ratings()`, `report/rank.py`, the site) — only `predict()` changes.
 2. **Live variant (needs ingest).** Live plays arrive only when a week completes (DECISIONS 12), so day-mode predictions in production need a mid-week plays fetch: one extra `/plays` call per (seasonType, week) taken Friday night for the completed Tue–Thu games, ~15 calls/season. Only build this if the ceiling check passes.
 
 **Ceiling check first** (required by the project): run day-mode vs slot-mode on 2015–2021 under the frozen `config/tuned.toml`, report paired MAE gain overall and on games with lag > 2 days, 95% CI. Decide in advance: proceed to a shadow if the overall gain CI excludes 0.
 
-**Evaluation rule to pre-register**: like the roster shadow (DECISIONS 73): window 2026 week 7 onward + postseason, paired MAE gain day − slot, adopt for 2027 if gain > 0 and CI lower bound > −0.10. If the live variant is built, the shadow must use only plays actually ingested before each game's kickoff (store the fetch time with the snapshot) — the backtest variant assumes plays are available the instant a game ends, which the live path can't match exactly.
+**Evaluation rule to pre-register**: like the roster shadow (DECISIONS 73): window 2026 week 7 onward + postseason, paired MAE gain day − slot, adopt for 2027 if gain > 0 and CI lower bound > −0.10. State in the rule which form the 2026 test takes:
 
-Leakage guard: extend `tests/test_leakage.py` so the max-kickoff assertion runs per (slot, day) group.
+- *Live variant not built (default):* production can't make day-mode predictions, so there is no live shadow. The 2026 test is a walk-forward backtest run after the season on 2026 data, with the as-of rule above. It is still unseen data, but call it a post-season backtest in DECISIONS, not a shadow.
+- *Live variant built:* a true shadow, using only plays actually ingested before each game's kickoff (store the fetch time with the snapshot). The backtest variant assumes a game's plays are available 5 h after its kickoff, which the live path can't match exactly. Report both.
+
+Leakage guard: extend `tests/test_leakage.py` per (slot, day) group so it asserts that every training game **ended** before the target day's as-of (`kickoff_ts + GAME_DURATION_BOUND ≤ day_as_of`, or kickoff before the slot as-of), not just that it kicked off before. A max-kickoff assertion alone passes under the UTC-midnight bug above. Add a canary: a game kicking off 3 h before a day group's as-of (a late Friday kickoff vs. Saturday's group) must not reach that group's fit.
 
 ### M2. Shrinkage-aware calibration
 
@@ -108,9 +110,9 @@ Leakage guard: extend `tests/test_leakage.py` so the max-kickoff assertion runs 
 
 Prior-based predictions are under-dispersed; data-based ones slightly over-dispersed. A correction fit on tuning only, `resid ~ pred + pred·ps + home·ps` with `ps = (prior_share_h + prior_share_a)/2`, gives coefficients `[-0.178, +0.316, -0.023]` and on holdout: overall MAE 12.995 → 12.927, week 1 14.05 → 13.82, week 3 13.65 → 13.60, weeks 2 and 4 unchanged. This gain is larger than any experiment rejected in DECISIONS.md and consistent across both sets. It also explains the week-1 home bias of +2.5 to +3.3 points better than a week-1 home constant does (a pure week-1/2 home constant fit on tuning gains only 0.008 MAE on holdout).
 
-Implementation: extend `Calibration` with interaction terms (`b_ppa_ps`, `b_sr_ps`, `b_home_ps`) and let `design()` include `Δnet × ps` and `home × ps` columns. `ps` is available in `season_games_with_snapshots`. `team_ratings_points` (the published ratings) should keep using the base coefficients so the rating definition ("expected margin vs an average team") is unchanged; only game predictions use the interaction. Say so in DECISIONS.
+Implementation — build exactly the model that was measured, a second stage on the base prediction: `pred' = pred + c₁·pred + c₂·pred·ps + c₃·home·ps`, where `pred` is the existing `predict_margin` output and `(c₁, c₂, c₃)` are fit by OLS on `margin − pred` over the same training games and seasons as the base calibration (`schemes.training_seasons`, point-in-time `pred` from each game's own slot snapshot). Store them as `Calibration.c_pred, c_pred_ps, c_home_ps` (default 0 so old pickles/configs load). Don't split the interaction into separate `Δppa×ps` and `Δsr×ps` terms: that is a different model with an extra parameter and wasn't measured. If someone wants to try it, it's a separate pre-registered item. `ps` is available in `season_games_with_snapshots`. `team_ratings_points` (the published ratings) should keep using the base coefficients so the rating definition ("expected margin vs an average team") is unchanged; only game predictions use the interaction. Say so in DECISIONS.
 
-**Evaluation rule to pre-register** (write before running): primary 2015–2021 paired MAE gain, CI excluding 0 (expected to pass given the above, but the tuning-season numbers in this review were in-sample for the fit, so refit under the hybrid scheme). Shadow on 2026 week 7+, same threshold as M1. Note in DECISIONS that 2022–2025 was viewed for this item on 2026-10-11.
+**Evaluation rule to pre-register** (write before running): **primary = the 2026 week 7+ shadow**, paired MAE gain (M2 − base), adopt for 2027 if gain > 0 and CI lower bound > −0.10 (same as M1). Both 2015–2021 and 2022–2025 have now been viewed for this exact correction, so neither can serve as the primary test. Secondary, as a gate for starting the shadow at all: refit under the hybrid scheme and require the 2015–2021 paired MAE gain CI to exclude 0. This is expected to pass and only catches implementation bugs. Note in DECISIONS that both windows were viewed for this item on 2026-10-11.
 
 Caveat on tuning numbers: the tuning-season calibration carries a second-order LOSO leak (a season's finals reach its own calibration through other seasons' LOSO priors; `engine.py:149-159` and `:214-220`). Holdout is clean. Don't try to fix the scheme (user-approved); just report it where tuning MAE is quoted.
 
@@ -158,7 +160,7 @@ Write these into `metrics.json` and show them on `/accuracy` for finished season
 In `src/cfbr/bets/ledger.py` (`BACKTEST_TIER_COVER`, line ~51) and `bets.md`/`/bets`:
 
 - Show holdout 2022–2025 tier cover rates next to the tuning ones (compute from `results/20261011T145524Z-tuned-holdout/predictions.parquet`; all are 48.5–50.5%).
-- State that the 500-bet minimum is powered for CLV (SE ≈ 0.07 pts), not for win rate (a 2-point true edge needs ~6,000 bets for 80% power), and add a Monte Carlo line: "a 500-bet sample from a 50% coin shows ROI ≥ +X% Y% of the time".
+- State that the 500-bet minimum is powered for CLV (SE ≈ 0.07 pts), not for win rate. For the win-rate side, compute the bets needed for 80% power from B3's points→cover-probability table and show the working; the first draft's "~6,000 bets for a 2-point edge" was not derived and shouldn't be quoted until B3 exists. Add a Monte Carlo line: "a 500-bet sample from a 50% coin shows ROI ≥ +X% Y% of the time".
 - Show `n_providers` at capture and the number of books in the closing consensus beside each bet's CLV (22 of 30 open week-7 bets had a single-book "consensus" at capture).
 
 ### B3. Points→cents and key numbers (prerequisite for B4–B6)
@@ -192,6 +194,16 @@ Invert closing lines into a Vegas rating per team per week with the Massey ridge
 ---
 
 ## P3 — website and ops
+
+### W1. Postponed or rescheduled games (moved from P0)
+
+`completed_weeks` (`src/cfbr/web/build.py:44-51`) and `fetch.completed_play_weeks` (`src/cfbr/ingest/fetch.py:138-150`) require every game in a CFBD week to be `completed`, except that the web side ignores games stale for `STALE_GAME` (`build.py:33`, 4 days). If a game kept its week number but moved to a later date, the week would stay "pending" and `weekly` would rank week N−1 (`cli.py:307-311`) until the makeup was played.
+
+In practice CFBD renumbers a rescheduled game into its new week. Checked in the store: regular-season games more than 10 days from their week's median kickoff number 0 in every season 2014–2026 (2020 included, despite its COVID reschedulings) except 4 in 2025. The remaining risk is a lag between CFBD updating the date and updating the week. **Don't change `assign_slots`**: it would alter historical slotting and the frozen backtests for almost no benefit.
+
+- Live completed-week logic only: in `completed_play_weeks` and `completed_weeks`, treat a game whose `kickoff_ts` is past the following week's first kickoff as belonging to that later week, and log a warning when this fires (it means CFBD hasn't renumbered yet). Mind DECISIONS 12: plays for the original week are then fetched without the moved game, and the moved game's plays arrive with its new week.
+- Surface cancelled/postponed state: `templates/team.html:90` and `games.html:141` key only on `completed`; show "postponed"/"cancelled" for stale games, and make `sim/season.py:125-133` skip stale games in live mode as it does in historical mode.
+- Tests: `completed_weeks` with one game moved three weeks out but still carrying its old week number; `default_slot` with a stale game.
 
 ### W2. Robustness
 
