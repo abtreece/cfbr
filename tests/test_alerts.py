@@ -18,6 +18,9 @@ def _cfg(tmp_path):
     cfg = Config(paths=Paths(raw_dir=tmp_path / "raw", db_path=tmp_path / "cfb.duckdb", results_dir=tmp_path,
                              out_dir=tmp_path / "out"))
     cfg.odds.enabled = cfg.oddspapi.enabled = False
+    cfg.backup.target = str(tmp_path / "backup")
+    (tmp_path / "backup").mkdir()
+    (tmp_path / "backup" / "LAST_BACKUP.json").write_text(json.dumps({"finished_at": NOW.isoformat()}))
     return cfg
 
 
@@ -74,7 +77,8 @@ def test_weekly_alerts_on_failure_and_runs_the_check(monkeypatch, outcome, alert
         if outcome is not None:
             raise outcome
     monkeypatch.setattr(cli, "_weekly_run", run)
-    monkeypatch.setattr(alerts, "send", lambda cfg, title, msg, priority="high": sent.append(title) or True)
+    monkeypatch.setattr(alerts, "send", lambda cfg, title, msg, priority="high":
+                        (priority != "min" and sent.append(title)) or True)
     monkeypatch.setattr(health, "check", lambda cfg, season: ran.append(season) or [])
     if outcome is None:
         cli.weekly(None)
@@ -87,7 +91,28 @@ def test_weekly_alerts_on_failure_and_runs_the_check(monkeypatch, outcome, alert
 def test_weekly_pushes_check_problems(monkeypatch):
     sent = []
     monkeypatch.setattr(cli, "_weekly_run", lambda config: None)
-    monkeypatch.setattr(alerts, "send", lambda cfg, title, msg, priority="high": sent.append((title, msg)) or True)
+    monkeypatch.setattr(alerts, "send", lambda cfg, title, msg, priority="high":
+                        (priority != "min" and sent.append((title, msg))) or True)
     monkeypatch.setattr(health, "check", lambda cfg, season: ["2 bets on finished games are still open"])
     cli.weekly(None)
     assert sent == [("cfbr weekly: check found problems", "2 bets on finished games are still open")]
+
+
+def test_weekly_success_ping_carries_the_ledger_chain_head(monkeypatch, tmp_path):
+    from cfbr import backup
+
+    sent = []
+    monkeypatch.setattr(cli, "_weekly_run", lambda config: None)
+    monkeypatch.setattr(alerts, "send", lambda cfg, title, msg, priority="high": sent.append((title, msg, priority)))
+    monkeypatch.setattr(health, "check", lambda cfg, season: [])
+    monkeypatch.setattr(backup, "chain_head", lambda out_dir, season: "ledger chain 2026: 3 entries, head abc")
+    cli.weekly(None)
+    assert sent == [("cfbr weekly ok", "ledger chain 2026: 3 entries, head abc", "min")]
+
+
+def test_health_check_flags_a_missing_or_stale_backup(tmp_path):
+    cfg = _cfg(tmp_path)
+    assert health.check(cfg, 2026, NOW + timedelta(days=7)) == []
+    assert any("days old" in p for p in health.check(cfg, 2026, NOW + timedelta(days=9)))
+    cfg.backup.target = str(tmp_path / "nowhere")
+    assert any("no backup found" in p for p in health.check(cfg, 2026, NOW))

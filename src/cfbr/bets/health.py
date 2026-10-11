@@ -17,7 +17,7 @@ from cfbr.config import Config
 
 def check(cfg: Config, season: int, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(UTC)
-    problems: list[str] = []
+    problems: list[str] = backup_problems(cfg, now)
     path = cfg.paths.out_dir / str(season) / "bets.csv"
     if not path.exists():
         return problems  # nothing recorded yet this season
@@ -64,3 +64,15 @@ def check(cfg: Config, season: int, now: datetime | None = None) -> list[str]:
         if oddspapi_key() is not None and requests_left(cfg) < 30:
             problems.append(f"OddsPapi (bet365): only {max(requests_left(cfg), 0)} requests left this month")
     return problems
+
+
+def backup_problems(cfg: Config, now: datetime) -> list[str]:
+    from cfbr.backup import last_backup, target
+
+    last = last_backup(cfg)
+    if last is None:
+        return [f"no backup found at {target(cfg)} (is the `cfbr backup` cron running?)"]
+    age = now - last
+    if age > timedelta(days=cfg.backup.max_age_days):
+        return [f"last backup is {age.days} days old ({target(cfg)})"]
+    return []

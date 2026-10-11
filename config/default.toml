@@ -108,6 +108,16 @@ quota_reserve = 20
 enabled = true
 server = "https://ntfy.sh"
 
+[backup]
+# `cfbr backup` (nightly cron): rsync data/raw, data/news and the paper-bet ledgers, hash
+# chains and history to `target`. Local for now (a different disk or an off-machine mount
+# is better). Deleted/changed files are kept under target/_previous/{date}/ for
+# keep_previous_days. The weekly health check flags a backup older than max_age_days.
+target = "~/cfbr-backup"
+include_db = false
+keep_previous_days = 30
+max_age_days = 8.0
+
 [sim]
 # Monte Carlo season simulation (cfbr sim / weekly): conference titles and playoff odds.
 enabled = true

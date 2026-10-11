@@ -129,6 +129,14 @@ class Alerts(BaseModel):
     server: str = "https://ntfy.sh"
 
 
+class Backup(BaseModel):
+    """Nightly rsync of data that can't be rebuilt (`cfbr backup`; see cfbr/backup.py)."""
+    target: str = "~/cfbr-backup"
+    include_db: bool = False  # data/cfb.duckdb is rebuilt from data/raw, so optional
+    keep_previous_days: int = 30
+    max_age_days: float = 8.0  # the health check flags an older backup
+
+
 class Sim(BaseModel):
     """Monte Carlo season simulation (conference titles, playoff odds)."""
     enabled: bool = True
@@ -163,6 +171,7 @@ class Config(BaseModel):
     odds: Odds = Odds()
     oddspapi: OddsPapi = OddsPapi()
     alerts: Alerts = Alerts()
+    backup: Backup = Backup()
     sim: Sim = Sim()
     source: str | None = Field(default=None, exclude=True)
 

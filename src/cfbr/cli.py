@@ -250,6 +250,12 @@ def weekly(config: ConfigOpt = None) -> None:
             if problems:
                 log.warning("post-run check: %s", "; ".join(problems))
                 send(cfg, "cfbr weekly: check found problems", "; ".join(problems))
+            # Success ping: a heartbeat, and the ledger chain head gets a timestamp kept off this machine.
+            from cfbr.backup import chain_head
+
+            head = chain_head(cfg.paths.out_dir, current_season())
+            send(cfg, f"cfbr weekly ok{' (exit 6)' if code == 6 else ''}",
+                 head or "no paper-bet ledger yet", priority="min")
 
 
 def _weekly_run(config: ConfigOpt = None) -> None:
@@ -464,6 +470,17 @@ def shadow(
     cfg = _default_config(config)
     path = run_shadow(cfg, Dataset.load(cfg), season, last_completed=min(current_season(), season) - 1)
     typer.echo(f"wrote {path} and {path.with_suffix('.md')}")
+
+
+@app.command()
+def backup(config: ConfigOpt = None) -> None:
+    """Copy the raw cache, news archive and paper-bet ledgers to [backup].target (nightly cron)."""
+    from cfbr.backup import run_backup, target
+
+    cfg = load_config(config)
+    stamp = run_backup(cfg)
+    typer.echo(f"backed up {len(stamp['paths'])} paths to {target(cfg)}"
+               + (f"; pruned {', '.join(stamp['pruned'])}" if stamp["pruned"] else ""))
 
 
 @app.command()

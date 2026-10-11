@@ -32,6 +32,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
+| `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
 | `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Sat |
 | `cfbr sim --season 2026 --week 6` | Simulate the rest of the season (win totals, conference titles, playoff odds) into `out/{season}/wNN/season_sim.*`; `cfbr weekly` runs it too |
 
@@ -80,7 +81,27 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 0 20,21 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "15" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 ```
 
-`weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet. Failures (except 5) and post-run health-check problems send a push alert through ntfy: install the ntfy app and subscribe to the topic in `.keys` (`NTFY_TOPIC`).
+`weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet. Failures (except 5) and post-run health-check problems send a push alert through ntfy: install the ntfy app and subscribe to the topic in `.keys` (`NTFY_TOPIC`). A successful run also sends a silent (priority `min`) "cfbr weekly ok" message carrying the paper-bet ledger's hash-chain head, which doubles as a heartbeat and as a timestamp for the ledger kept off this machine.
+
+## Backups
+
+`data/raw` can't be refetched under the free-tier quota, and the paper-bet ledgers (`out/{season}/bets*.csv`, `ledger_chain.jsonl`, `ledger_history/`) and `data/news` exist nowhere else, all gitignored. `cfbr backup` rsyncs them to `[backup].target` (default `~/cfbr-backup`; point it at another disk or an off-machine mount when one is available). Files deleted or changed since the previous run are kept under `target/_previous/{date}/` for 30 days. The weekly health check alerts when the last backup is more than 8 days old.
+
+```cron
+# Nightly at 3:30 AM Central.
+30 8,9 * * *  [ "$(TZ=America/Chicago date +\%H)" = "03" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr backup >> data/backup.log 2>&1
+```
+
+Restore drill (run it once a season against a scratch directory, never over the live checkout):
+
+```bash
+T=~/cfbr-backup; R=$(mktemp -d)
+rsync -a "$T/data" "$T/out" "$R/"                       # what a restore would put back
+diff -rq data/raw "$R/data/raw" && echo raw ok          # identical to the live cache
+uv run python -c "from pathlib import Path; from cfbr.bets.integrity import verify; print(verify(Path('$R/out'), 2026) or 'ledger chain ok')"
+```
+
+For a real restore, stop the cron jobs and `cfbr-web`, then `rsync -a "$T/data/" data/` and `rsync -a "$T/out/" out/`, then `cfbr ingest` with no flags (makes no API calls; it only rebuilds `data/cfb.duckdb` from the cache) and `cfbr prep`.
 
 ## Paper bets
 
