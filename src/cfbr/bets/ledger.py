@@ -42,6 +42,8 @@ LEDGER_SCHEMA = {
     # Added later; older ledgers get these as nulls.
     "books": pl.Utf8, "best_status": pl.Utf8, "best_units": pl.Float64, "best_clv": pl.Float64,
     "season_type": pl.Utf8, "best_odds": pl.Int32, "fbs_game": pl.Boolean, "closing_source": pl.Utf8,
+    # Wall-clock time the bet was written (placed_at is the line-capture time).
+    "recorded_at": pl.Utf8,
 }
 
 SETTLED = ["won", "lost", "push"]
@@ -129,15 +131,18 @@ def market(snapshot: pl.DataFrame, offshore: list[str] | None = None, default_od
 
 
 def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datetime, cfg: Bets,
-                   extra_pricing: pl.DataFrame | None = None) -> pl.DataFrame:
+                   extra_pricing: pl.DataFrame | None = None, now: datetime | None = None) -> pl.DataFrame:
     """Bets to record from ``preds`` (predictions.csv rows: game_id, kickoff_ts,
     home_team, away_team, pred_margin) against a line snapshot taken at ``placed_at``.
-    Only games that kick off after the snapshot are eligible."""
+    Only games that kick off after both the snapshot and ``now`` (the wall clock when
+    the bet is recorded; defaults to ``placed_at``) are eligible, so an old snapshot
+    can never place a bet on a game already played."""
+    now = now or placed_at
     preds = preds.with_columns(pl.col("kickoff_ts").cast(pl.Utf8).str.to_datetime(time_zone="UTC")
                                if preds.schema["kickoff_ts"] == pl.Utf8 else pl.col("kickoff_ts"))
     m = market(snapshot, cfg.offshore_books, cfg.odds, cfg.pricing_books, extra_pricing)
     d = (preds.join(m, on="game_id", how="inner")
-         .filter(pl.col("kickoff_ts") > placed_at)
+         .filter((pl.col("kickoff_ts") > placed_at) & (pl.col("kickoff_ts") > now))
          .with_columns(edge=pl.col("pred_margin") + pl.col("line"))  # model margin - (-spread)
          .filter(pl.col("edge").abs() >= cfg.threshold))
     home = pl.col("edge") > 0
@@ -161,6 +166,7 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         pl.lit(None, pl.Float64).alias("best_clv"), pl.lit(None, pl.Utf8).alias("season_type"),
         pl.when(home).then(pl.col("best_home_price")).otherwise(pl.col("best_away_price")).alias("best_odds"),
         pl.lit(None, pl.Boolean).alias("fbs_game"), pl.lit(None, pl.Utf8).alias("closing_source"),
+        pl.lit(now.isoformat(timespec="seconds")).alias("recorded_at"),
     )
 
 

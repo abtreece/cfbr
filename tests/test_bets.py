@@ -54,6 +54,18 @@ def test_candidates_threshold_side_and_pre_kickoff_only():
     assert r["best_line"] == -2.5 and r["placed_at"] == "2026-10-11T14:05:00+00:00"
 
 
+def test_stale_snapshot_never_bets_a_game_already_kicked_off():
+    # A snapshot from before game 1's kickoff, recorded after it (e.g. `cfbr bets` rerun on Saturday
+    # against Sunday's snapshot): game 1 is out, and recorded_at is the wall clock, not the snapshot.
+    now = datetime(2026, 10, 17, 20, 0, tzinfo=UTC)
+    preds = _preds().with_columns(pred_margin=pl.Series([8.0, -12.0, 30.0, 10.0, 10.0]))
+    assert set(candidate_bets(preds, _snapshot(), PLACED, CFG)["game_id"]) == {1, 2}
+    c = candidate_bets(preds, _snapshot(), PLACED, CFG, now=now)
+    assert c["game_id"].to_list() == [2]
+    r = c.row(0, named=True)
+    assert r["placed_at"] == "2026-10-11T14:05:00+00:00" and r["recorded_at"] == "2026-10-17T20:00:00+00:00"
+
+
 def test_away_side_when_model_below_market():
     preds = _preds().with_columns(pred_margin=pl.Series([-1.0, -4.0, 0.0, 0.0, 0.0]))
     c = candidate_bets(preds, _snapshot(), PLACED, CFG).filter(pl.col("game_id") == 1).row(0, named=True)

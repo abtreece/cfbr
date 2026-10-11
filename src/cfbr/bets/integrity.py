@@ -18,7 +18,7 @@ from pathlib import Path
 import polars as pl
 
 TERMS = ["placed_at", "kickoff_ts", "side", "team", "model_margin", "line", "edge", "best_line", "best_provider",
-         "odds", "stake", "best_odds"]
+         "odds", "stake", "best_odds", "recorded_at"]
 
 
 def _sha(path: Path) -> str:

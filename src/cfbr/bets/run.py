@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -50,12 +50,13 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
         log.warning("%s missing; run `cfbr rank` first", preds_path)
     else:
         placed_at, book_lines = books
+        now = datetime.now(UTC)
         preds = pl.read_csv(preds_path)
-        new = candidate_bets(preds, book_lines, placed_at, cfg.bets)
+        new = candidate_bets(preds, book_lines, placed_at, cfg.bets, now=now)
         fresh = new.filter(~pl.col("game_id").is_in(ledger["game_id"].to_list()))
         extra = extra_pricing_lines(cfg, games, season, fresh["game_id"].to_list())
         if extra is not None and extra.height:
-            new = candidate_bets(preds, book_lines, placed_at, cfg.bets, extra)
+            new = candidate_bets(preds, book_lines, placed_at, cfg.bets, extra, now=now)
         new = (new.drop("season", "week", "season_type", "fbs_game")
                .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32),
                                   "season_type", fbs_game=~(pl.col("home_fcs") | pl.col("away_fcs"))),
