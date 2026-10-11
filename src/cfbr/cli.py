@@ -340,6 +340,13 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     except Exception:
         log.exception("prior shadow comparison failed; continuing")
         shadow_failed = True
+    try:
+        from cfbr.report.shadow import run_totals_shadow
+
+        run_totals_shadow(cfg, ds, season, last_completed=season - 1)
+    except Exception:
+        log.exception("totals shadow comparison failed; continuing")
+        shadow_failed = True
     # Season simulation: isolated too.
     sim_failed = False
     if cfg.sim.enabled:

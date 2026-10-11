@@ -111,3 +111,74 @@ def run_shadow(cfg: Config, ds: Dataset, season: int, last_completed: int) -> Pa
     log.info("prior shadow: %d window games settled, gain %s", w["n"],
              "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
     return csv
+
+
+# -- Totals v2 shadow (rule: DECISIONS.md "Point totals v2") ---------------------------
+
+def totals_gain(df: pl.DataFrame) -> dict:
+    """Paired total MAE gain of v2 over the points-for/against baseline (positive favors v2)."""
+    d = df.filter(pl.col("completed") & pl.col("total").is_not_null() & pl.col("v2_total").is_not_null()
+                  & pl.col("base_total").is_not_null())
+    if d.height == 0:
+        return {"n": 0, "gain": math.nan, "ci95": (math.nan, math.nan), "mae_base": math.nan, "mae_v2": math.nan}
+    e1 = (d["base_total"] - d["total"]).abs().to_numpy()
+    e2 = (d["v2_total"] - d["total"]).abs().to_numpy()
+    x = e1 - e2
+    half = 1.96 * x.std(ddof=1) / np.sqrt(len(x)) if len(x) > 1 else math.nan
+    return {"n": int(len(x)), "gain": float(x.mean()), "ci95": (float(x.mean() - half), float(x.mean() + half)),
+            "mae_base": float(e1.mean()), "mae_v2": float(e2.mean())}
+
+
+def totals_comparison(ds: Dataset, cfg: Config, season: int, last_completed: int) -> pl.DataFrame:
+    from cfbr.backtest.metrics import consensus_spread
+    from cfbr.model.totals import TotalsV2
+
+    eng = Engine(ds, cfg, last_completed=last_completed)
+    df = TotalsV2(eng).predict_season(season)
+    line = consensus_spread(ds.lines, cfg.backtest.spread_consensus, col="over_under").select(
+        "game_id", line_total="over_under")
+    return df.join(line, on="game_id", how="left").with_columns(in_window=in_window())
+
+
+def totals_markdown(df: pl.DataFrame, season: int) -> str:
+    w = totals_gain(df.filter(pl.col("in_window")))
+    if w["n"] == 0:
+        status = "No window games completed yet."
+    else:
+        ok = w["gain"] > 0 and w["ci95"][0] > GAIN_CI_FLOOR
+        status = (f"Window so far: gain {w['gain']:+.3f} (95% CI lower bound {w['ci95'][0]:+.3f}). "
+                  + ("**Currently meets**" if ok else "**Does not currently meet**")
+                  + " the publish rule. The decision is made once, after the 2026 postseason.")
+    lw = df.filter(pl.col("in_window") & pl.col("completed") & pl.col("line_total").is_not_null()
+                   & pl.col("total").is_not_null())
+    line_txt = (f"Closing total on the same window games: MAE {(lw['line_total'] - lw['total']).abs().mean():.2f} vs "
+                f"v2 {(lw['v2_total'] - lw['total']).abs().mean():.2f} (reported, not gated)." if lw.height else "")
+    rows = ["| games | n | baseline MAE | v2 MAE | gain [95% CI] |", "|---|---|---|---|---|"]
+    for label, sub in (("**window (wk 7+ & postseason)**", df.filter(pl.col("in_window"))),
+                       ("weeks 1–6 (outside the window)", df.filter(~pl.col("in_window")))):
+        g = totals_gain(sub)
+        rows.append(f"| {label} | {g['n']} | – | – | – |" if g["n"] == 0 else
+                    f"| {label} | {g['n']} | {g['mae_base']:.2f} | {g['mae_v2']:.2f} | "
+                    f"{g['gain']:+.3f} [{g['ci95'][0]:+.3f}, {g['ci95'][1]:+.3f}] |")
+    return "\n".join([
+        f"# {season} totals shadow: v2 points ratings vs baseline", "",
+        "Point-in-time predicted totals; nothing here is published. Gain = baseline error − v2 error (positive favors v2). "
+        f"Rule (DECISIONS.md): publish v2 totals after the 2026 postseason if the window gain is > 0 and its 95% CI lower "
+        f"bound is > {GAIN_CI_FLOOR:+.2f}.", "", status, "", line_txt, "", *rows, ""])
+
+
+def run_totals_shadow(cfg: Config, ds: Dataset, season: int, last_completed: int) -> Path:
+    df = totals_comparison(ds, cfg, season, last_completed)
+    out = cfg.paths.out_dir / str(season)
+    out.mkdir(parents=True, exist_ok=True)
+    csv, md = out / "totals_comparison.csv", out / "totals_comparison.md"
+    tmp = csv.with_suffix(".csv.tmp")
+    df.write_csv(tmp)
+    tmp.replace(csv)
+    tmp = md.with_suffix(".md.tmp")
+    tmp.write_text(totals_markdown(df, season))
+    tmp.replace(md)
+    w = totals_gain(df.filter(pl.col("in_window")))
+    log.info("totals shadow: %d window games settled, gain %s", w["n"],
+             "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
+    return csv

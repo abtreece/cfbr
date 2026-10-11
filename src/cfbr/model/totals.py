@@ -143,3 +143,106 @@ class Totals:
             base_total=pl.col("home_base") + pl.col("away_base"),
             total=pl.col("home_pts") + pl.col("away_pts"),
         )
+
+
+# -- Totals v2 (shadow): direct points ratings ------------------------------------
+# Settings fixed in DECISIONS.md before the shadow window; not tuned.
+V2_HALF_LIFE_WEEKS = 3.7
+V2_PRIOR_GAMES = 4.0
+V2_PRIOR_SHRINK = 0.5
+V2_MIN_GAMES_FOR_ENV = 20
+
+
+def _points_rows(games: pl.DataFrame) -> pl.DataFrame:
+    """Two rows per completed game: team, opp, points scored, home indicator, kickoff."""
+    g = games.filter(pl.col("completed") & pl.col("margin").is_not_null())
+    h = g.select("kickoff_ts", team="home", opp="away", points=pl.col("home_points").cast(pl.Float64),
+                 home=pl.when(pl.col("neutral_site")).then(0.0).otherwise(1.0))
+    a = g.select("kickoff_ts", team="away", opp="home", points=pl.col("away_points").cast(pl.Float64),
+                 home=pl.when(pl.col("neutral_site")).then(0.0).otherwise(-1.0))
+    return pl.concat([h, a])
+
+
+def fit_points(rows: pl.DataFrame, teams: list[str], prior_off: np.ndarray, prior_def: np.ndarray,
+               weights: np.ndarray | None, mu_fallback: float) -> tuple[float, float, np.ndarray, np.ndarray]:
+    """points - (prior_off[team] + prior_def[opp]) = mu + Off + Def + H*home; ridge on Off/Def only.
+    With fewer than V2_MIN_GAMES_FOR_ENV games, mu is fixed at ``mu_fallback`` and H at 0."""
+    n = len(teams)
+    if rows.height == 0:
+        return mu_fallback, 0.0, prior_off.copy(), prior_def.copy()
+    idx = {t: i for i, t in enumerate(teams)}
+    ti = rows["team"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+    oi = rows["opp"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+    w = np.ones(rows.height) if weights is None else weights
+    free_env = rows.height >= 2 * V2_MIN_GAMES_FOR_ENV
+    y = rows["points"].to_numpy() - (prior_off[ti] + prior_def[oi]) - (0.0 if free_env else mu_fallback)
+    m = len(y)
+    k = 2 * n + (2 if free_env else 0)
+    X = np.zeros((m, k))
+    X[np.arange(m), ti] = 1.0
+    X[np.arange(m), n + oi] = 1.0
+    if free_env:
+        X[:, 2 * n] = 1.0
+        X[:, 2 * n + 1] = rows["home"].to_numpy()
+    Xw = X * w[:, None]
+    A = X.T @ Xw
+    A[np.arange(2 * n), np.arange(2 * n)] += V2_PRIOR_GAMES
+    if free_env:
+        A[2 * n, 2 * n] += 1e-6
+        A[2 * n + 1, 2 * n + 1] += 1e-6
+    coef = np.linalg.solve(A, Xw.T @ y)
+    mu = float(coef[2 * n]) if free_env else mu_fallback
+    hh = float(coef[2 * n + 1]) if free_env else 0.0
+    return mu, hh, prior_off + coef[:n], prior_def + coef[n:2 * n]
+
+
+class TotalsV2:
+    def __init__(self, eng: Engine, base: Totals | None = None):
+        self.eng = eng
+        self.base = base or Totals(eng)
+        self._final: dict[int, tuple[dict, dict, float]] = {}
+
+    def final_effects(self, season: int) -> tuple[dict[str, float], dict[str, float], float]:
+        if season not in self._final:
+            g = self.eng.games.filter(pl.col("season") == season)
+            rows = _points_rows(g)
+            teams = sorted(set(rows["team"]) | set(rows["opp"])) if rows.height else []
+            z = np.zeros(len(teams))
+            mu0 = float(rows["points"].mean()) if rows.height else 28.0
+            mu, _h, po, pd_ = fit_points(rows, teams, z, z, None, mu0)
+            self._final[season] = (dict(zip(teams, po)), dict(zip(teams, pd_)), mu)
+        return self._final[season]
+
+    def predict_season(self, season: int) -> pl.DataFrame:
+        """Per game: v2 total, baseline total, actual total (if final)."""
+        from cfbr.model.ridge import recency_weights
+        from cfbr.model.engine import _ns
+
+        eng = self.eng
+        teams = eng.entities(season)
+        idx = {t: i for i, t in enumerate(teams)}
+        prev_off, prev_def, prev_mu = self.final_effects(season - 1)
+        p_off = np.array([V2_PRIOR_SHRINK * prev_off.get(t, 0.0) for t in teams])
+        p_def = np.array([V2_PRIOR_SHRINK * prev_def.get(t, 0.0) for t in teams])
+        allg = eng.games.filter(pl.col("season") == season)
+        out = []
+        for r in eng.season_slots(season).iter_rows(named=True):
+            as_of = r["as_of"]
+            rows = _points_rows(allg.filter(pl.col("kickoff_ts") < as_of))
+            w = None
+            if rows.height:
+                kns = rows["kickoff_ts"].dt.cast_time_unit("ns").dt.epoch("ns").to_numpy()
+                w = recency_weights(kns, _ns(as_of), V2_HALF_LIFE_WEEKS)
+            mu, hh, po, pd_ = fit_points(rows, teams, p_off, p_def, w, prev_mu)
+            for g in allg.filter(pl.col("slot") == r["slot"]).iter_rows(named=True):
+                hi, ai = idx[g["home"]], idx[g["away"]]
+                hsgn = 0.0 if g["neutral_site"] else 1.0
+                ph = mu + po[hi] + pd_[ai] + hh * hsgn
+                pa = mu + po[ai] + pd_[hi] - hh * hsgn
+                out.append({"game_id": g["game_id"], "v2_total": ph + pa})
+        v2 = pl.DataFrame(out, schema={"game_id": pl.Int64, "v2_total": pl.Float64})
+        base = self.base.season_rows(season)
+        bt = base.group_by("game_id").agg(base_total=pl.col("base_points").sum())
+        games = allg.select("game_id", "season", "week", "season_type", "kickoff_ts", "completed", "home_team",
+                            "away_team", total=(pl.col("home_points") + pl.col("away_points")).cast(pl.Float64))
+        return games.join(v2, on="game_id", how="left").join(bt, on="game_id", how="left").sort("kickoff_ts")
