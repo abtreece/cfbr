@@ -26,6 +26,14 @@ from cfbr.ingest.odds import BOOK_SCHEMA
 from cfbr.model.engine import Engine
 
 MODELS = {"v1": "published model (v1 prior)", "roster": "roster-prior shadow model"}
+RETRO_SCHEMA = LEDGER_SCHEMA | {"model": pl.Utf8}
+
+
+def read_retro(path) -> pl.DataFrame:
+    """A ``bets_retro.csv`` written by ``cfbr bets-retro`` (ledger columns plus ``model``)."""
+    df = pl.read_csv(path, schema_overrides=RETRO_SCHEMA)
+    missing = [pl.lit(None, t).alias(c) for c, t in RETRO_SCHEMA.items() if c not in df.columns]
+    return df.with_columns(missing).select(list(RETRO_SCHEMA)).cast(RETRO_SCHEMA)
 
 
 def opening_books(lines: pl.DataFrame, season: int) -> pl.DataFrame:
@@ -50,7 +58,7 @@ def retro_ledger(eng: Engine, season: int, through_week: int, cfg: Bets, model: 
                            books.filter(pl.col("game_id").is_in(p["game_id"].to_list())), placed_at, cfg)
         out.append(c)
     if not out:
-        return pl.DataFrame(schema=LEDGER_SCHEMA | {"model": pl.Utf8})
+        return pl.DataFrame(schema=RETRO_SCHEMA)
     games = ds.games.filter(pl.col("season") == season)
     led = (pl.concat(out).drop("season", "week", "season_type")
            .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32),

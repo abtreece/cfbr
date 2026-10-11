@@ -37,6 +37,11 @@
   {{ tile("Open bets", summary.open, summary.open_risk_dollars|money(false) ~ " at risk") }}
 </div>
 
+{% if has_retro %}
+<p class="note"><a href="/bets/retro?season={{ season }}">Retroactive replay of earlier weeks →</a>
+  The same rules applied after the fact to games already played, for the published and roster-prior models.</p>
+{% endif %}
+
 <details class="rules">
   <summary>Rules</summary>
   <ul>

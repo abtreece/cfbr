@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, tile, team_link, line_chart %}
+{% block title %}{% if season %}{{ season }} {% endif %}retroactive paper bets · CFB Ratings{% endblock %}
+{% block content %}
+{% if retro_seasons|length > 1 %}
+<form class="filters" method="get" action="/bets/retro">
+  {{ season_select(retro_seasons, season) }}
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+{% endif %}
+
+<p class="note"><a href="/bets{% if season %}?season={{ season }}{% endif %}">← Live paper bets</a></p>
+<h1>{% if season %}{{ season }} {% endif %}retroactive paper bets{% if through_week %}, weeks 1–{{ through_week }}{% endif %}</h1>
+<p class="lede">What the live betting rules would have done on games already played, replayed after the fact.
+  Nothing is wagered, and this is not betting advice.</p>
+
+{% if models is not defined %}
+<p class="muted">No retroactive paper bets yet. <code>cfbr bets-retro</code> builds them.</p>
+{% else %}
+<div class="callout">
+  <strong>Retroactive, not live.</strong> These bets were reconstructed after the games, not recorded before kickoff,
+  so they are kept apart from the live record and never count toward its {{ rules.min_sample }}-bet minimum.
+  Each week uses the model's point-in-time prediction (fit only on games played before that week's first kickoff),
+  compared with the <strong>opening</strong> line and graded at that line; closing-line value (CLV) is measured against the closing line.
+</div>
+
+<details class="rules">
+  <summary>How these were built</summary>
+  <ul>
+    <li>Same rules as the live bets: bet the model's side when it differs from the opening consensus by at least {{ rules.threshold|num }} points,
+      {{ rules.odds }} odds, {{ rules.stake|num }} unit to win, one unit = {{ rules.unit_value|money(false) }}. Break-even win rate {{ breakeven|pct }}.</li>
+    <li>Opening lines come from CFBD: DraftKings, plus offshore Bovada in the consensus. Other US books have no free line history,
+      so the best line is DraftKings' opening number.</li>
+    <li>Two models: the published model (v1 prior), and the roster-prior shadow model, which isn't published. The roster prior was judged on these same weeks,
+      so its numbers here flatter it; its fair test is the shadow comparison from week 7 on.</li>
+    <li>The two models bet many of the same games{% if overlap %} ({{ overlap.both }} in common, {{ overlap.same_side }} on the same side; {{ overlap.v1_only }} v1 only, {{ overlap.roster_only }} roster only){% endif %},
+      so their records aren't independent.</li>
+  </ul>
+</details>
+
+<h2>By model</h2>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Model</th><th class="num opt">Bets</th><th class="num">W–L–P</th><th class="num">Win %<span class="ci"> [95% CI]</span></th>
+    <th class="num">$</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th><th class="num opt">Best line $</th></tr></thead>
+  <tbody>
+  {% for m in models %}{% set s = m.summary %}
+    <tr>
+      <td class="team wrap">{{ m.label }}</td><td class="num opt">{{ s.settled }}</td><td class="num">{{ s.won }}–{{ s.lost }}–{{ s.push }}</td>
+      <td class="num">{% if s.won + s.lost %}{{ s.win_rate|pct }}<span class="ci"> [{{ s.ci95[0]|pct }}, {{ s.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
+      <td class="num strong">{{ s.dollars|money }}</td><td class="num opt">{{ s.roi|pct }}</td>
+      <td class="num opt">{{ s.avg_clv|signed(2) if s.n_clv else "—" }}</td><td class="num opt">{{ m.best.dollars|money }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% for m in models %}
+<h2>{{ m.label }}</h2>
+<div class="tiles">
+  {% set s = m.summary %}
+  {{ tile("Record", s.won ~ "–" ~ s.lost ~ "–" ~ s.push, "won–lost–push") }}
+  {{ tile("Net", s.dollars|money, s.units|signed(2) ~ " units · ROI " ~ s.roi|pct) }}
+  {{ tile("Avg CLV", (s.avg_clv|signed(2) ~ " pts") if s.n_clv else "—", ("beat the close " ~ s.beat_close|pct(0) ~ " of " ~ s.n_clv) if s.n_clv else "") }}
+</div>
+{% if m.chart %}
+{{ line_chart("retro-chart-" ~ m.model, m.chart, "Running total by week", "dollars") }}
+{% endif %}
+
+<h3>Week by week</h3>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Week</th><th class="num opt">Bets</th><th class="num">W–L–P</th><th class="num opt">Units</th>
+    <th class="num">Won / lost</th><th class="num">Running total</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th></tr></thead>
+  <tbody>
+  {% for w in m.weeks %}
+    <tr>
+      <td class="team">{{ w.label }}</td><td class="num opt">{{ w.settled }}</td><td class="num">{{ w.won }}–{{ w.lost }}–{{ w.push }}</td>
+      <td class="num opt">{{ w.units|signed(2) }}</td>
+      <td class="num strong"><span class="{{ 'up' if w.dollars > 0 else 'down' if w.dollars < 0 else 'muted' }}">{{ w.dollars|money }}</span></td>
+      <td class="num">{{ w.cum_dollars|money }}</td><td class="num opt">{{ w.roi|pct }}</td>
+      <td class="num opt">{{ w.avg_clv|signed(2) if w.n_clv else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h3>By edge tier</h3>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Tier</th><th class="num opt">Bets</th><th class="num">W–L–P</th><th class="num">Win %</th>
+    <th class="num">$</th><th class="num opt">ROI</th><th class="num opt">Backtest</th></tr></thead>
+  <tbody>
+  {% for t in m.tiers %}
+    <tr>
+      <td class="team wrap">{{ t.label }}</td><td class="num opt">{{ t.settled }}</td><td class="num">{{ t.won }}–{{ t.lost }}–{{ t.push }}</td>
+      <td class="num">{{ t.win_rate|pct if t.won + t.lost else "—" }}</td>
+      <td class="num strong">{{ t.dollars|money }}</td><td class="num opt">{{ t.roi|pct }}</td>
+      <td class="num opt">{{ t.backtest.rate|pct if t.backtest else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<details class="table-view">
+  <summary>All {{ m.rows|length }} bets</summary>
+  <div class="table-wrap">
+  <table class="data">
+    <thead><tr><th class="opt">Week</th><th>Game</th><th>Bet</th><th class="opt">Final</th><th class="opt">Result</th><th class="num">Won / lost</th>
+      <th class="num opt">Close</th><th class="num opt">CLV</th></tr></thead>
+    <tbody>
+    {% for b in m.rows %}
+      <tr>
+        <td class="opt">{{ b.week }}</td>
+        <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
+        <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
+        <td class="opt">{{ b.away_points }}–{{ b.home_points }}</td>
+        <td class="opt">{% if b.status == "won" %}<span class="up">✓ won</span>{% elif b.status == "lost" %}<span class="down">✗ lost</span>{% else %}<span class="muted">push</span>{% endif %}</td>
+        {# On phones the Result column is hidden, so the colored amount carries the result. #}
+        <td class="num strong"><span class="{{ 'up' if b.status == 'won' else 'down' if b.status == 'lost' else 'muted' }}">{{ b.dollars|money }}</span></td>
+        <td class="num opt">{{ b.close|spread }}</td>
+        <td class="num opt">{{ b.clv|signed(1) if b.clv is not none else "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endfor %}
+<p class="note">Bet lines are the opening line for the team bet on. Final score is away–home. Close is the closing consensus; CLV &gt; 0 means the opening line beat it.</p>
+{% endif %}
+{% endblock %}

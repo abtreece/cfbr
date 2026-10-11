@@ -50,6 +50,7 @@ class Store:
         self._seasons: dict[int, tuple[float, Season]] = {}
         self._runs: dict[str, tuple[float, Run]] = {}
         self._bets: dict[int, tuple[float, pl.DataFrame]] = {}
+        self._retro: dict[int, tuple[float, pl.DataFrame]] = {}
 
     def seasons(self) -> list[int]:
         if not self.web_root.is_dir():
@@ -103,21 +104,35 @@ class Store:
         """The season's paper-bet ledger, reloaded when ``cfbr weekly`` rewrites it."""
         from cfbr.bets.ledger import read_ledger
 
-        path = self.out_dir / str(season) / "bets.csv"
+        return self._cached_csv(self._bets, season, self.out_dir / str(season) / "bets.csv", read_ledger)
+
+    def retro_seasons(self) -> list[int]:
+        """Seasons with retroactive paper bets (``out/{season}/bets_retro.csv``)."""
+        if not self.out_dir.is_dir():
+            return []
+        return sorted(int(p.parent.name) for p in self.out_dir.glob("*/bets_retro.csv") if p.parent.name.isdigit())
+
+    def retro_bets(self, season: int) -> pl.DataFrame | None:
+        """Retroactive paper bets from ``cfbr bets-retro``, reloaded when rewritten."""
+        from cfbr.bets.retro import read_retro
+
+        return self._cached_csv(self._retro, season, self.out_dir / str(season) / "bets_retro.csv", read_retro)
+
+    def _cached_csv(self, cache: dict, season: int, path: Path, reader) -> pl.DataFrame | None:
         try:
             mtime = path.stat().st_mtime
         except FileNotFoundError:
             return None
         with self._lock:
-            hit = self._bets.get(season)
+            hit = cache.get(season)
             if not hit or hit[0] != mtime:
                 try:
-                    hit = (mtime, read_ledger(path))
+                    hit = (mtime, reader(path))
                 except Exception:  # noqa: BLE001 - any parse failure means "try again later"
-                    # bets.csv is rewritten in place; a read mid-write can fail. Serve the
+                    # The CSV is rewritten in place; a read mid-write can fail. Serve the
                     # previous copy (if any) and retry on the next request.
                     return hit[1] if hit else None
-                self._bets[season] = hit
+                cache[season] = hit
             return hit[1]
 
     def accuracy_log(self, season: int) -> pl.DataFrame | None:

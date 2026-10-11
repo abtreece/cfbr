@@ -387,6 +387,21 @@ def _write_ledger(cfg):
     return d / "bets.csv"
 
 
+def _write_retro(cfg):
+    """Retro bets for both models; "RetroBook" and "Retro U" only exist in this file."""
+    from cfbr.bets.retro import RETRO_SCHEMA
+
+    rows = []
+    for model in ("v1", "roster"):
+        for i, (st, hp, ap, wk) in enumerate([("won", 31, 14, 1), ("lost", 10, 28, 1), ("won", 35, 7, 2)]):
+            r = _bet(11 + i, "home", -7.0, st, hp, ap, -8.0, week=wk, provider="RetroBook")
+            r |= {"home_team": "Retro U", "team": "Retro U", "model": model, "season_type": "regular"}
+            rows.append(r)
+    d = cfg.paths.out_dir / str(SEASON)
+    d.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows, schema=RETRO_SCHEMA).write_csv(d / "bets_retro.csv")
+
+
 @pytest.fixture
 def bets_client(web_cfg):
     _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
@@ -432,6 +447,39 @@ def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
     assert {b["tier"] for b in body["bets"]} <= {"Small", "Medium", "Large"}
 
 
+def test_retro_bets_page_and_api(web_cfg):
+    from cfbr.bets.retro import read_retro
+    from cfbr.bets.ledger import summarize
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_ledger(web_cfg)
+    _write_retro(web_cfg)
+    c = TestClient(create_app(web_cfg))
+    assert "/bets/retro?season=2026" in c.get("/bets").text  # linked from the live page
+    r = c.get("/bets/retro")
+    assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
+    html = " ".join(r.text.split())
+    assert "Retroactive, not live." in html and "<strong>opening</strong> line" in html and "point-in-time" in html
+    assert "Published model (v1 prior)" in html and "Roster-prior shadow model" in html
+    # Each model: week 1 went 1-1 (+$100 - $110), week 2 won: running total +$90.
+    assert "Week 1" in html and "−$10" in html and "+$90" in html and "Retro U −7" in html
+    assert "3 in common, 3 on the same side" in html
+    body = c.get("/api/bets/retro").json()
+    assert body["retroactive"] is True and [m["model"] for m in body["models"]] == ["v1", "roster"]
+    led = read_retro(web_cfg.paths.out_dir / str(SEASON) / "bets_retro.csv")
+    m = summarize(led.filter(pl.col("model") == "v1"), web_cfg.bets)
+    assert body["models"][0]["summary"]["won"] == m["won"] == 2 and len(body["bets"]) == 6
+    # The live page and API never include retro bets.
+    assert "RetroBook" not in c.get("/api/bets").text and "Retro U" not in c.get("/bets").text
+    assert c.get("/bets/retro?season=2019").status_code == 404
+
+
+def test_retro_empty_state(client):
+    r = client.get("/bets/retro")
+    assert r.status_code == 200 and "No retroactive paper bets yet" in r.text
+    assert client.get("/api/bets/retro").status_code == 404
+
+
 def test_bets_empty_state_and_unknown_season(client):
     r = client.get("/bets")
     assert r.status_code == 200 and "No paper bets recorded yet" in r.text
@@ -463,6 +511,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
 
     _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
     _write_ledger(web_cfg)
+    _write_retro(web_cfg)
     app = create_app(web_cfg)
 
     def deny():
@@ -473,11 +522,13 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
     assert c.get("/bets").status_code == 402
     r = c.get("/api/bets")
     assert r.status_code == 402 and r.json()["detail"] == "Subscription required."
+    assert c.get("/bets/retro").status_code == 402 and c.get("/api/bets/retro").status_code == 402
     for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/team/2026/Ohio%20State",
                 "/api/rankings", "/api/games?slot=r02", "/api/team/2026/Ohio%20State", "/api/seasons"):
         r = c.get(url)
         assert r.status_code == 200, url
         assert "TestBook" not in r.text and "paper bet" not in r.text.lower(), url
+        assert "RetroBook" not in r.text and "Retro U" not in r.text and "retroactive" not in r.text.lower(), url
 
 
 # -- free viewers: no live-season model output anywhere -------------------------------

@@ -112,6 +112,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "open_bets": [r for r in rows if r["status"] == "open"],
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks), "fbs_teams": fbs}
+        ctx["has_retro"] = season in store.retro_seasons()
         resp = render(request, "bets.html", **ctx)
         resp.headers.update(NO_STORE)
         return resp
@@ -135,4 +136,72 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                      .sort("kickoff_ts", "game_id").to_dicts()),
         })
 
+    # -- retroactive replay (``cfbr bets-retro``): same gate, never mixed with the live ledger --
+
+    def pick_retro(season: int | None) -> tuple[int | None, pl.DataFrame | None]:
+        seasons = store.retro_seasons()
+        if season is None:
+            season = seasons[-1] if seasons else None
+        elif season not in seasons:
+            raise HTTPException(404, f"No retroactive paper bets for {season}.")
+        return season, (store.retro_bets(season) if season is not None else None)
+
+    @router.get("/bets/retro", response_class=HTMLResponse, include_in_schema=False)
+    def retro_page(request: Request, season: int | None = None):
+        season, led = pick_retro(season)
+        ctx = {"retro_seasons": store.retro_seasons(), "season": season, "rules": cfg.bets}
+        if led is not None and led.height:
+            s = store.season(season)
+            fbs = set(s.ratings.filter(pl.col("fbs"))["team"].to_list()) if s is not None else set()
+            ctx |= {"models": retro_models(led, cfg), "overlap": retro_overlap(led),
+                    "through_week": led["week"].max(), "fbs_teams": fbs,
+                    "breakeven": summarize(led, cfg.bets)["breakeven"]}
+        resp = render(request, "bets_retro.html", **ctx)
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @router.get("/api/bets/retro")
+    def api_retro(response: Response, season: int | None = None):
+        from cfbr.web.app import clean
+
+        season, led = pick_retro(season)
+        if led is None:
+            raise HTTPException(404, "No retroactive paper bets.")
+        response.headers.update(NO_STORE)
+        return clean({
+            "season": season, "retroactive": True, "rules": cfg.bets.model_dump(),
+            "models": [{"model": m["model"], "label": m["label"], "summary": clean_summary(m["summary"]),
+                        "summary_best_line": clean_summary(m["best"]),
+                        "weekly": [clean_summary(w) for w in m["weeks"]],
+                        "tiers": [clean_summary(t) for t in m["tiers"]]} for m in retro_models(led, cfg)],
+            "bets": (led.with_columns(tier=tier_expr(cfg.bets), dollars=pl.col("units") * cfg.bets.unit_value)
+                     .sort("model", "kickoff_ts", "game_id").to_dicts()),
+        })
+
     return router
+
+
+def retro_models(led: pl.DataFrame, cfg: Config) -> list[dict]:
+    """Per-model record, week-by-week, tiers and bet rows for the retro page (models in a fixed order)."""
+    from cfbr.bets.retro import MODELS
+
+    out = []
+    for model, label in MODELS.items():
+        d = led.filter(pl.col("model") == model)
+        if d.height == 0:
+            continue
+        weeks = weekly(d, cfg.bets)
+        out.append({"model": model, "label": label[:1].upper() + label[1:], "summary": summarize(d, cfg.bets),
+                    "best": summarize(d, cfg.bets, "best"), "weeks": weeks, "tiers": by_tier(d, cfg.bets),
+                    "chart": money_chart(weeks), "rows": list(reversed(bet_rows(d, cfg)))})
+    return out
+
+
+def retro_overlap(led: pl.DataFrame) -> dict | None:
+    sides = led.pivot(on="model", index="game_id", values="side", aggregate_function="first")
+    if not {"v1", "roster"} <= set(sides.columns):
+        return None
+    both = sides.filter(pl.col("v1").is_not_null() & pl.col("roster").is_not_null())
+    return {"both": both.height, "same_side": int((both["v1"] == both["roster"]).sum()),
+            "v1_only": int(sides["v1"].is_not_null().sum()) - both.height,
+            "roster_only": int(sides["roster"].is_not_null().sum()) - both.height}
