@@ -773,6 +773,8 @@ def test_roster_page_departure_reasons(web_cfg):
         "reason": ["drafted", "transfer", "drafted", "portal_transfer", "unknown"],
         "draft_round": [1, None, 4, None, None], "draft_overall": [12, None, 120, None, None],
         "draft_nfl_team": ["Chicago", None, "Dallas", None, None],
+        # Full name known for one pick only: the other falls back to the city.
+        "draft_nfl_team_name": ["Chicago Bears", None, None, None, None],
         "in_portal": [False, True, False, True, False], "portal_destination": [None, "Ohio State", None, "Montana", None],
         "prev_plays": [190, None, None, 20, None], "prev_ppa_total": [22.0, None, None, 1.0, None],
         "prev_tackles": [None, 61.0, None, None, 30.0], "prev_havoc": [None, 7.5, None, None, 1.0],
@@ -781,7 +783,7 @@ def test_roster_page_departure_reasons(web_cfg):
         season_dir / "roster_departures.parquet")
     client = TestClient(create_app(web_cfg))
     html = " ".join(client.get("/roster/2026/Texas%20A%26M").text.split())
-    assert "Drafted</span> <span class=\"muted\">Rd 1 · #12 overall · Chicago" in html
+    assert "Drafted</span> <span class=\"muted\">Rd 1 · #12 overall · Chicago Bears" in html
     assert "Big Tackle" in html and "Rd 4 · #120 overall · Dallas" in html
     assert "Montana <span class=\"muted\">(portal)</span>" in html
     assert "not on a roster · senior last season" in html

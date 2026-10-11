@@ -102,7 +102,9 @@ def departure_rows(departures: pl.DataFrame) -> list[dict]:
         draft = None
         if reason == "drafted":
             parts = [f"Rd {r['draft_round']}" if r.get("draft_round") else None,
-                     f"#{r['draft_overall']} overall" if r.get("draft_overall") else None, r.get("draft_nfl_team")]
+                     f"#{r['draft_overall']} overall" if r.get("draft_overall") else None,
+                     # Full franchise name ("Los Angeles Rams") when known; the city alone is ambiguous.
+                     r.get("draft_nfl_team_name") or r.get("draft_nfl_team")]
             draft = " · ".join(p for p in parts if p)
         rows.append(r | {"reason": reason, "reason_order": REASON_ORDER.get(reason, 9), "draft_label": draft,
                          "prev_class_label": CLASS.get(cls, "—") if cls is not None else "—"})
