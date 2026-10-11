@@ -103,3 +103,22 @@ quota_reserve = 20
 # (install the ntfy app and subscribe to the topic). Topic: NTFY_TOPIC in the env or .keys.
 enabled = true
 server = "https://ntfy.sh"
+
+[sim]
+# Monte Carlo season simulation (cfbr sim / weekly): conference titles and playoff odds.
+enabled = true
+n_sims = 100000
+seed = 0
+# Per-team strength offset per simulated season (points); chosen on 2015-2021 win totals.
+tau = 6.0
+# 2026 CFP: 12 teams, auto bids for these champions, the top Group of Six champion
+# ("champion") or team ("team"), and Notre Dame if ranked in the top 12. Seeds 1-4 get byes.
+power_conferences = ["SEC", "Big Ten", "ACC", "Big 12"]
+group_of_six_bid = "champion"
+notre_dame_top = 12
+field_size = 12
+byes = 4
+# Committee-ranking proxy: strength - losses_weight * losses + bonuses (fit on 2015-2021).
+losses_weight = 6.5
+champion_bonus = 0.0
+power_bonus = 10.0

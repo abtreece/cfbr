@@ -210,7 +210,7 @@ def rank(
 
 
 EXIT_MEANING = {3: "API quota nearly used up", 4: "another run held the lock",
-                6: "paper-bet step or prior shadow comparison failed"}
+                6: "paper-bet step, prior shadow comparison or season simulation failed"}
 
 
 @app.command()
@@ -340,10 +340,20 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     except Exception:
         log.exception("prior shadow comparison failed; continuing")
         shadow_failed = True
+    # Season simulation: isolated too.
+    sim_failed = False
+    if cfg.sim.enabled:
+        try:
+            from cfbr.sim.report import run_sim
+
+            run_sim(eng, season, week)
+        except Exception:
+            log.exception("season simulation failed; continuing")
+            sim_failed = True
     # Last, so a web-data failure can't cost the rankings or the accuracy line.
     web_out = build_season(eng, season, web_dir(cfg))
     typer.echo(f"wrote {out}, {acc_path} and {web_out}")
-    if bets_failed or shadow_failed:
+    if bets_failed or shadow_failed or sim_failed:
         raise typer.Exit(code=6)
 
 
@@ -360,6 +370,26 @@ def bets(
     cfg = _default_config(config)
     path = run_bets(cfg, Dataset.load(cfg), season, week)
     typer.echo(f"wrote {path} and {path.with_name('bets.md')}")
+
+
+@app.command()
+def sim(
+    season: Annotated[int, typer.Option()],
+    week: Annotated[int, typer.Option(help="Last completed regular-season week (simulate from its ratings)")],
+    n_sims: Annotated[Optional[int], typer.Option(help="Override [sim].n_sims")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Simulate the rest of the season: win totals, conference titles, playoff odds.
+    Writes out/{season}/wNN/season_sim.csv and .md. Makes no API calls."""
+    from cfbr.data import Dataset
+    from cfbr.model.engine import Engine
+    from cfbr.sim.report import run_sim
+
+    cfg = _default_config(config)
+    if n_sims:
+        cfg.sim.n_sims = n_sims
+    path = run_sim(Engine(Dataset.load(cfg), cfg, last_completed=season - 1), season, week)
+    typer.echo(f"wrote {path} and {path.with_suffix('.md')}")
 
 
 @app.command("bets-retro")

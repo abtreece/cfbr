@@ -125,6 +125,27 @@ class Alerts(BaseModel):
     server: str = "https://ntfy.sh"
 
 
+class Sim(BaseModel):
+    """Monte Carlo season simulation (conference titles, playoff odds)."""
+    enabled: bool = True
+    n_sims: int = 100_000
+    seed: int = 0
+    # Per-team strength offset drawn once per simulated season (points); game noise is
+    # sqrt(sigma^2 - 2 tau^2) so each game's spread stays at the calibrated sigma.
+    tau: float = 6.0
+    # 2026 CFP: 12 teams; auto bids for these champions, the top Group of Six champion
+    # ("champion") or team ("team"), Notre Dame if ranked in the top N.
+    power_conferences: list[str] = ["SEC", "Big Ten", "ACC", "Big 12"]
+    group_of_six_bid: str = "champion"
+    notre_dame_top: int = 12
+    field_size: int = 12
+    byes: int = 4
+    # Committee-ranking proxy: score = strength - losses_weight * losses + bonuses.
+    losses_weight: float = 6.5
+    champion_bonus: float = 0.0
+    power_bonus: float = 10.0
+
+
 class Config(BaseModel):
     paths: Paths = Paths()
     ingest: Ingest = Ingest()
@@ -138,6 +159,7 @@ class Config(BaseModel):
     odds: Odds = Odds()
     oddspapi: OddsPapi = OddsPapi()
     alerts: Alerts = Alerts()
+    sim: Sim = Sim()
     source: str | None = Field(default=None, exclude=True)
 
 
