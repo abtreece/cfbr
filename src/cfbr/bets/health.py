@@ -41,6 +41,14 @@ def check(cfg: Config, season: int, now: datetime | None = None) -> list[str]:
     stale = opn.filter(pl.col("kickoff_ts").str.to_datetime(time_zone="UTC") < now - timedelta(days=4)).height
     if stale:
         problems.append(f"{stale} open bets kicked off over 4 days ago")
+    from cfbr.bets.integrity import verify
+
+    problems += verify(cfg.paths.out_dir, season)
+    recent = settled.filter(pl.col("kickoff_ts").str.to_datetime(time_zone="UTC") > now - timedelta(days=8))
+    fallback = recent.filter(pl.col("closing_source") == "cfbd").height
+    if cfg.odds.enabled and fallback:
+        problems.append(f"{fallback} of {recent.height} bets settled this week were graded against CFBD's close "
+                        "(no pre-kickoff snapshot; is the odds-snapshot cron running?)")
     if cfg.odds.enabled:
         from cfbr.ingest.odds import credits_left, latest_odds_snapshot, odds_api_key
 

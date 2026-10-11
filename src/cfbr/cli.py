@@ -379,6 +379,38 @@ def bets(
     typer.echo(f"wrote {path} and {path.with_name('bets.md')}")
 
 
+@app.command("odds-snapshot")
+def odds_snapshot(
+    season: Annotated[Optional[int], typer.Option(help="Defaults to the current season")] = None,
+    if_games_within: Annotated[Optional[float], typer.Option(
+        help="Only pull when a game kicks off within this many hours (default [odds].snapshot_window_hours)")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Pull one Odds API snapshot (the pre-kickoff closing lines for paper-bet CLV). Cron runs
+    it Tue-Sat; it spends credits only when a game kicks off soon. No CFBD calls."""
+    from cfbr.alerts import send
+    from cfbr.bets.closing import games_kicking_off
+    from cfbr.ingest.fetch import current_season
+    from cfbr.ingest.odds import fetch_odds_snapshot, odds_api_key
+
+    cfg = _default_config(config)
+    season = season or current_season()
+    window = if_games_within if if_games_within is not None else cfg.odds.snapshot_window_hours
+    n = games_kicking_off(cfg.paths.db_path, season, window)
+    if n == 0:
+        typer.echo(f"no games kick off in the next {window:g} h; no snapshot taken")
+        return
+    if odds_api_key() is None:
+        typer.echo("no Odds API key; no snapshot taken")
+        return
+    try:
+        path = fetch_odds_snapshot(cfg, season)
+    except Exception as e:
+        send(cfg, "cfbr odds-snapshot failed", f"{type(e).__name__}: {e}"[:300])
+        raise typer.Exit(code=1)
+    typer.echo(f"{n} games within {window:g} h; wrote {path}")
+
+
 @app.command()
 def sim(
     season: Annotated[int, typer.Option()],

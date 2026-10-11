@@ -10,6 +10,8 @@ from pathlib import Path
 import polars as pl
 
 from cfbr.backtest.metrics import consensus_spread
+from cfbr.bets.closing import snapshot_closing
+from cfbr.bets.integrity import record
 from cfbr.bets.ledger import (add_bets, candidate_bets, combine_books, market, read_ledger, settle,
                               snapshot_frame, summarize, summary_markdown)
 from cfbr.config import Config
@@ -36,8 +38,7 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     ledger = (ledger.join(meta, on="game_id", how="left")
               .with_columns(season_type=pl.coalesce("season_type", "_st"), fbs_game=pl.coalesce("fbs_game", "_fbs"))
               .drop("_st", "_fbs"))
-    closing = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
-        "game_id", closing_line="spread")
+    closing = closing_lines(cfg, ds, games, ledger, season)
     ledger = settle(ledger, games.select("game_id", "completed", "home_points", "away_points"), closing)
 
     books = current_books(cfg, games, season)
@@ -66,6 +67,7 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     tmp = ledger_path.with_suffix(".csv.tmp")
     ledger.sort("kickoff_ts", "game_id").write_csv(tmp)
     tmp.replace(ledger_path)
+    record(cfg.paths.out_dir, season)
     md_tmp = out_dir / "bets.md.tmp"
     md_tmp.write_text(summary_markdown(ledger, cfg.bets, season))
     md_tmp.replace(out_dir / "bets.md")
@@ -74,6 +76,18 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
              added, m["open"], m["settled"], m["won"], m["lost"], m["push"], m["units"],
              "n/a" if m["n_clv"] == 0 else f"{m['avg_clv']:+.2f}")
     return ledger_path
+
+
+def closing_lines(cfg: Config, ds: Dataset, games: pl.DataFrame, ledger: pl.DataFrame, season: int) -> pl.DataFrame:
+    """Closing line per game: the pre-kickoff multi-book snapshot consensus where one exists
+    (see bets.closing), otherwise CFBD's post-game consensus."""
+    cfbd = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
+        "game_id", closing_line="spread").with_columns(closing_source=pl.lit("cfbd"))
+    todo = games.filter(pl.col("game_id").is_in(ledger.filter(pl.col("status") == "open")["game_id"].to_list())
+                        & pl.col("completed"))
+    snap = snapshot_closing(cfg, todo.select("game_id", "home_team", "away_team", "kickoff_ts"), season)
+    snap = snap.select("game_id", "closing_line").with_columns(closing_source=pl.lit("snapshot"))
+    return pl.concat([snap, cfbd.filter(~pl.col("game_id").is_in(snap["game_id"].to_list()))])
 
 
 def extra_pricing_lines(cfg: Config, games: pl.DataFrame, season: int, game_ids: list[int]) -> pl.DataFrame | None:

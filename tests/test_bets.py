@@ -286,3 +286,15 @@ def test_what_if_restakes_the_same_bets():
     assert tiny["capped"] == ["Week 7"]
     md = summary_markdown(d, Bets(), 2026)
     assert "## What if: staking plans" in md and "bust in Week 8" in md
+
+
+def test_settle_records_the_closing_source():
+    new = candidate_bets(_preds(), _snapshot(), PLACED, CFG).with_columns(season=pl.lit(2026, pl.Int32),
+                                                                          week=pl.lit(7, pl.Int32))
+    ledger, _ = add_bets(read_ledger(Path("/nonexistent")), new)
+    games = pl.DataFrame({"game_id": [1], "completed": [True], "home_points": [31], "away_points": [21]})
+    snap = pl.DataFrame({"game_id": [1], "closing_line": [-4.0], "closing_source": ["snapshot"]})
+    r = settle(ledger, games, snap).row(0, named=True)
+    assert (r["closing_line"], r["closing_source"], r["clv"]) == (-4.0, "snapshot", pytest.approx(1.0))
+    r = settle(ledger, games, pl.DataFrame({"game_id": [1], "closing_line": [-4.0]})).row(0, named=True)
+    assert r["closing_source"] is None   # older callers without a source

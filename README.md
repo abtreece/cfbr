@@ -32,6 +32,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
+| `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Sat |
 | `cfbr sim --season 2026 --week 6` | Simulate the rest of the season (win totals, conference titles, playoff odds) into `out/{season}/wNN/season_sim.*`; `cfbr weekly` runs it too |
 
 `rank` and `weekly` use `config/tuned.toml` when it exists. Pass `--config` to override.

@@ -88,6 +88,10 @@ monthly_quota = 500
 quota_reserve = 50
 # Only combine with the CFBD line snapshot when the two were taken this close together.
 max_snapshot_gap_hours = 6.0
+# Closing lines: consensus from the last Odds API snapshot before kickoff (if no older than
+# this); `cfbr odds-snapshot` (cron, Tue-Sat) only pulls when a game kicks off within the window.
+closing_max_age_hours = 12.0
+snapshot_window_hours = 6.0
 
 [oddspapi]
 # OddsPapi v4: bet365 spreads for pricing paper bets only (never in the consensus).

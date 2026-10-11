@@ -41,7 +41,7 @@ LEDGER_SCHEMA = {
     "clv": pl.Float64, "units": pl.Float64,
     # Added later; older ledgers get these as nulls.
     "books": pl.Utf8, "best_status": pl.Utf8, "best_units": pl.Float64, "best_clv": pl.Float64,
-    "season_type": pl.Utf8, "best_odds": pl.Int32, "fbs_game": pl.Boolean,
+    "season_type": pl.Utf8, "best_odds": pl.Int32, "fbs_game": pl.Boolean, "closing_source": pl.Utf8,
 }
 
 SETTLED = ["won", "lost", "push"]
@@ -160,7 +160,7 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         "books", pl.lit(None, pl.Utf8).alias("best_status"), pl.lit(None, pl.Float64).alias("best_units"),
         pl.lit(None, pl.Float64).alias("best_clv"), pl.lit(None, pl.Utf8).alias("season_type"),
         pl.when(home).then(pl.col("best_home_price")).otherwise(pl.col("best_away_price")).alias("best_odds"),
-        pl.lit(None, pl.Boolean).alias("fbs_game"),
+        pl.lit(None, pl.Boolean).alias("fbs_game"), pl.lit(None, pl.Utf8).alias("closing_source"),
     )
 
 
@@ -221,11 +221,14 @@ def clv(side: str, line: float, closing: float) -> float:
 
 def settle(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame) -> pl.DataFrame:
     """Grade open bets whose games are final. ``games``: game_id, completed,
-    home_points, away_points. ``closing``: game_id, closing_line (consensus)."""
+    home_points, away_points. ``closing``: game_id, closing_line (consensus) and optionally
+    closing_source ("snapshot" for a pre-kickoff multi-book snapshot, "cfbd" otherwise)."""
     if ledger.height == 0:
         return ledger
     g = games.select("game_id", "completed", pl.col("home_points").alias("hp"), pl.col("away_points").alias("ap"))
-    c = closing.select("game_id", pl.col("closing_line").alias("cl"))
+    c = closing.select("game_id", pl.col("closing_line").alias("cl"),
+                       (pl.col("closing_source") if "closing_source" in closing.columns
+                        else pl.lit(None, pl.Utf8)).alias("cs"))
     d = ledger.join(g, on="game_id", how="left").join(c, on="game_id", how="left")
     rows = []
     for r in d.iter_rows(named=True):
@@ -242,6 +245,7 @@ def settle(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame) -> 
                 r["best_units"] = {"won": b_won, "lost": -b_risked, "push": 0.0}[r["best_status"]]
             if r["cl"] is not None:
                 r["closing_line"] = r["cl"]
+                r["closing_source"] = r["cs"]
                 r["clv"] = clv(r["side"], r["line"], r["cl"])
                 if best is not None:
                     r["best_clv"] = clv(r["side"], best, r["cl"])

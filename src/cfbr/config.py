@@ -107,6 +107,10 @@ class Odds(BaseModel):
     quota_reserve: int = 50
     # Combine an odds snapshot with the CFBD line snapshot only when taken this close together.
     max_snapshot_gap_hours: float = 6.0
+    # Closing line: consensus from the last snapshot before kickoff, if no older than this.
+    closing_max_age_hours: float = 12.0
+    # `cfbr odds-snapshot` only spends credits when a game kicks off within this many hours.
+    snapshot_window_hours: float = 6.0
 
 
 class OddsPapi(BaseModel):
