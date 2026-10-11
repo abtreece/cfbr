@@ -1,7 +1,17 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, delta %}
-{% block title %}{{ season }} {{ s.label(week) }} rankings · CFB Ratings{% endblock %}
+{% from "macros.html" import season_select, delta, poll_cell, premium_notice %}
+{% block title %}{{ season }} {% if not locked %}{{ s.label(week) }} {% endif %}rankings · CFB Ratings{% endblock %}
 {% block content %}
+{% if locked %}
+<form class="filters" method="get" action="/rankings">
+  {{ season_select(seasons, season) }}
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+<h1>{{ season }} ratings</h1>
+{{ premium_notice(season, "ratings and rankings") }}
+{% if free_season %}<p><a href="/rankings?season={{ free_season }}">See the final {{ free_season }} ratings →</a></p>{% endif %}
+{% else %}
+{% if live_season %}{{ premium_notice(live_season, "ratings and rankings") }}{% endif %}
 <form class="filters" method="get" action="/rankings">
   {{ season_select(seasons, season) }}
   <label>Through
@@ -26,6 +36,7 @@
   {% if kind == "live" and s.meta.live %}<span class="badge">Live season</span>{% endif %}
   {% if kind == "tuning" %}<span class="badge">Tuning season</span>{% elif kind == "holdout" %}<span class="badge">Holdout season</span>{% endif %}
 </p>
+{% if polls %}<p class="note poll-note">Polls for comparison — {{ polls|join(" · ") }}. They are never model inputs.</p>{% endif %}
 
 <div class="table-wrap">
 <table class="data sortable" id="rankings">
@@ -40,6 +51,9 @@
       <th data-sort="num" class="num opt" title="Offense component, points">Off</th>
       <th data-sort="num" class="num opt" title="Defense component, points (higher is better)">Def</th>
       <th data-sort="num" class="num opt" title="Rating change since the previous table">Δ Rating</th>
+      <th data-sort="num" data-first="asc" class="num opt" title="AP Top 25 rank">AP</th>
+      <th data-sort="num" data-first="asc" class="num opt" title="Coaches Poll rank">Coaches</th>
+      {% if show_cfp %}<th data-sort="num" data-first="asc" class="num opt" title="College Football Playoff committee rank">CFP</th>{% endif %}
       <th data-sort="num" class="num opt" title="How much of the rating still comes from the preseason prior">Prior</th>
       <th class="opt" aria-label="Rating trend this season">Trend</th>
     </tr>
@@ -49,13 +63,16 @@
     <tr>
       <td class="num" data-v="{{ r.rank }}">{{ r.rank }}</td>
       <td class="num" data-v="{{ r.rank_change if r.rank_change is not none else 0 }}">{{ delta(r.rank_change, 0) }}</td>
-      <td class="team"><a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a></td>
+      <td class="team">{% if r.ap_rank is not none %}<span class="pr m-only">#{{ r.ap_rank }}</span>{% endif %}<a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a></td>
       <td class="opt">{{ r.conference or "—" }}</td>
       <td class="num" data-v="{{ r.w - r.l }}">{{ r.w }}–{{ r.l }}</td>
       <td class="num strong" data-v="{{ r.rating }}">{{ r.rating|signed }}</td>
       <td class="num opt" data-v="{{ r.offense }}">{{ r.offense|signed }}</td>
       <td class="num opt" data-v="{{ r.defense }}">{{ r.defense|signed }}</td>
       <td class="num opt" data-v="{{ r.rating_change if r.rating_change is not none else 0 }}">{{ delta(r.rating_change) }}</td>
+      {{ poll_cell(r.ap_rank, "opt") }}
+      {{ poll_cell(r.coaches_rank, "opt") }}
+      {% if show_cfp %}{{ poll_cell(r.cfp_rank, "opt") }}{% endif %}
       <td class="num opt" data-v="{{ r.prior_share }}">{{ r.prior_share|pct(0) }}</td>
       <td class="spark opt">
         {% set pts = sparkline(r.trend or [], lo, hi) %}
@@ -66,10 +83,11 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="11" class="muted">No teams.</td></tr>
+    <tr><td colspan="{{ 14 if show_cfp else 13 }}" class="muted">No teams.</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
 <p class="note">Click a column header to sort. Prior share falls as a team's plays accumulate; by midseason most of a rating comes from this season's games.</p>
+{% endif %}
 {% endblock %}

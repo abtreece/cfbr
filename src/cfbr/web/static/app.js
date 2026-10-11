@@ -24,7 +24,7 @@ document.querySelectorAll("table.sortable").forEach((table) => {
     th.tabIndex = 0;
     const sort = () => {
       const asc = th.getAttribute("aria-sort") === "descending" ||
-        (!th.hasAttribute("aria-sort") && th.dataset.sort === "text");
+        (!th.hasAttribute("aria-sort") && (th.dataset.sort === "text" || th.dataset.first === "asc"));
       headers.forEach((h) => h.removeAttribute("aria-sort"));
       th.setAttribute("aria-sort", asc ? "ascending" : "descending");
       const body = table.tBodies[0];
@@ -79,7 +79,7 @@ function lineChart(fig) {
   // Legend (always present for >= 2 series; line keys mirror the marks).
   const legend = document.createElement("div");
   legend.className = "legend";
-  spec.series.forEach((s, i) => {
+  if (spec.series.length > 1) spec.series.forEach((s, i) => {
     const item = document.createElement("span");
     const key = document.createElement("i");
     key.className = "key";
@@ -88,7 +88,7 @@ function lineChart(fig) {
     item.appendChild(document.createTextNode(s.name));
     legend.appendChild(item);
   });
-  fig.insertBefore(legend, body);
+  if (legend.childElementCount) fig.insertBefore(legend, body);
 
   const tip = document.createElement("div");
   tip.className = "tooltip";
@@ -143,7 +143,7 @@ function lineChart(fig) {
       dot.style.fill = `var(--series-${e.si + 1})`;
       if (clear) {
         const t = el("text", { x: x(e.i) + 8, y: e.yy + 4, class: "endlabel" }, svg);
-        t.textContent = `${spec.series[e.si].name} ${f(e.v)}`;
+        t.textContent = spec.series.length > 1 ? `${spec.series[e.si].name} ${f(e.v)}` : f(e.v);
       }
     });
 

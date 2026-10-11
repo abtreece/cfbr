@@ -10,8 +10,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cfbr.config import load_config
-from cfbr.web.app import create_app, default_slot, game_row
-from cfbr.web.build import FINAL, build_season, web_dir
+from cfbr.web.app import create_app, default_slot, game_row, poll_note
+from cfbr.web.build import FINAL, build_season, timeline_polls, web_dir
 from cfbr.web.store import Store
 
 SEASON = 2026
@@ -63,14 +63,27 @@ def _games(now: datetime) -> pl.DataFrame:
                          "spread": pl.Float64})
 
 
-def _write_season(root, now, live=True):
+AP = {"Texas A&M": 3, "Ohio State": 11}
+
+
+def _write_season(root, now, live=True, polls=False):
+    """Synthetic season; ``polls=False`` mimics web data built before poll columns existed."""
     d = root / str(SEASON)
     d.mkdir(parents=True, exist_ok=True)
-    _ratings().write_parquet(d / "ratings.parquet")
-    _games(now).write_parquet(d / "games.parquet")
-    (d / "meta.json").write_text(json.dumps({
-        "season": SEASON, "built_at": now.isoformat(), "config": "test", "live": live,
-        "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}}))
+    ratings, games = _ratings(), _games(now)
+    meta = {"season": SEASON, "built_at": now.isoformat(), "config": "test", "live": live,
+            "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}}
+    if polls:
+        ap = pl.DataFrame({"team": list(AP), "ap_rank": list(AP.values())}, schema_overrides={"ap_rank": pl.Int32})
+        ratings = ratings.join(ap, on="team", how="left").with_columns(
+            coaches_rank=pl.col("ap_rank") + 1, cfp_rank=pl.lit(None, pl.Int32))
+        games = (games.join(ap.rename({"team": "home_team", "ap_rank": "home_ap_rank"}), on="home_team", how="left")
+                 .join(ap.rename({"team": "away_team", "ap_rank": "away_ap_rank"}), on="away_team", how="left"))
+        used = {"ap_rank": 2, "coaches_rank": 1, "cfp_rank": None}
+        meta["polls"] = {"0": {**used, "ap_rank": 1}, "1": used}
+    ratings.write_parquet(d / "ratings.parquet")
+    games.write_parquet(d / "games.parquet")
+    (d / "meta.json").write_text(json.dumps(meta))
     return d
 
 
@@ -160,6 +173,55 @@ def test_accuracy_lists_backtest_runs(client):
     html = client.get("/accuracy").text
     assert "20260101T000000Z-test" in html
     assert "Model MAE" in html
+
+
+# -- polls ------------------------------------------------------------------------
+
+@pytest.fixture
+def poll_client(web_cfg):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    return TestClient(create_app(web_cfg))
+
+
+def test_rankings_show_poll_columns_and_note(poll_client):
+    html = " ".join(poll_client.get("/rankings?season=2026&week=1").text.split())
+    assert ">AP</th>" in html and ">Coaches</th>" in html
+    assert ">CFP</th>" not in html  # no CFP rankings released yet
+    assert '<span class="pr m-only">#3</span><a href="/team/2026/Texas%20A%26M">' in html
+    assert "AP: week 2 poll · Coaches: week 1 poll (week 2 not released yet)" in html
+    assert 'data-v="999"' in html  # unranked teams sort last
+
+
+def test_team_page_poll_tiles_and_opponent_rank(poll_client):
+    html = " ".join(poll_client.get("/team/2026/Ohio%20State").text.split())
+    assert "AP poll</div><div class=\"tile-value\">#11" in html
+    assert "Coaches poll</div><div class=\"tile-value\">#12" in html
+    assert '<span class="pr">#3</span><a href="/team/2026/Texas%20A%26M">' in html  # upcoming opponent
+    html = " ".join(poll_client.get("/team/2026/Hawai%27i").text.split())
+    assert "AP poll</div><div class=\"tile-value\">Unranked" in html
+
+
+def test_games_show_ap_rank_before_names(poll_client):
+    html = " ".join(poll_client.get("/games?season=2026&slot=r01").text.split())
+    assert '<span class="pr">#3</span><a href="/team/2026/Texas%20A%26M">' in html
+
+
+def test_pages_render_without_poll_columns(client):
+    # The default fixture predates polls; the store fills the columns with nulls.
+    html = client.get("/rankings").text
+    assert ">AP</th>" in html and "Polls for comparison" not in html
+    assert client.get("/api/rankings").json()["teams"][0]["ap_rank"] is None
+
+
+def test_poll_note_wording():
+    class S:  # minimal stand-in for Season
+        meta = {"polls": {"0": {"ap_rank": 1, "coaches_rank": 1, "cfp_rank": None},
+                          "6": {"ap_rank": 6, "coaches_rank": 7, "cfp_rank": None},
+                          "99": {"ap_rank": "final", "coaches_rank": "final", "cfp_rank": 16}}}
+    assert poll_note(S, 0) == ["AP: preseason poll", "Coaches: preseason poll"]
+    assert poll_note(S, 6) == ["AP: week 6 poll (week 7 not released yet)", "Coaches: week 7 poll"]
+    assert poll_note(S, FINAL) == ["AP: final poll", "Coaches: final poll", "CFP: week 16 (last released)"]
+    assert poll_note(S, 3) == []
 
 
 # -- API ----------------------------------------------------------------------------
@@ -255,6 +317,30 @@ def test_web_ratings_match_rank_output(engine, tmp_path):
     assert (m["record"] == m["w"].cast(pl.Utf8) + "-" + m["l"].cast(pl.Utf8)).all()
 
 
+def test_web_polls_match_rank_output(engine, dataset, tmp_path):
+    from cfbr.report.rank import add_polls, build_rankings
+
+    season, week = 2024, 12
+    build_season(engine, season, tmp_path, now=datetime.now(UTC))
+    web = pl.read_parquet(tmp_path / str(season) / "ratings.parquet").filter(
+        (pl.col("week") == week) & pl.col("fbs"))
+    ref, _ = add_polls(build_rankings(engine, season, week)[0], dataset.polls, season, week)
+    m = ref.join(web, on="team", suffix="_web")
+    for c in ("ap_rank", "coaches_rank", "cfp_rank"):
+        assert m.select(pl.col(c).cast(pl.Int32).eq_missing(pl.col(f"{c}_web"))).to_series().all(), c
+    assert web["ap_rank"].drop_nulls().len() > 20 and web["cfp_rank"].drop_nulls().len() > 20
+
+
+def test_final_table_uses_final_postseason_poll(dataset):
+    season = 2023
+    ranks, used = timeline_polls(dataset.polls, season, FINAL)
+    assert used["ap_rank"] == "final" and used["coaches_rank"] == "final"
+    post = dataset.polls.filter((pl.col("season") == season) & (pl.col("season_type") == "postseason")
+                                & (pl.col("poll") == "AP Top 25"))
+    no1 = post.filter(pl.col("rank") == 1)["team"].item()
+    assert ranks.filter(pl.col("ap_rank") == 1)["team"].item() == no1
+
+
 def test_completed_season_timeline(engine, tmp_path):
     season = 2023
     build_season(engine, season, tmp_path, now=datetime.now(UTC))
@@ -267,3 +353,206 @@ def test_completed_season_timeline(engine, tmp_path):
     # The last regular-season table comes before the first bowl game.
     last_reg = r.filter(pl.col("week") == meta["weeks"][-2])["as_of"][0]
     assert last_reg <= g.filter(pl.col("season_type") == "postseason")["kickoff_ts"].min()
+
+
+# -- paper bets ---------------------------------------------------------------------
+
+def _bet(gid, side, line, status="open", hp=None, ap=None, closing=None, week=7, provider="TestBook"):
+    from cfbr.bets.ledger import clv, risk
+
+    risked, won = risk(-110, 1.0)
+    units = {"won": won, "lost": -risked, "push": 0.0}.get(status)
+    home, away = ("Texas A&M", "Ohio State") if gid % 2 else ("Hawai'i", "<b>Evil</b>")
+    return {
+        "game_id": gid, "season": SEASON, "week": week, "placed_at": "2026-10-11T16:24:08+00:00",
+        "kickoff_ts": f"2026-10-{10 + gid:02d}T23:00:00Z", "home_team": home, "away_team": away, "side": side,
+        "team": home if side == "home" else away, "model_margin": 10.0 if side == "home" else -10.0, "line": line,
+        "edge": (10.0 + line) if side == "home" else (-10.0 + line), "n_providers": 3, "best_line": line + 0.5,
+        "best_provider": provider, "odds": -110, "stake": 1.0, "status": status, "home_points": hp,
+        "away_points": ap, "closing_line": closing, "clv": None if closing is None else clv(side, line, closing),
+        "units": units,
+    }
+
+
+def _write_ledger(cfg):
+    from cfbr.bets.ledger import LEDGER_SCHEMA
+
+    rows = [_bet(1, "home", -3.5), _bet(2, "away", 4.0),
+            _bet(3, "home", -7.0, "won", 31, 14, -8.0, week=6), _bet(4, "away", 3.0, "lost", 28, 10, 2.0, week=6),
+            _bet(5, "home", -3.0, "push", 24, 21, -3.0, week=6)]
+    d = cfg.paths.out_dir / str(SEASON)
+    d.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows, schema=LEDGER_SCHEMA).write_csv(d / "bets.csv")
+    return d / "bets.csv"
+
+
+@pytest.fixture
+def bets_client(web_cfg):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_ledger(web_cfg)
+    return TestClient(create_app(web_cfg))
+
+
+def test_bets_page(bets_client):
+    r = bets_client.get("/bets")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "private, no-store"
+    html = " ".join(r.text.split())
+    assert "2026 paper bets" in html and "not betting advice" in html
+    assert "No conclusion yet." in html and "3 of the 500 settled bets" in html
+    assert "1–1–1" in html  # won-lost-push
+    assert "All bets, best line" in html
+    # Rules describe the current pricing rule: offshore books never set the best line.
+    assert "Bovada" in html and "never set the best line" in html
+    # Lines are shown from the bet team's side: an away bet at home +4 is "−4".
+    assert "Texas A&amp;M −3.5" in html and "&lt;b&gt;Evil&lt;/b&gt; −4" in html
+    assert "<b>Evil</b>" not in html
+
+
+def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
+    from cfbr.bets.ledger import read_ledger, summarize
+
+    body = bets_client.get("/api/bets").json()
+    m = summarize(read_ledger(web_cfg.paths.out_dir / str(SEASON) / "bets.csv"), web_cfg.bets)
+    assert body["summary"]["won"] == m["won"] == 1 and body["summary"]["open"] == 2
+    assert body["summary"]["units"] == pytest.approx(m["units"])
+    assert body["rules"]["threshold"] == web_cfg.bets.threshold
+    assert body["summary_best_line"]["settled"] == 0  # synthetic ledger predates best-line grading
+    assert len(body["bets"]) == 5
+
+
+def test_bets_empty_state_and_unknown_season(client):
+    r = client.get("/bets")
+    assert r.status_code == 200 and "No paper bets recorded yet" in r.text
+    assert client.get("/api/bets").status_code == 404
+    assert client.get("/bets?season=2019").status_code == 404
+
+
+def test_bet_rows_team_perspective():
+    from cfbr.bets.ledger import LEDGER_SCHEMA
+    from cfbr.web.bets import bet_rows
+
+    rows = bet_rows(pl.DataFrame([_bet(2, "away", 4.0), _bet(4, "away", 3.0, "lost", 28, 10, 2.0)],
+                                 schema=LEDGER_SCHEMA))
+    a = {r["game_id"]: r for r in rows}
+    assert a[2]["team_line"] == -4.0 and a[2]["model_team"] == 10.0 and a[2]["best"] == -4.5
+    # Away team laid 3 and closed at -2: the bet got a worse number than the close.
+    assert a[4]["close"] == -2.0 and a[4]["clv"] == -1.0
+
+
+def test_bets_gate_blocks_only_the_betting_section(web_cfg):
+    """The single access dependency gates every betting route and nothing else,
+    and no other page or API response carries betting data."""
+    from fastapi import HTTPException
+
+    from cfbr.web.access import bets_access
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_ledger(web_cfg)
+    app = create_app(web_cfg)
+
+    def deny():
+        raise HTTPException(402, "Subscription required.")
+
+    app.dependency_overrides[bets_access] = deny
+    c = TestClient(app)
+    assert c.get("/bets").status_code == 402
+    r = c.get("/api/bets")
+    assert r.status_code == 402 and r.json()["detail"] == "Subscription required."
+    for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/team/2026/Ohio%20State",
+                "/api/rankings", "/api/games?slot=r02", "/api/team/2026/Ohio%20State", "/api/seasons"):
+        r = c.get(url)
+        assert r.status_code == 200, url
+        assert "TestBook" not in r.text and "paper bet" not in r.text.lower(), url
+
+
+# -- free viewers: no live-season model output anywhere -------------------------------
+
+# Strings that only exist if model output for the synthetic live season leaked:
+# ratings (+21.0, +16.0 ...), offense/defense, predicted margins and picks.
+MODEL_STRINGS = ["+21.0", "+16.0", "+11.0", "+6.0", "+10.0", "+9.0", "by 10.0", "by 4.0", "by 30.0", "Toss-up",
+                 "Model err", "Model vs Vegas", "Win %"]
+
+
+def _write_finished(root, now):
+    """A finished 2025 season (copy of the synthetic one) for free viewers to land on."""
+    d = _write_season(root, now, live=False, polls=True)
+    dst = root / "2025"
+    dst.mkdir(parents=True, exist_ok=True)
+    pl.read_parquet(d / "ratings.parquet").with_columns(season=pl.lit(2025, pl.Int32)).write_parquet(
+        dst / "ratings.parquet")
+    pl.read_parquet(d / "games.parquet").with_columns(season=pl.lit(2025)).write_parquet(dst / "games.parquet")
+    meta = json.loads((d / "meta.json").read_text()) | {"season": 2025, "live": False}
+    (dst / "meta.json").write_text(json.dumps(meta))
+
+
+@pytest.fixture
+def free_client(web_cfg):
+    from cfbr.web.access import premium_viewer
+
+    now = datetime.now(UTC)
+    _write_finished(web_dir(web_cfg), now)
+    _write_season(web_dir(web_cfg), now, live=True, polls=True)  # 2026, in progress
+    _write_ledger(web_cfg)
+    app = create_app(web_cfg)
+    app.dependency_overrides[premium_viewer] = lambda: False
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("url", [
+    "/rankings?season=2026", "/rankings?season=2026&week=1", "/team/2026/Ohio%20State", "/team/2026/Texas%20A%26M",
+    "/games?season=2026&slot=r01", "/games?season=2026&slot=r02",
+])
+def test_free_viewers_see_no_live_model_output(free_client, url):
+    r = free_client.get(url)
+    assert r.status_code == 200, url
+    html = " ".join(r.text.split())
+    for leak in MODEL_STRINGS:
+        assert leak not in html, (url, leak)
+    assert "for subscribers while the season is in progress" in html
+    assert r.headers["cache-control"] == "private, no-store"
+
+
+def test_free_viewers_keep_public_live_data(free_client):
+    html = " ".join(free_client.get("/games?season=2026&slot=r01").text.split())
+    assert "31–10" not in html and "10–31" in html  # final score away–home
+    assert "Texas A&amp;M −7" in html  # closing line
+    assert '<span class="pr">#3</span>' in html  # AP rank
+    html = " ".join(free_client.get("/team/2026/Ohio%20State").text.split())
+    assert "0–1" in html and "AP poll" in html  # record and polls
+
+
+def test_free_viewers_land_on_finished_season(free_client):
+    html = " ".join(free_client.get("/rankings").text.split())
+    assert "2025 ratings · Week 1" in html and "+21.0" in html  # finished season is fully free
+    assert "2026 ratings and rankings are for subscribers" in html
+
+
+def test_free_api_withholds_live_model_output(free_client):
+    r = free_client.get("/api/rankings?season=2026")
+    assert r.status_code == 402
+    team = free_client.get("/api/team/2026/Ohio%20State").json()
+    assert all(w[c] is None for w in team["weeks"] for c in ("rank", "rating", "offense", "defense", "o_ppa"))
+    assert all(g["t_pred"] is None and g["t_win_prob"] is None for g in team["games"])
+    for slot in ("r01", "r02"):
+        games = free_client.get(f"/api/games?season=2026&slot={slot}").json()["games"]
+        assert all(g[c] is None for g in games for c in ("pred_margin", "win_prob", "prior_pred", "massey_pred"))
+        assert any(g["spread"] is not None for g in games)  # lines are public
+    assert free_client.get("/api/rankings?season=2025").json()["teams"][0]["rating"] == 21.0
+    assert free_client.get("/bets").status_code == 402 and free_client.get("/api/bets").status_code == 402
+
+
+def test_accuracy_stays_free_and_aggregate(free_client):
+    html = " ".join(free_client.get("/accuracy?season=2026").text.split())
+    assert "Model MAE" in html
+    for leak in ("by 10.0", "by 4.0", "Toss-up", "+21.0"):
+        assert leak not in html
+
+
+def test_premium_viewers_see_live_model_output(web_cfg):
+    now = datetime.now(UTC)
+    _write_season(web_dir(web_cfg), now, live=True, polls=True)
+    c = TestClient(create_app(web_cfg))  # default: everyone is premium
+    html = " ".join(c.get("/games?season=2026&slot=r01").text.split())
+    assert "by 10.0" in html and "for subscribers" not in html
+    assert c.get("/games?season=2026&slot=r01").headers["cache-control"] == "private, no-store"

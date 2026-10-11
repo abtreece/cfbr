@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, tile, team_link, line_chart %}
+{% block title %}{% if season %}{{ season }} {% endif %}paper bets · CFB Ratings{% endblock %}
+{% block content %}
+{% if bet_seasons|length > 1 %}
+<form class="filters" method="get" action="/bets">
+  {{ season_select(bet_seasons, season) }}
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+{% endif %}
+
+<h1>{% if season %}{{ season }} paper bets{% else %}Paper bets{% endif %}</h1>
+<p class="lede">The bets the model would make against the betting market, tracked as hypothetical flat bets.
+  Nothing is wagered, and this is not betting advice.</p>
+
+{% if summary is not defined %}
+<p class="muted">No paper bets recorded yet. <code>cfbr weekly</code> records them once a season has line snapshots and predictions.</p>
+{% else %}
+<div class="callout">
+  {% if summary.settled < rules.min_sample %}
+  <strong>No conclusion yet.</strong> {{ summary.settled }} of the {{ rules.min_sample }} settled bets set as the minimum before
+  drawing any conclusion. Until then, treat the record as noise.
+  {% else %}
+  <strong>Minimum sample reached.</strong> A real edge needs positive average closing-line value <em>and</em> a win-rate
+  interval whose lower bound clears break-even ({{ summary.breakeven|pct }}).
+  {% endif %}
+</div>
+
+<div class="tiles">
+  {{ tile("Record", summary.won ~ "–" ~ summary.lost ~ "–" ~ summary.push, "won–lost–push") }}
+  {% set ci = ("95% CI " ~ summary.ci95[0]|pct(0) ~ "–" ~ summary.ci95[1]|pct(0) ~ " · ") if summary.won + summary.lost else "" %}
+  {{ tile("Win rate", summary.win_rate|pct, ci ~ "break-even " ~ summary.breakeven|pct) }}
+  {{ tile("Units", summary.units|signed(2), "ROI " ~ summary.roi|pct) }}
+  {{ tile("Avg CLV", (summary.avg_clv|signed(2) ~ " pts") if summary.n_clv else "—",
+          ("beat the close " ~ summary.beat_close|pct(0) ~ " of " ~ summary.n_clv) if summary.n_clv else "after games close") }}
+  {{ tile("Best line", best.units|signed(2), "units at the best non-offshore book · " ~ best.won ~ "–" ~ best.lost ~ "–" ~ best.push) }}
+  {{ tile("Open bets", summary.open, "awaiting kickoff or result") }}
+</div>
+
+<details class="rules">
+  <summary>Rules</summary>
+  <ul>
+    <li>Bet the model's side when its predicted margin differs from the consensus line by at least {{ rules.threshold|num }} points.
+      The consensus is the median spread across sportsbooks in the newest line snapshot, offshore books included; projection and aggregator feeds are not books and are left out.</li>
+    <li>Each bet is recorded once, before kickoff, at that line, and never changed.</li>
+    <li>Graded at the recorded consensus line, {{ rules.odds }} odds, {{ rules.stake|num }} unit to win. Break-even win rate {{ summary.breakeven|pct }}.
+      Also graded at the best number available ("best line"): the best spread among the books a bet could actually be placed at.
+      Offshore books ({{ rules.offshore_books|join(", ") }}) count toward the consensus but never set the best line, so a bet can have no best line.</li>
+    <li>Closing-line value (CLV) is how many points better the recorded line was than the closing consensus. It is the first sign of a real edge, since win rate is mostly noise at small samples.</li>
+    <li>Betting lines are never model inputs; the model's predictions are made first.</li>
+  </ul>
+</details>
+
+{% if chart %}
+{{ line_chart("units-chart", chart, "Cumulative units by week", "units") }}
+{% endif %}
+
+<h2>Open bets</h2>
+{% if open_bets %}
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Model</th><th class="num">Edge</th>
+    <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded</th></tr></thead>
+  <tbody>
+  {% for b in open_bets %}
+    <tr>
+      <td class="opt">{{ b.kickoff|kickoff }}</td>
+      <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
+      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
+      <td class="num opt" title="Model's expected margin for {{ b.team }}">{{ b.model_team|signed }}</td>
+      <td class="num">{{ b.edge_pts|num }}</td>
+      <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
+      <td class="num opt" {% if b.books %}title="{{ b.books }}"{% endif %}>{{ b.n_providers }}</td>
+      <td class="opt">{{ b.placed|kickoff }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Edge is the gap in points between the model's margin and the consensus line. "Model" is the model's expected margin for the team bet on. Hover over Books to see each book's line.</p>
+{% else %}
+<p class="muted">No open bets.</p>
+{% endif %}
+
+<h2>Results</h2>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Slice</th><th class="num opt">Settled</th><th class="num">W–L–P</th><th class="num">Win %<span class="ci"> [95% CI]</span></th>
+    <th class="num">Units</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th><th class="num opt">Beat close</th></tr></thead>
+  <tbody>
+  {% for g in breakdown %}
+    <tr {% if loop.first %}class="selected"{% endif %}>
+      <td class="team">{{ g.label }}</td><td class="num opt">{{ g.settled }}</td><td class="num">{{ g.won }}–{{ g.lost }}–{{ g.push }}</td>
+      <td class="num">{% if g.won + g.lost %}{{ g.win_rate|pct }}<span class="ci"> [{{ g.ci95[0]|pct }}, {{ g.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
+      <td class="num strong">{{ g.units|signed(2) }}</td><td class="num opt">{{ g.roi|pct }}</td>
+      <td class="num opt">{{ g.avg_clv|signed(2) if g.n_clv else "—" }}</td><td class="num opt">{{ g.beat_close|pct(0) if g.n_clv else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if settled %}
+<h2>Settled bets</h2>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="opt">Final</th><th>Result</th><th class="num">Units</th>
+    <th class="num opt">Close</th><th class="num opt">CLV</th></tr></thead>
+  <tbody>
+  {% for b in settled %}
+    <tr>
+      <td class="opt">{{ b.kickoff|kickoff }}</td>
+      <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
+      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
+      <td class="opt">{{ b.away_points }}–{{ b.home_points }}</td>
+      <td>{% if b.status == "won" %}<span class="up">✓ won</span>{% elif b.status == "lost" %}<span class="down">✗ lost</span>{% else %}<span class="muted">push</span>{% endif %}</td>
+      <td class="num strong">{{ b.units|signed(2) }}</td>
+      <td class="num opt">{{ b.close|spread }}</td>
+      <td class="num opt">{{ b.clv|signed(1) if b.clv is not none else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Final score is away–home. Close is the closing consensus line for the team bet on; CLV &gt; 0 means the recorded line beat it.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -19,7 +19,7 @@ from cfbr.config import Config
 from cfbr.data import Dataset
 from cfbr.ingest.fetch import current_season
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
-from cfbr.report.rank import records, week_as_of
+from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,48 @@ def _snapshot(eng: Engine, season: int, as_of) -> pl.DataFrame:
     return eng.snapshot(season, as_of)
 
 
+def timeline_polls(polls: pl.DataFrame, season: int, week: int) -> tuple[pl.DataFrame, dict]:
+    """Poll ranks shown beside a timeline point, with the poll week each one came from.
+
+    Weekly tables use the same poll as ``cfbr rank`` (the poll released after
+    week N's games). The Final table uses each poll's final postseason edition
+    when there is one ("final" in the returned dict).
+    """
+    ranks, used = poll_ranks(polls, season, week)
+    if week == FINAL:
+        post = polls.filter((pl.col("season") == season) & (pl.col("season_type") == "postseason"))
+        for col, name in POLLS.items():
+            p = post.filter(pl.col("poll") == name)
+            if p.height:
+                p = p.filter(pl.col("week") == p["week"].max()).select("team", pl.col("rank").alias(col))
+                ranks = ranks.drop(col, strict=False).join(p, on="team", how="full", coalesce=True)
+                used[col] = "final"
+    for col in POLLS:
+        if col not in ranks.columns:
+            ranks = ranks.with_columns(pl.lit(None, pl.Int32).alias(col))
+    return ranks.select("team", *[pl.col(c).cast(pl.Int32) for c in POLLS]), used
+
+
+def game_polls(polls: pl.DataFrame, season: int, games: pl.DataFrame) -> pl.DataFrame:
+    """Each team's poll ranks going into the game: for week N games, the poll
+    released after week N-1; for postseason games, the last regular-season poll."""
+    out = []
+    for slot in games["slot"].unique().to_list():
+        before = int(slot[1:]) - 1 if slot.startswith("r") else FINAL
+        ranks, _ = poll_ranks(polls, season, before)
+        g = games.filter(pl.col("slot") == slot).select("game_id", "home_team", "away_team")
+        for side in ("home", "away"):
+            r = ranks.rename({c: f"{side}_{c}" for c in POLLS if c in ranks.columns})
+            g = g.join(r, left_on=f"{side}_team", right_on="team", how="left")
+        out.append(g)
+    cols = [f"{side}_{c}" for side in ("home", "away") for c in POLLS]
+    df = pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame({"game_id": []}, schema={"game_id": pl.Int64})
+    for c in cols:
+        if c not in df.columns:
+            df = df.with_columns(pl.lit(None, pl.Int32).alias(c))
+    return df.select("game_id", *[pl.col(c).cast(pl.Int32) for c in cols])
+
+
 def season_ratings(eng: Engine, season: int, now: datetime) -> pl.DataFrame:
     cal = eng.calibration(season)
     fbs = eng.fbs(season)
@@ -95,8 +137,9 @@ def season_ratings(eng: Engine, season: int, now: datetime) -> pl.DataFrame:
         rank = t.filter(pl.col("fbs")).select(
             "team", rank=pl.col("rating").rank("ordinal", descending=True).cast(pl.Int32))
         rec = records(eng, season, as_of).select("team", "w", "l")
+        polls, _ = timeline_polls(eng.ds.polls, season, week)
         parts.append(t.join(rank, on="team", how="left").join(rec, on="team", how="left")
-                     .join(conf, on="team", how="left")
+                     .join(conf, on="team", how="left").join(polls, on="team", how="left")
                      .with_columns(season=pl.lit(season, pl.Int32), week=pl.lit(week, pl.Int32),
                                    label=pl.lit(label), as_of=pl.lit(as_of),
                                    w=pl.col("w").fill_null(0), l=pl.col("l").fill_null(0)))
@@ -105,7 +148,7 @@ def season_ratings(eng: Engine, season: int, now: datetime) -> pl.DataFrame:
         rating_change=pl.col("rating") - pl.col("rating").shift(1).over("team"),
         rank_change=pl.col("rank").shift(1).over("team") - pl.col("rank"),
     ).select("season", "week", "label", "as_of", "team", "conference", "fbs", "rank", "w", "l",
-             "rating", "offense", "defense", "prior_share", "rating_change", "rank_change", *RATING_COLS)
+             "rating", "offense", "defense", "prior_share", "rating_change", "rank_change", *POLLS, *RATING_COLS)
             .sort("week", "rank", "team", nulls_last=True))
 
 
@@ -113,10 +156,10 @@ def season_games(eng: Engine, season: int) -> pl.DataFrame:
     pts = eng.games.filter(pl.col("season") == season).select(
         "game_id", "home_points", "away_points", "home_conference", "away_conference")
     spread = consensus_spread(eng.ds.lines, eng.cfg.backtest.spread_consensus)
-    return (eng.predict(season)
-            .join(pts, on="game_id", how="left")
-            .join(spread.select("game_id", "spread"), on="game_id", how="left")
-            .sort("kickoff_ts", "game_id"))
+    g = (eng.predict(season)
+         .join(pts, on="game_id", how="left")
+         .join(spread.select("game_id", "spread"), on="game_id", how="left"))
+    return g.join(game_polls(eng.ds.polls, season, g), on="game_id", how="left").sort("kickoff_ts", "game_id")
 
 
 def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None = None) -> Path:
@@ -137,6 +180,8 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
         "live": not season_over(eng, season, now),
         "weeks": sorted(set(ratings["week"].to_list())),
         "labels": dict(ratings.select("week", "label").unique().sort("week").iter_rows()),
+        # Poll week shown beside each table (int, "final", or null if not released yet).
+        "polls": {w: timeline_polls(eng.ds.polls, season, w)[1] for w in sorted(set(ratings["week"].to_list()))},
     }
     tmp = out / ".meta.json.tmp"
     tmp.write_text(json.dumps(meta, indent=2, default=str))

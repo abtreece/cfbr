@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import tile, delta, line_chart, team_link %}
+{% from "macros.html" import tile, delta, line_chart, team_link, poll_rank, poll_cell, premium_notice %}
 {% block title %}{{ team }} {{ season }} · CFB Ratings{% endblock %}
 {% block content %}
 <form class="filters" method="get" onsubmit="location.href='/team/'+this.season.value+'/{{ team|q }}'; return false;">
@@ -14,15 +14,25 @@
 <h1>{{ team }} <span class="muted">{{ season }}</span></h1>
 <p class="lede">{{ latest.conference or ("Pooled FCS opponents" if not is_fbs else "") }} · {{ latest.label }}</p>
 
+{% if locked %}{{ premium_notice(season, "ratings and predictions") }}{% endif %}
 <div class="tiles">
+  {% if not locked %}
   {% if is_fbs %}{{ tile("Rank", "#" ~ latest.rank, "of FBS") }}{% endif %}
   {{ tile("Rating", latest.rating|signed, "pts vs. avg FBS") }}
   {{ tile("Offense", latest.offense|signed) }}
   {{ tile("Defense", latest.defense|signed) }}
+  {% endif %}
   {{ tile("Record", latest.w ~ "–" ~ latest.l) }}
-  {{ tile("Prior share", latest.prior_share|pct(0)) }}
+  {% if not locked %}{{ tile("Prior share", latest.prior_share|pct(0)) }}{% endif %}
+  {% if is_fbs %}
+  {{ tile("AP poll", "#" ~ latest.ap_rank if latest.ap_rank is not none else "Unranked") }}
+  {{ tile("Coaches poll", "#" ~ latest.coaches_rank if latest.coaches_rank is not none else "Unranked") }}
+  {% if show_cfp %}{{ tile("CFP", "#" ~ latest.cfp_rank if latest.cfp_rank is not none else "Unranked") }}{% endif %}
+  {% endif %}
 </div>
+{% if is_fbs and polls %}<p class="note poll-note">Polls — {{ polls|join(" · ") }}.</p>{% endif %}
 
+{% if not locked %}
 {{ line_chart("team-chart", chart, "Rating, offense and defense through the season", "points") }}
 
 <details class="table-view">
@@ -30,45 +40,48 @@
   <div class="table-wrap">
   <table class="data">
     <thead><tr><th>After</th><th class="num">Rk</th><th class="num">±</th><th class="num">Rating</th><th class="num">Off</th>
-      <th class="num">Def</th><th class="num">Δ Rating</th><th class="num">Record</th><th class="num">Prior</th></tr></thead>
+      <th class="num">Def</th><th class="num">Δ Rating</th><th class="num">Record</th><th class="num">Prior</th>
+      <th class="num">AP</th><th class="num">Coaches</th>{% if show_cfp %}<th class="num">CFP</th>{% endif %}</tr></thead>
     <tbody>
     {% for h in hist %}
       <tr><td><a href="/rankings?season={{ season }}&amp;week={{ h.week }}">{{ h.label }}</a></td>
         <td class="num">{{ h.rank if h.rank is not none else "—" }}</td><td class="num">{{ delta(h.rank_change, 0) }}</td>
         <td class="num strong">{{ h.rating|signed }}</td><td class="num">{{ h.offense|signed }}</td>
         <td class="num">{{ h.defense|signed }}</td><td class="num">{{ delta(h.rating_change) }}</td>
-        <td class="num">{{ h.w }}–{{ h.l }}</td><td class="num">{{ h.prior_share|pct(0) }}</td></tr>
+        <td class="num">{{ h.w }}–{{ h.l }}</td><td class="num">{{ h.prior_share|pct(0) }}</td>
+        {{ poll_cell(h.ap_rank) }}{{ poll_cell(h.coaches_rank) }}{% if show_cfp %}{{ poll_cell(h.cfp_rank) }}{% endif %}</tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
 </details>
+{% endif %}
 
 <h2>Games</h2>
-<p class="note">Margins are from {{ team }}'s side: positive means {{ team }} is expected to win (or won) by that many points.
-  Predictions use only games played before each week kicked off.</p>
+<p class="note">Margins are from {{ team }}'s side: positive means {{ team }} {% if not locked %}is expected to win (or won){% else %}won or is favored{% endif %} by that many points.
+  Predictions use only games played before each week kicked off. #N is the opponent's AP rank going into the game.</p>
 <div class="table-wrap">
 <table class="data">
   <thead>
     <tr><th>Date</th><th>Wk</th><th>Opponent</th><th>Result</th>
-      <th class="num">Model</th><th class="num">Win %</th><th class="num">Vegas</th><th class="num">Actual</th>
-      <th class="num">Model err</th><th class="num">Vegas err</th></tr>
+      {% if not locked %}<th class="num">Model</th><th class="num">Win %</th>{% endif %}<th class="num">Vegas</th><th class="num">Actual</th>
+      {% if not locked %}<th class="num">Model err</th>{% endif %}<th class="num">Vegas err</th></tr>
   </thead>
   <tbody>
   {% for g in games %}
     <tr {% if not g.completed %}class="upcoming"{% endif %}>
       <td>{{ g.kickoff_ts|kickoff }}</td>
       <td>{{ g.slot|slot_label }}</td>
-      <td>{{ "vs" if g.neutral_site else ("" if g.is_home else "@") }} {{ team_link(g.opponent, season, fbs_teams) }}</td>
+      <td>{{ "vs" if g.neutral_site else ("" if g.is_home else "@") }} {{ poll_rank(g.opp_ap_rank) }}{{ team_link(g.opponent, season, fbs_teams) }}</td>
       <td>{% if g.completed and g.t_margin is not none %}
             <span class="{{ 'up' if g.t_margin > 0 else 'down' }}">{{ "W" if g.t_margin > 0 else ("L" if g.t_margin < 0 else "T") }}</span>
             {{ g.team_points }}–{{ g.opp_points }}
           {% else %}<span class="muted">upcoming</span>{% endif %}</td>
-      <td class="num strong">{{ g.t_pred|signed }}</td>
-      <td class="num">{{ g.t_win_prob|pct(0) }}</td>
+      {% if not locked %}<td class="num strong">{{ g.t_pred|signed }}</td>
+      <td class="num">{{ g.t_win_prob|pct(0) }}</td>{% endif %}
       <td class="num">{{ g.t_vegas|signed }}</td>
       <td class="num">{{ g.t_margin|signed(0) if g.completed else "—" }}</td>
-      <td class="num">{{ g.model_err|num }}</td>
+      {% if not locked %}<td class="num">{{ g.model_err|num }}</td>{% endif %}
       <td class="num">{{ g.vegas_err|num }}</td>
     </tr>
   {% endfor %}

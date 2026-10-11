@@ -13,6 +13,13 @@ from pathlib import Path
 
 import polars as pl
 
+POLL_COLS = ("ap_rank", "coaches_rank", "cfp_rank")
+
+
+def _ensure(df: pl.DataFrame, cols) -> pl.DataFrame:
+    """Add missing (all-null) poll columns, for web data built before polls existed."""
+    return df.with_columns([pl.lit(None, pl.Int32).alias(c) for c in cols if c not in df.columns])
+
 
 @dataclass(frozen=True)
 class Season:
@@ -42,6 +49,7 @@ class Store:
         self._lock = threading.Lock()
         self._seasons: dict[int, tuple[float, Season]] = {}
         self._runs: dict[str, tuple[float, Run]] = {}
+        self._bets: dict[int, tuple[float, pl.DataFrame]] = {}
 
     def seasons(self) -> list[int]:
         if not self.web_root.is_dir():
@@ -59,8 +67,10 @@ class Store:
             if hit and hit[0] == mtime:
                 return hit[1]
             d = meta_path.parent
-            s = Season(json.loads(meta_path.read_text()), pl.read_parquet(d / "ratings.parquet"),
-                       pl.read_parquet(d / "games.parquet"))
+            s = Season(json.loads(meta_path.read_text()),
+                       _ensure(pl.read_parquet(d / "ratings.parquet"), POLL_COLS),
+                       _ensure(pl.read_parquet(d / "games.parquet"),
+                               [f"{side}_{c}" for side in ("home", "away") for c in POLL_COLS]))
             self._seasons[season] = (mtime, s)
             return s
 
@@ -82,6 +92,33 @@ class Store:
                     self._runs[path.parent.name] = hit
             out.append(hit[1])
         return out
+
+    def bet_seasons(self) -> list[int]:
+        """Seasons with a paper-bet ledger (``out/{season}/bets.csv``)."""
+        if not self.out_dir.is_dir():
+            return []
+        return sorted(int(p.parent.name) for p in self.out_dir.glob("*/bets.csv") if p.parent.name.isdigit())
+
+    def bets(self, season: int) -> pl.DataFrame | None:
+        """The season's paper-bet ledger, reloaded when ``cfbr weekly`` rewrites it."""
+        from cfbr.bets.ledger import read_ledger
+
+        path = self.out_dir / str(season) / "bets.csv"
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            return None
+        with self._lock:
+            hit = self._bets.get(season)
+            if not hit or hit[0] != mtime:
+                try:
+                    hit = (mtime, read_ledger(path))
+                except Exception:  # noqa: BLE001 - any parse failure means "try again later"
+                    # bets.csv is rewritten in place; a read mid-write can fail. Serve the
+                    # previous copy (if any) and retry on the next request.
+                    return hit[1] if hit else None
+                self._bets[season] = hit
+            return hit[1]
 
     def accuracy_log(self, season: int) -> pl.DataFrame | None:
         """Season-to-date lines appended by ``cfbr weekly``."""

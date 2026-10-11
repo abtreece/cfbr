@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, tile, team_link %}
+{% from "macros.html" import season_select, tile, team_link, poll_rank, premium_notice %}
 {% block title %}{{ season }} {{ slot|slot_label }} games · CFB Ratings{% endblock %}
 {% block content %}
 <form class="filters" method="get" action="/games">
@@ -13,9 +13,10 @@
 </form>
 
 <h1>{{ season }} · {{ slot|slot_label }}</h1>
-<p class="lede">Predictions use only games played before this week's first kickoff.
+<p class="lede">{% if locked %}Schedule, scores, closing lines and AP ranks.{% else %}Predictions use only games played before this week's first kickoff.{% endif %}
   {% if slot.startswith('p') %}Postseason weeks are 7-day windows from the first bowl game.{% endif %}</p>
 
+{% if locked %}{{ premium_notice(season, "predictions") }}{% endif %}
 {% if summary and summary.n_games %}
 <div class="tiles">
   {{ tile("Games final", summary.n_games) }}
@@ -30,31 +31,31 @@
 <div class="table-wrap">
 <table class="data">
   <thead>
-    <tr><th>Kickoff ({{ tz_label }})</th><th>Matchup</th><th>Model</th><th class="num">Win %</th><th>Vegas</th>
-      <th>Model vs Vegas</th>{% if any_final %}<th>Final</th><th class="num">Model err</th><th class="num">Vegas err</th><th>ATS</th>{% endif %}</tr>
+    <tr><th>Kickoff ({{ tz_label }})</th><th>Matchup</th>{% if not locked %}<th>Model</th><th class="num">Win %</th>{% endif %}<th>Vegas</th>
+      {% if not locked %}<th>Model vs Vegas</th>{% endif %}{% if any_final %}<th>Final</th>{% if not locked %}<th class="num">Model err</th>{% endif %}<th class="num">Vegas err</th>{% if not locked %}<th>ATS</th>{% endif %}{% endif %}</tr>
   </thead>
   <tbody>
   {% for g in rows %}
     <tr {% if not g.completed %}class="upcoming"{% endif %}>
       <td>{{ g.kickoff_ts|kickoff }}</td>
-      <td class="wrap">{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ team_link(g.home_team, season, fbs_teams) }}</td>
-      <td class="strong wrap">{{ g.model_pick }}</td>
-      <td class="num">{{ g.fav_prob|pct(0) }}</td>
+      <td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}</td>
+      {% if not locked %}<td class="strong wrap">{{ g.model_pick }}</td>
+      <td class="num">{{ g.fav_prob|pct(0) }}</td>{% endif %}
       <td class="wrap">{{ g.vegas_pick or "—" }}</td>
-      <td class="wrap">{{ g.edge or "—" }}</td>
+      {% if not locked %}<td class="wrap">{{ g.edge or "—" }}</td>{% endif %}
       {% if any_final %}
       <td>{% if g.completed and g.home_points is not none %}{{ g.away_points }}–{{ g.home_points }}{% else %}<span class="muted">—</span>{% endif %}</td>
-      <td class="num">{{ g.model_err|num }}</td>
+      {% if not locked %}<td class="num">{{ g.model_err|num }}</td>{% endif %}
       <td class="num">{{ g.vegas_err|num }}</td>
-      <td>{% if g.ats == "win" %}<span class="up">✓ win</span>{% elif g.ats == "loss" %}<span class="down">✗ loss</span>{% elif g.ats %}<span class="muted">{{ g.ats }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      {% if not locked %}<td>{% if g.ats == "win" %}<span class="up">✓ win</span>{% elif g.ats == "loss" %}<span class="down">✗ loss</span>{% elif g.ats %}<span class="muted">{{ g.ats }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>{% endif %}
       {% endif %}
     </tr>
   {% else %}
-    <tr><td colspan="{{ 10 if any_final else 6 }}" class="muted">No games.</td></tr>
+    <tr><td colspan="10" class="muted">No games.</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-<p class="note">Final score is shown away–home. "Model vs Vegas" is how many points the model's margin differs from the closing line, and toward which team.
-  ATS grades the model's side of the closing line; pushes and exact agreement are not graded.</p>
+<p class="note">#N is the team's AP rank going into the game. Final score is shown away–home.{% if not locked %} "Model vs Vegas" is how many points the model's margin differs from the closing line, and toward which team.
+  ATS grades the model's side of the closing line; pushes and exact agreement are not graded.{% endif %}</p>
 {% endblock %}

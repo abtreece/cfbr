@@ -10,11 +10,26 @@
 {% if name in fbs_teams %}<a href="/team/{{ season }}/{{ name|q }}">{{ name }}</a>{% else %}{{ name }}{% endif %}
 {%- endmacro %}
 
+{% macro poll_rank(rank) -%}
+{% if rank is not none and rank is defined %}<span class="pr">#{{ rank }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro poll_cell(rank, cls="") -%}
+<td class="num{{ ' ' ~ cls if cls }}" data-v="{{ rank if rank is not none else 999 }}">{% if rank is not none %}{{ rank }}{% else %}<span class="muted">—</span>{% endif %}</td>
+{%- endmacro %}
+
 {% macro delta(x, digits=1, good_up=True) -%}
 {% if x is none or x != x %}<span class="muted">—</span>
 {%- elif x > 0 %}<span class="{{ 'up' if good_up else 'down' }}">▲ {{ x|num(digits) if digits else x }}</span>
 {%- elif x < 0 %}<span class="{{ 'down' if good_up else 'up' }}">▼ {{ (-x)|num(digits) if digits else -x }}</span>
 {%- else %}<span class="muted">0</span>{% endif %}
+{%- endmacro %}
+
+{% macro premium_notice(season, what) -%}
+<div class="callout premium">
+  <strong>{{ season }} {{ what }} are for subscribers while the season is in progress.</strong>
+  They become free when the season ends. Schedules, scores, closing lines, polls and accuracy stay free.
+</div>
 {%- endmacro %}
 
 {% macro tile(label, value, sub=None) -%}

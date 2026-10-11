@@ -42,11 +42,14 @@ uv run cfbr web build          # once; `cfbr weekly` keeps the current season up
 uv run cfbr web serve          # http://127.0.0.1:8000 (add --host 0.0.0.0 --port 8000 for your LAN; there is no login)
 ```
 
-- **Rankings**: any season, after any week (or preseason/final), filterable by conference and sortable. Includes rank and rating changes, the prior share, and a trend sparkline.
-- **Team pages**: rating, offense and defense through the season, plus a game log with the model's prediction, the closing line and the result.
-- **Games**: each week's predictions against the closing line, plus results, errors and against-the-spread grading once games are final.
+- **Rankings**: any season, after any week (or preseason/final), filterable by conference and sortable. Includes rank and rating changes, the prior share, a trend sparkline, and AP, Coaches and CFP poll ranks for comparison.
+- **Team pages**: rating, offense and defense through the season, poll ranks, plus a game log with the model's prediction, the closing line and the result.
+- **Games**: each week's predictions against the closing line, plus results, errors and against-the-spread grading once games are final. Ranked teams show their AP rank going into the game.
 - **Accuracy**: walk-forward accuracy per season and per week against the closing line and the Massey baseline. Also shows the `cfbr weekly` run log and every backtest run under `results/`.
+- **Bets**: the paper-betting ledger from `out/{season}/bets.csv`, with the verdict against the pre-set minimum sample, record, units, ROI and closing-line value (at the consensus line and at the best line), open bets, and settled bets.
 - **JSON API** under `/api/` (docs at `/api/docs`).
+
+**Premium content.** The betting section and all model output for a season still in progress (ratings, ranks, predicted margins, win probabilities, for every game) are premium; anything less leaks the picks (see DECISIONS.md). Free viewers get past seasons, the live season's schedule, scores, closing lines and polls, and aggregate accuracy. Everyone is premium today. To charge for it, implement `is_premium()` in `src/cfbr/web/access.py`. Every route already depends on it, and live-season data is masked in one place (`public_view` in `src/cfbr/web/app.py`) before any page or API code sees it.
 
 The server never fits a model. It reads `out/web/{season}/` and picks up new files from `cfbr weekly` without a restart. The ratings shown "after week N" are exactly what `cfbr rank` writes to `out/{season}/wNN/`.
 
