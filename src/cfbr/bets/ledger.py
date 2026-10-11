@@ -88,14 +88,19 @@ def _price(x: int | None) -> str:
 
 
 def market(snapshot: pl.DataFrame, offshore: list[str] | None = None, default_odds: int = -110,
-           pricing: list[str] | None = None) -> pl.DataFrame:
+           pricing: list[str] | None = None, extra_pricing: pl.DataFrame | None = None) -> pl.DataFrame:
     """Consensus (median) home spread per game over all books, plus the best
     number for each side over the books a bet may be priced at (non-offshore, and
-    in ``pricing`` when given; null if none posted):
+    in ``pricing`` when given; null if none posted). ``extra_pricing`` rows (e.g. bet365 from
+    OddsPapi, fetched only for games being bet) can set the best line but never enter the consensus:
     a home bettor wants the highest spread, an away bettor the lowest, and
     between equal spreads the better price (unpriced books count as ``default_odds``)."""
     off = {book_key(b) for b in (offshore or [])}
-    snap = snapshot.with_columns(
+    snap = snapshot.with_columns(_consensus=pl.lit(True))
+    if extra_pricing is not None and extra_pricing.height:
+        extra = extra_pricing.select(list(BOOK_SCHEMA)).cast(BOOK_SCHEMA).with_columns(_consensus=pl.lit(False))
+        snap = pl.concat([snap, extra.filter(pl.col("game_id").is_in(snap["game_id"].unique().to_list()))])
+    snap = snap.with_columns(
         offshore=pl.col("provider").map_elements(book_key, return_dtype=pl.Utf8).is_in(list(off)),
         hp=payout(pl.col("home_price").fill_null(default_odds)),
         ap=payout(pl.col("away_price").fill_null(default_odds)))
@@ -104,7 +109,8 @@ def market(snapshot: pl.DataFrame, offshore: list[str] | None = None, default_od
         pl.col("away_price").map_elements(_price, return_dtype=pl.Utf8))).otherwise(pl.lit(""))
     label = pl.format("{} {}{}{}", pl.col("provider"),
                       pl.col("spread").map_elements(lambda x: f"{x:+g}", return_dtype=pl.Utf8), prices,
-                      pl.when(pl.col("offshore")).then(pl.lit(" (offshore)")).otherwise(pl.lit("")))
+                      pl.when(pl.col("offshore")).then(pl.lit(" (offshore)"))
+                      .when(~pl.col("_consensus")).then(pl.lit(" (pricing only)")).otherwise(pl.lit("")))
 
     # Best number per side over the priceable books: rank by (points for the bettor, price), take the top row.
     on = snap.filter(~pl.col("offshore"))
@@ -116,18 +122,20 @@ def market(snapshot: pl.DataFrame, offshore: list[str] | None = None, default_od
     best_away = (on.with_columns(_pts=-pl.col("spread")).sort("_pts", "ap").group_by("game_id", maintain_order=True)
                  .last().select("game_id", best_away="spread", best_away_provider="provider",
                                 best_away_price="away_price"))
-    return (snap.group_by("game_id").agg(line=pl.col("spread").median(), n_providers=pl.len().cast(pl.Int32),
-                                         books=label.sort().str.join("; "))
+    cons = pl.col("_consensus")
+    return (snap.group_by("game_id").agg(line=pl.col("spread").filter(cons).median(),
+                                         n_providers=cons.sum().cast(pl.Int32), books=label.sort().str.join("; "))
             .join(best_home, on="game_id", how="left").join(best_away, on="game_id", how="left"))
 
 
-def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datetime, cfg: Bets) -> pl.DataFrame:
+def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datetime, cfg: Bets,
+                   extra_pricing: pl.DataFrame | None = None) -> pl.DataFrame:
     """Bets to record from ``preds`` (predictions.csv rows: game_id, kickoff_ts,
     home_team, away_team, pred_margin) against a line snapshot taken at ``placed_at``.
     Only games that kick off after the snapshot are eligible."""
     preds = preds.with_columns(pl.col("kickoff_ts").cast(pl.Utf8).str.to_datetime(time_zone="UTC")
                                if preds.schema["kickoff_ts"] == pl.Utf8 else pl.col("kickoff_ts"))
-    m = market(snapshot, cfg.offshore_books, cfg.odds, cfg.pricing_books)
+    m = market(snapshot, cfg.offshore_books, cfg.odds, cfg.pricing_books, extra_pricing)
     d = (preds.join(m, on="game_id", how="inner")
          .filter(pl.col("kickoff_ts") > placed_at)
          .with_columns(edge=pl.col("pred_margin") + pl.col("line"))  # model margin - (-spread)

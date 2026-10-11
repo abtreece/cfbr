@@ -164,3 +164,14 @@ def test_current_books_merges_feeds_only_when_close_in_time(tmp_path):
     (oddsd / "20261011T141500Z.json").rename(oddsd / "20261010T060000Z.json")  # 8 h before CFBD's: stale
     placed, books = current_books(cfg, GAMES, 2026)
     assert placed == datetime(2026, 10, 11, 14, 0, tzinfo=UTC) and books["provider"].to_list() == ["DraftKings"]
+
+
+def test_extra_names_cover_feeds_cfbd_alternates_miss():
+    al = team_aliases([{"school": "Miami (OH)", "mascot": "RedHawks", "alternateNames": ["M-OH", "Miami OH"]},
+                       {"school": "UL Monroe", "mascot": "Warhawks", "alternateNames": ["La.-Monroe", "ULM"]},
+                       {"school": "Akron", "mascot": "Zips", "alternateNames": []},
+                       {"school": "Louisiana Tech", "mascot": "Bulldogs", "alternateNames": []}])
+    games = pl.DataFrame({"game_id": [1, 2], "home_team": ["Miami (OH)", "UL Monroe"], "away_team": ["Akron", "Louisiana Tech"],
+                          "kickoff_ts": [KICK, KICK]})
+    ev = [_event("a", "Miami Ohio RedHawks", "Akron Zips", []), _event("b", "Louisiana-Monroe Warhawks", "Louisiana Tech Bulldogs", [])]
+    assert match_events(ev, games, al) == {"a": (1, False), "b": (2, False)}

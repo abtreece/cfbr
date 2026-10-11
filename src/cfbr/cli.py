@@ -380,6 +380,11 @@ def quota(config: ConfigOpt = None) -> None:
         u = usage(cfg)  # /v4/sports does not cost credits
         typer.echo(f"The Odds API: {u['used']} credits used, {u['remaining']} remaining this month "
                    f"(each weekly run costs {len(cfg.odds.regions)})")
+    from cfbr.ingest.oddspapi import calls_this_month, oddspapi_key
+
+    if oddspapi_key() is not None:
+        typer.echo(f"OddsPapi (bet365): {calls_this_month(cfg.paths.raw_dir)} of {cfg.oddspapi.monthly_quota} requests "
+                   f"used this month (local ledger; {cfg.oddspapi.quota_reserve} held in reserve)")
 
 
 news_app = typer.Typer(no_args_is_help=True, help="Timestamped news/availability archive.")

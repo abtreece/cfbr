@@ -88,3 +88,12 @@ monthly_quota = 500
 quota_reserve = 50
 # Only combine with the CFBD line snapshot when the two were taken this close together.
 max_snapshot_gap_hours = 6.0
+
+[oddspapi]
+# OddsPapi v4: bet365 spreads for pricing paper bets only (never in the consensus).
+# Key: ODDSPAPI_KEY in the env or .keys. Free tier: 250 requests/month; one per game bet,
+# plus one fixture list per run, so only games the tracker is about to bet are fetched.
+enabled = true
+books = ["bet365"]
+monthly_quota = 250
+quota_reserve = 20

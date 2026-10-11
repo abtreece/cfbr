@@ -14,7 +14,7 @@ chmod 600 .keys
 
 The CFBD free tier allows 1,000 calls a month. A full backfill for 2014–present takes about 300 calls. Every API call is logged to `data/raw/_calls.jsonl`, and `cfbr quota` shows usage. Raw responses are cached under `data/raw/`, so re-runs make no calls (use `--refresh` to re-fetch).
 
-Paper bets also use The Odds API for US sportsbook spreads with prices. Its key goes in `.keys` as `ODDS_API_KEY` (or `ODD_API_KEY`). The free tier gives 500 credits a month, and each `cfbr weekly` run spends 2 (one per region in `[odds].regions`). Calls are logged to `data/raw/_odds_calls.jsonl`, and `cfbr quota` shows the remaining credits without spending any.
+Paper bets also use The Odds API for US sportsbook spreads with prices. Its key goes in `.keys` as `ODDS_API_KEY` (or `ODD_API_KEY`). The free tier gives 500 credits a month, and each `cfbr weekly` run spends 2 (one per region in `[odds].regions`). Calls are logged to `data/raw/_odds_calls.jsonl`, and `cfbr quota` shows the remaining credits without spending any. bet365 lines come from OddsPapi (`ODDSPAPI_KEY` in `.keys`, free tier of 250 requests a month): one request per game, fetched only for games the tracker is about to bet, logged to `data/raw/_oddspapi_calls.jsonl` and counted by `cfbr quota`.
 
 ## Commands
 

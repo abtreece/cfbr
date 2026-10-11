@@ -109,6 +109,16 @@ class Odds(BaseModel):
     max_snapshot_gap_hours: float = 6.0
 
 
+class OddsPapi(BaseModel):
+    """OddsPapi v4: bet365 lines for pricing paper bets (not in the consensus). Key: ODDSPAPI_KEY."""
+    enabled: bool = True
+    # OddsPapi bookmaker slugs fetched as extra pricing books.
+    books: list[str] = ["bet365"]
+    # Free tier: 250 requests a month; each bet's game costs one request, plus one fixture list per run.
+    monthly_quota: int = 250
+    quota_reserve: int = 20
+
+
 class Config(BaseModel):
     paths: Paths = Paths()
     ingest: Ingest = Ingest()
@@ -120,6 +130,7 @@ class Config(BaseModel):
     backtest: Backtest = Backtest()
     bets: Bets = Bets()
     odds: Odds = Odds()
+    oddspapi: OddsPapi = OddsPapi()
     source: str | None = Field(default=None, exclude=True)
 
 

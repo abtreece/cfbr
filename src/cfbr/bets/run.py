@@ -16,6 +16,7 @@ from cfbr.config import Config
 from cfbr.data import Dataset
 from cfbr.ingest.fetch import latest_lines_snapshot
 from cfbr.ingest.odds import latest_odds_snapshot, odds_frame, team_aliases
+from cfbr.ingest.oddspapi import oddspapi_key, pricing_lines
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
         placed_at, book_lines = books
         preds = pl.read_csv(preds_path)
         new = candidate_bets(preds, book_lines, placed_at, cfg.bets)
+        fresh = new.filter(~pl.col("game_id").is_in(ledger["game_id"].to_list()))
+        extra = extra_pricing_lines(cfg, games, season, fresh["game_id"].to_list())
+        if extra is not None and extra.height:
+            new = candidate_bets(preds, book_lines, placed_at, cfg.bets, extra)
         new = (new.drop("season", "week", "season_type", "fbs_game")
                .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32),
                                   "season_type", fbs_game=~(pl.col("home_fcs") | pl.col("away_fcs"))),
@@ -69,6 +74,22 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
              added, m["open"], m["settled"], m["won"], m["lost"], m["push"], m["units"],
              "n/a" if m["n_clv"] == 0 else f"{m['avg_clv']:+.2f}")
     return ledger_path
+
+
+def extra_pricing_lines(cfg: Config, games: pl.DataFrame, season: int, game_ids: list[int]) -> pl.DataFrame | None:
+    """bet365 (OddsPapi) lines for the games about to be bet. Only those games are fetched,
+    to stay inside the free tier. Any failure (no key, budget, network) just means no
+    bet365 pricing this run."""
+    if not game_ids or not cfg.oddspapi.enabled or oddspapi_key() is None:
+        return None
+    teams_path = cfg.paths.raw_dir / "teams_fbs" / str(season) / "season.json"
+    aliases = team_aliases(json.loads(teams_path.read_text())) if teams_path.exists() else {}
+    try:
+        return pricing_lines(cfg, season, games.filter(pl.col("game_id").is_in(game_ids))
+                             .select("game_id", "home_team", "away_team", "kickoff_ts"), aliases)
+    except Exception as e:  # noqa: BLE001 - pricing extras must never block recording bets
+        log.warning("OddsPapi pricing lines failed (%s); bets priced without them", e)
+        return None
 
 
 def current_books(cfg: Config, games: pl.DataFrame, season: int) -> tuple[datetime, pl.DataFrame] | None:

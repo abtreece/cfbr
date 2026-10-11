@@ -126,12 +126,16 @@ def norm_name(s: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9()]+", " ", s).split())
 
 
+# Names odds feeds use that CFBD's alternateNames lack (OddsPapi: "Miami Ohio RedHawks").
+EXTRA_NAMES = {"Miami (OH)": ["Miami Ohio"], "UL Monroe": ["Louisiana-Monroe", "Louisiana Monroe"]}
+
+
 def team_aliases(teams_json: list) -> dict[str, set[str]]:
-    """CFBD team -> normalized full names the Odds API may use ("School Mascot" for
+    """CFBD team -> normalized full names an odds feed may use ("School Mascot" for
     the school and each alternate name)."""
     out: dict[str, set[str]] = {}
     for t in teams_json:
-        names = {t["school"], *(t.get("alternateNames") or [])}
+        names = {t["school"], *(t.get("alternateNames") or []), *EXTRA_NAMES.get(t["school"], [])}
         mascot = t.get("mascot") or ""
         out[t["school"]] = {norm_name(f"{n} {mascot}") for n in names if n}
     return out
