@@ -12,3 +12,4 @@ __pycache__/
 data/.weekly.lock
 data/*.log
 data/news/
+.claude/worktrees/
