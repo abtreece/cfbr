@@ -28,9 +28,13 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     ledger = fill_books(read_ledger(ledger_path), cfg.paths.raw_dir, season, cfg.bets.offshore_books)
 
     games = ds.games.filter(pl.col("season") == season)
-    # season_type is game metadata, not a bet term, so bets recorded before the column existed get it filled.
-    ledger = (ledger.join(games.select("game_id", pl.col("season_type").alias("_st")), on="game_id", how="left")
-              .with_columns(season_type=pl.coalesce("season_type", "_st")).drop("_st"))
+    # season_type and fbs_game are game metadata, not bet terms, so bets recorded before
+    # those columns existed get them filled.
+    meta = games.select("game_id", pl.col("season_type").alias("_st"),
+                        (~(pl.col("home_fcs") | pl.col("away_fcs"))).alias("_fbs"))
+    ledger = (ledger.join(meta, on="game_id", how="left")
+              .with_columns(season_type=pl.coalesce("season_type", "_st"), fbs_game=pl.coalesce("fbs_game", "_fbs"))
+              .drop("_st", "_fbs"))
     closing = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
         "game_id", closing_line="spread")
     ledger = settle(ledger, games.select("game_id", "completed", "home_points", "away_points"), closing)
@@ -46,9 +50,9 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
         placed_at, book_lines = books
         preds = pl.read_csv(preds_path)
         new = candidate_bets(preds, book_lines, placed_at, cfg.bets)
-        new = (new.drop("season", "week", "season_type")
+        new = (new.drop("season", "week", "season_type", "fbs_game")
                .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32),
-                                  "season_type"),
+                                  "season_type", fbs_game=~(pl.col("home_fcs") | pl.col("away_fcs"))),
                      on="game_id", how="left"))
         ledger, added = add_bets(ledger, new)
 

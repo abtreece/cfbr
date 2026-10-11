@@ -41,7 +41,7 @@ LEDGER_SCHEMA = {
     "clv": pl.Float64, "units": pl.Float64,
     # Added later; older ledgers get these as nulls.
     "books": pl.Utf8, "best_status": pl.Utf8, "best_units": pl.Float64, "best_clv": pl.Float64,
-    "season_type": pl.Utf8, "best_odds": pl.Int32,
+    "season_type": pl.Utf8, "best_odds": pl.Int32, "fbs_game": pl.Boolean,
 }
 
 SETTLED = ["won", "lost", "push"]
@@ -147,6 +147,7 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         "books", pl.lit(None, pl.Utf8).alias("best_status"), pl.lit(None, pl.Float64).alias("best_units"),
         pl.lit(None, pl.Float64).alias("best_clv"), pl.lit(None, pl.Utf8).alias("season_type"),
         pl.when(home).then(pl.col("best_home_price")).otherwise(pl.col("best_away_price")).alias("best_odds"),
+        pl.lit(None, pl.Boolean).alias("fbs_game"),
     )
 
 
@@ -327,6 +328,30 @@ def _fmt(x: float, pct: bool = False, signed: bool = False) -> str:
     return f"{x:+.2f}" if signed else f"{x:.2f}"
 
 
+def tests_markdown(ledger: pl.DataFrame, cfg: Bets) -> list[str]:
+    from cfbr.bets.experiments import tracked_tests
+
+    lines = ["## Tracked tests", "",
+             "Pre-registered splits of the bets above (rules fixed 2026-10-11, see DECISIONS.md). They don't change "
+             "which bets are recorded. Primary metric: the gap in average CLV between the two groups.", ""]
+    for t in tracked_tests(ledger, cfg):
+        lines += [f"### {t['name']}", "", t["question"], "",
+                  "| group | settled | W-L-P | win % | $ | ROI | avg CLV (pts) |", "|---|---|---|---|---|---|---|"]
+        lines += [f"| {g['label']} | {g['settled']} | {g['won']}-{g['lost']}-{g['push']} | {_fmt(g['win_rate'], pct=True)} | "
+                  f"{money(g['dollars'])} | {_fmt(g['roi'], pct=True)} | {_fmt(g['avg_clv'], signed=True)} |"
+                  for g in t["groups"]]
+        gap = (f"CLV gap (first group − second): {_fmt(t['gap'], signed=True)} "
+               f"[{_fmt(t['ci95'][0], signed=True)}, {_fmt(t['ci95'][1], signed=True)}]")
+        if t["enough_data"]:
+            status = f"{gap}. Decision {t['decision_point']}."
+        else:
+            status = (f"**No conclusion yet**: {t['n_in']} and {t['n_out']} bets with a closing line; the pre-set minimum "
+                      f"is {t['min_clv_bets']} per group by {t['decision_point']} (otherwise it carries over to 2027). "
+                      f"So far, {gap[0].lower() + gap[1:]}, which is noise until then.")
+        lines += ["", status, "", f"Decision rule: {t['decision']}", ""]
+    return lines
+
+
 def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
     def row(title: str, m: dict) -> str:
         return (f"| {title} | {m['settled']} | {m['won']}-{m['lost']}-{m['push']} | {_fmt(m['win_rate'], pct=True)} "
@@ -391,6 +416,7 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
                      f"{_fmt(t['win_rate'], pct=True)} [{_fmt(t['ci95'][0], pct=True)}, {_fmt(t['ci95'][1], pct=True)}] | "
                      f"{_fmt(t['units'], signed=True)} | {money(t['dollars'])} | {_fmt(t['roi'], pct=True)} | {bt_txt} |")
     lines.append("")
+    lines += tests_markdown(ledger, cfg)
     opn = ledger.filter(pl.col("status") == "open").with_columns(tier=tier_expr(cfg)).sort("kickoff_ts")
     if opn.height:
         lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | model (home margin) | edge | best available | all books (home spread, home/away price) |",

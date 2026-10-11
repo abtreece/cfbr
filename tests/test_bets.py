@@ -1,3 +1,4 @@
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -221,3 +222,34 @@ def test_bets_with_unknown_week_dont_break_the_summary():
     d = _ledger([_settled(1, None, 4, "won", None), _settled(2, 7, 4, "lost", None)])
     assert [w["label"] for w in weekly(d, CFG)] == ["Week 7", "Week ?"]
     summary_markdown(d, CFG, 2026)
+
+
+def test_tracked_tests_split_the_ledger_by_fixed_rules():
+    from cfbr.bets.experiments import clv_gap, tracked_tests
+
+    def row(gid, week, line, fbs, placed, clv_, status="won", season_type="regular"):
+        r = _settled(gid, week, 4, status, season_type)
+        return r | {"line": line, "fbs_game": fbs, "placed_at": placed, "clv": clv_}
+
+    early, late = "2026-10-11T14:05:00+00:00", "2026-10-11T20:05:00+00:00"
+    d = _ledger([
+        row(1, 7, -7.0, True, early, 1.0),                  # core, first capture
+        row(2, 7, -24.5, True, early, -0.5, "lost"),        # line > 21: out
+        row(3, 7, -3.0, False, late, 0.0, "lost"),          # FCS opponent: out; added at a later run
+        row(4, 1, -3.0, True, early, 0.5),                  # week 1: out
+        row(5, 1, -3.0, True, early, 0.5, "won", "postseason"),  # postseason "week 1" is not week 1
+        row(6, 8, 2.5, None, late, 2.0),                    # unknown FBS status: out; first capture of week 8
+    ])
+    t1, t2 = tracked_tests(d, CFG)
+    assert t1["key"] == "core_filter" and [g["settled"] for g in t1["groups"]] == [2, 4]
+    assert t1["groups"][0]["won"] == 2 and t1["n_in"] == 2 and t1["n_out"] == 4
+    assert t1["gap"] == pytest.approx(0.75 - 0.5)  # mean(1, .5) - mean(-.5, 0, .5, 2)
+    # Second look: only game 3 came after its week's first capture (week 8's lone bet is its first).
+    assert t2["key"] == "second_look" and [g["settled"] for g in t2["groups"]] == [5, 1]
+    assert not t1["enough_data"] and not t2["enough_data"]
+    g = clv_gap(pl.Series([1.0, 2.0, 3.0]), pl.Series([0.0, 1.0, 2.0]))
+    assert g["gap"] == pytest.approx(1.0) and g["ci95"][0] < 1.0 < g["ci95"][1]
+    assert math.isnan(clv_gap(pl.Series([1.0]), pl.Series([0.0, 1.0]))["gap"])
+    md = summary_markdown(d, CFG, 2026)
+    assert "## Tracked tests" in md and "### T1 · Core filter" in md and "**No conclusion yet**" in md
+    assert "the pre-set minimum is 50 per group" in md

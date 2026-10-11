@@ -155,6 +155,41 @@
 </table>
 </div>
 
+<h2>Tracked tests</h2>
+<p class="note">Pre-registered splits of the bets above, with rules fixed on Oct 11, 2026 before any of these bets settled. They don't change
+  which bets are recorded. The main measure is the gap in average closing-line value (CLV) between the two groups, which is far
+  less noisy than win rate.</p>
+{% for t in tests %}
+<h3>{{ t.name }}</h3>
+<p class="note">{{ t.question }}</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Group</th><th class="num opt">Settled</th><th class="num">W–L–P</th><th class="num">Win %</th>
+    <th class="num">$</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th></tr></thead>
+  <tbody>
+  {% for g in t.groups %}
+    <tr>
+      <td class="team wrap">{{ g.label }}</td><td class="num opt">{{ g.settled }}</td><td class="num">{{ g.won }}–{{ g.lost }}–{{ g.push }}</td>
+      <td class="num">{{ g.win_rate|pct if g.won + g.lost else "—" }}</td>
+      <td class="num strong">{{ g.dollars|money }}</td><td class="num opt">{{ g.roi|pct }}</td>
+      <td class="num opt">{{ g.avg_clv|signed(2) if g.n_clv else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% set gap %}{{ t.gap|signed(2) }} pts{% if t.n_in >= 2 and t.n_out >= 2 %} [{{ t.ci95[0]|signed(2) }}, {{ t.ci95[1]|signed(2) }}]{% endif %}{% endset %}
+<p class="note">
+  {% if t.enough_data %}
+  CLV gap (first group − second): <strong>{{ gap }}</strong>. Decision {{ t.decision_point }}.
+  {% else %}
+  <strong>No conclusion yet.</strong> {{ t.n_in }} and {{ t.n_out }} bets with a closing line, of the {{ t.min_clv_bets }} per group set as the minimum
+  by {{ t.decision_point }} (if not reached, the test carries over to 2027).{% if t.n_in >= 2 and t.n_out >= 2 %} The CLV gap so far, {{ gap }}, is noise until then.{% endif %}
+  {% endif %}
+  <br>Decision rule: {{ t.decision }}
+</p>
+{% endfor %}
+
 {% if settled %}
 <h2>Settled bets</h2>
 <div class="table-wrap">

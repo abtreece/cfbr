@@ -433,6 +433,9 @@ def test_bets_page(bets_client):
     assert "Week by week" in html and "Week 6" in html and "−$1" in html and "$22 at risk" in html
     assert "$999" in html and "$1,000 bankroll" in html
     assert "By edge tier" in html and "Small edge (3–6 pts)" in html and "$11 / $10" in html
+    # Tracked tests: rule, pre-set minimum and "no conclusion yet" framing are shown.
+    assert "Tracked tests" in html and "T1 · Core filter" in html and "T2 · Second-look bets" in html
+    assert "No conclusion yet." in html and "of the 50 per group set as the minimum" in html and "Decision rule:" in html
 
 
 def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
@@ -449,6 +452,8 @@ def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
     assert [w["label"] for w in body["weekly"]] == ["Week 6"] and body["weekly"][0]["cum_dollars"] == pytest.approx(-1)
     assert body["weekly"][0]["balance"] == pytest.approx(999) and body["summary"]["balance"] == pytest.approx(999)
     assert [t["name"] for t in body["tiers"]] == ["Small", "Medium", "Large"]
+    assert [t["key"] for t in body["tests"]] == ["core_filter", "second_look"]
+    assert sum(g["settled"] for g in body["tests"][0]["groups"]) == m["settled"]
     assert {b["tier"] for b in body["bets"]} <= {"Small", "Medium", "Large"}
 
 

@@ -15,6 +15,7 @@ import polars as pl
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
+from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly
 from cfbr.config import Config
 from cfbr.web.access import bets_access
@@ -109,6 +110,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                 fbs = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
             ctx |= {"summary": summarize(ledger, cfg.bets), "best": summarize(ledger, cfg.bets, "best"),
                     "breakdown": breakdown(ledger, cfg), "weeks": weeks, "tiers": by_tier(ledger, cfg.bets),
+                    "tests": tracked_tests(ledger, cfg.bets),
                     "open_bets": [r for r in rows if r["status"] == "open"],
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
@@ -132,6 +134,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             "summary_best_line": clean_summary(summarize(ledger, cfg.bets, "best")),
             "weekly": [clean_summary(w) for w in weekly(ledger, cfg.bets)],
             "tiers": [clean_summary(t) for t in by_tier(ledger, cfg.bets)],
+            "tests": [clean_summary(t) | {"groups": [clean_summary(g) for g in t["groups"]]}
+                      for t in tracked_tests(ledger, cfg.bets)],
             "bets": (ledger.with_columns(tier=tier_expr(cfg.bets), dollars=pl.col("units") * cfg.bets.unit_value)
                      .sort("kickoff_ts", "game_id").to_dicts()),
         })
