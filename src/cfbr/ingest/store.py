@@ -243,10 +243,12 @@ def build_player_ppa(raw: Path) -> pl.DataFrame:
                 "total_ppa": tot.get("all"), "avg_ppa": avg.get("all"), "plays": plays or None,
                 "pass_ppa": tot.get("pass"), "avg_pass_ppa": avg.get("pass"),
                 "pass_plays": (c.get("pass_att") or None) if c else None,
+                "rush_car": c.get("rush_car") if c else None, "rec": c.get("rec") if c else None,
             })
     return pl.DataFrame(rows, schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8, "position": pl.Utf8,
                                       "total_ppa": pl.Float64, "avg_ppa": pl.Float64, "plays": pl.Float64,
-                                      "pass_ppa": pl.Float64, "avg_pass_ppa": pl.Float64, "pass_plays": pl.Float64})
+                                      "pass_ppa": pl.Float64, "avg_pass_ppa": pl.Float64, "pass_plays": pl.Float64,
+                                      "rush_car": pl.Float64, "rec": pl.Float64})
 
 
 DEF_STATS = {("defensive", "TOT"): "tackles", ("defensive", "TFL"): "tfl", ("defensive", "SACKS"): "sacks",
@@ -275,7 +277,7 @@ def build_player_defense(raw: Path) -> pl.DataFrame:
     for c in cols:
         if c not in wide.columns:
             wide = wide.with_columns(pl.lit(0.0).alias(c))
-    return wide.select("season", "player_id", "team", *cols).fill_null(0.0)
+    return wide.select("season", "player_id", "team", *[pl.col(c).fill_null(0.0) for c in cols])
 
 
 GAME_PLAYER_STATS = {

@@ -20,6 +20,16 @@ Columns (null = unknown):
   roster_departures  season, team (the team they left), player_id, name, position, to_team
                      (this season's roster they appear on, else null), prev_plays,
                      prev_ppa_total, prev_tackles, prev_havoc
+  roster_careers     one row per player per season of history, for players on this season's
+                     roster: season (display season), team (current team), player_id,
+                     career_season, career_team, source ("season stats" for completed
+                     seasons, "box scores (to date)" for the current season), games,
+                     qb_starts (games he led his team in pass attempts, 5+), plays (pass
+                     att + carries + receptions), pass_att, rush_car, rec, ppa_total,
+                     ppa_avg, pass_ppa_total, pass_ppa_avg, tackles, tfl, sacks, pd,
+                     hurries, ints. PPA, sacks and hurries are null for to-date rows;
+                     defense is null before 2016; games/qb_starts only count games
+                     involving an FBS team. Labels: CAREER_LABELS
   roster_summary     season, team, roster_as_of (UTC time the roster snapshot was fetched),
                      the features in ROSTER_SUMMARY_LABELS, and the incoming-QB display fields
                      in ROSTER_SUMMARY_EXTRA_LABELS
@@ -64,6 +74,35 @@ ROSTER_SUMMARY_EXTRA_LABELS: dict[str, tuple[str, str]] = {
     "in_qb_pass_att": ("Pass attempts", "His pass attempts last season (count)"),
     "in_qb_pass_ppa_avg": ("PPA per pass", "His passing PPA per attempt last season"),
     "in_qb_pass_ppa_total": ("Passing PPA", "His total passing PPA last season"),
+}
+
+# Extra roster_players columns: experience before this season.
+PLAYER_EXTRA_LABELS: dict[str, tuple[str, str]] = {
+    "career_seasons": ("Seasons played", "Prior seasons with any recorded stats (count)"),
+    "career_pass_att": ("Career pass attempts", "Pass attempts in prior seasons, all schools (count)"),
+    "career_qb_starts": ("Career QB starts", "Prior-season games he led his team in pass attempts (5+), FBS-involved games only"),
+}
+
+CAREER_LABELS: dict[str, tuple[str, str]] = {
+    "career_season": ("Season", "Season the row describes"),
+    "career_team": ("Team", "School he played for that season"),
+    "source": ("Source", "'season stats' (completed season) or 'box scores (to date)' (current season)"),
+    "games": ("G", "Games with a recorded stat (FBS-involved games only)"),
+    "qb_starts": ("QB starts", "Games he led his team in pass attempts (5+)"),
+    "plays": ("Plays", "Pass attempts + carries + receptions"),
+    "pass_att": ("Pass att", "Pass attempts"),
+    "rush_car": ("Car", "Carries"),
+    "rec": ("Rec", "Receptions"),
+    "ppa_total": ("PPA", "Total expected points added (offense)"),
+    "ppa_avg": ("PPA/play", "Expected points added per play"),
+    "pass_ppa_total": ("Pass PPA", "Total passing PPA"),
+    "pass_ppa_avg": ("Pass PPA/att", "Passing PPA per attempt"),
+    "tackles": ("Tkl", "Total tackles"),
+    "tfl": ("TFL", "Tackles for loss"),
+    "sacks": ("Sacks", "Sacks"),
+    "pd": ("PD", "Passes defended"),
+    "hurries": ("Hur", "QB hurries"),
+    "ints": ("INT", "Interceptions"),
 }
 
 PLAYER_COLS = ["player_id", "name", "jersey", "position", "class_year", "height", "weight", "home_city", "home_state"]
@@ -143,11 +182,73 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
     summary = (summary.join(in_qb, on="team", how="left")
                .with_columns(season=pl.lit(season, pl.Int32), roster_as_of=pl.lit(as_of, pl.Datetime("us", "UTC")))
                .select("season", "team", "roster_as_of", *ROSTER_FEATURES, *ROSTER_SUMMARY_EXTRA_LABELS).sort("team"))
-    return {"roster_players": players, "roster_departures": departures, "roster_summary": summary}
+    careers = career_tables(ds, season, players)
+    players = (players.join(experience(careers, season), on="player_id", how="left")
+               .with_columns(career_seasons=pl.col("career_seasons").fill_null(0),
+                             career_pass_att=pl.col("career_pass_att").fill_null(0.0),
+                             career_qb_starts=pl.col("career_qb_starts").fill_null(0.0)))
+    return {"roster_players": players, "roster_departures": departures, "roster_summary": summary,
+            "roster_careers": careers}
+
+
+def _qb_starts(gp: pl.DataFrame) -> pl.DataFrame:
+    """Per (season, player_id): games played and games he led his team in pass attempts (5+)."""
+    lead = gp.with_columns(top=pl.col("pass_att").max().over("game_id", "team"))
+    return lead.group_by("season", "player_id").agg(
+        games=pl.col("game_id").n_unique().cast(pl.Float64),
+        qb_starts=((pl.col("pass_att") == pl.col("top")) & (pl.col("pass_att") >= 5)).sum().cast(pl.Float64))
+
+
+def career_tables(ds: Dataset, season: int, players: pl.DataFrame) -> pl.DataFrame:
+    """Season-by-season history (all schools) for players on this season's roster."""
+    ids = players.select("player_id", "team")
+    ppa = ds.player_ppa.with_columns([pl.lit(None, pl.Float64).alias(c) for c in ("rush_car", "rec")
+                                      if c not in ds.player_ppa.columns])  # stores built before these existed
+    off = ppa.filter(pl.col("season") < season).select(
+        "season", "player_id", career_team="team", plays="plays", pass_att="pass_plays", rush_car="rush_car",
+        rec="rec", ppa_total="total_ppa", ppa_avg="avg_ppa", pass_ppa_total="pass_ppa", pass_ppa_avg="avg_pass_ppa")
+    de = (ds.player_defense
+          .filter((pl.col("season") < season) & ((pl.col("tackles") + pl.col("pd") + pl.col("ints")) > 0))
+          .select("season", "player_id", "tackles", "tfl", "sacks", "pd", "hurries", "ints", career_team_d="team"))
+    hist = (off.join(de, on=["season", "player_id"], how="full", coalesce=True)
+            .with_columns(career_team=pl.coalesce("career_team", "career_team_d"), source=pl.lit("season stats"))
+            .drop("career_team_d"))
+    gp = getattr(ds, "game_players", None)
+    if gp is not None and gp.height:
+        starts = _qb_starts(gp)
+        hist = hist.join(starts, on=["season", "player_id"], how="left")
+        cur = gp.filter(pl.col("season") == season)
+        if cur.height:
+            to_date = (cur.group_by("season", "player_id").agg(
+                career_team=pl.col("team").last(), pass_att=pl.col("pass_att").sum(), rush_car=pl.col("rush_att").sum(),
+                rec=pl.col("rec").sum(), tackles=pl.col("tackles").sum(), tfl=pl.col("tfl").sum(),
+                pd=pl.col("pd").sum(), ints=pl.col("ints").sum())
+                .with_columns(plays=pl.col("pass_att") + pl.col("rush_car") + pl.col("rec"),
+                              source=pl.lit("box scores (to date)"))
+                .join(starts, on=["season", "player_id"], how="left"))
+            hist = pl.concat([hist, to_date], how="diagonal_relaxed")
+    else:
+        hist = hist.with_columns(games=pl.lit(None, pl.Float64), qb_starts=pl.lit(None, pl.Float64))
+    cols = [c for c in CAREER_LABELS if c != "career_season"]
+    out = (hist.rename({"season": "career_season"}).join(ids, on="player_id", how="inner")
+           .with_columns(season=pl.lit(season, pl.Int32)))
+    for c in cols:
+        if c not in out.columns:
+            out = out.with_columns(pl.lit(None, pl.Float64).alias(c))
+    return out.select("season", "team", "player_id", "career_season", *cols).sort("team", "player_id", "career_season")
+
+
+def experience(careers: pl.DataFrame, season: int) -> pl.DataFrame:
+    """Experience before ``season`` per player, from his career rows."""
+    prior = careers.filter(pl.col("career_season") < season)
+    return prior.group_by("player_id").agg(
+        career_seasons=pl.col("career_season").n_unique().cast(pl.Int32),
+        career_pass_att=pl.col("pass_att").fill_null(0).sum(),
+        career_qb_starts=pl.col("qb_starts").fill_null(0).sum())
 
 
 def write_roster_web(cfg: Config, ds: Dataset, season: int, out_dir: Path | None = None) -> dict[str, Path]:
-    """Write the three roster parquet files to out/web/{season}/ (temp file +
+    """Write the roster parquet files (players, departures, summary, careers) to out/web/{season}/ (temp file +
     rename). Returns {} and writes nothing when the season has no roster."""
     tables = roster_tables(ds, season, roster_as_of(cfg, season, ds))
     if not tables:

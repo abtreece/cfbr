@@ -141,3 +141,37 @@ def test_build_roster_latest_picks_newest_weekly_file(tmp_path):
     latest = build_roster_latest(tmp_path)
     assert sorted(latest["player_id"].to_list()) == ["1", "2", "3"]         # display: newest weekly
     assert latest["as_of"][0].timestamp() == 1_800_000_000
+
+
+def test_career_history_and_qb_experience():
+    from types import SimpleNamespace
+
+    from cfbr.report.roster_web import CAREER_LABELS, roster_tables
+
+    roster, ppa, d, status = _data()
+    roster = roster.with_columns(name=pl.col("player_id"), jersey=pl.lit(None, pl.Int32), height=pl.lit(None, pl.Int32),
+                                 weight=pl.lit(None, pl.Int32), home_city=pl.lit(None, pl.Utf8),
+                                 home_state=pl.lit(None, pl.Utf8))
+    ppa = ppa.with_columns(rush_car=pl.lit(10.0), rec=pl.lit(0.0))
+    older = ppa.filter(pl.col("player_id") == "qbB").with_columns(season=pl.lit(2024, pl.Int64), pass_plays=pl.lit(200.0))
+    ppa = pl.concat([ppa, older.cast(ppa.schema)])
+
+    def gp_row(season, game, team, pid, att):
+        return {"season": season, "season_type": "regular", "week": 1, "game_id": game, "team": team,
+                "player_id": pid, "name": pid, "pass_cmp": 0.0, "pass_att": float(att), "rush_att": 0.0, "rec": 0.0,
+                "tackles": 0.0, "tfl": 0.0, "pd": 0.0, "ints": 0.0}
+    gp = pl.DataFrame([gp_row(2025, 1, "B", "qbB", 30), gp_row(2025, 1, "B", "rbB", 2),   # qbB starts
+                       gp_row(2025, 2, "B", "qbB", 3), gp_row(2025, 2, "B", "qbB2", 25),  # backup starts
+                       gp_row(2026, 3, "A", "qbB", 28)])                                  # this season, at A
+    ds = SimpleNamespace(roster=roster, player_ppa=ppa, player_defense=d, team_status=status, game_players=gp,
+                         fbs_teams=lambda s: ["A", "B"])
+    t = roster_tables(ds, 2026)
+    c = t["roster_careers"].filter(pl.col("player_id") == "qbB").sort("career_season")
+    assert c["career_season"].to_list() == [2024, 2025, 2026]
+    assert c["source"].to_list() == ["season stats", "season stats", "box scores (to date)"]
+    assert c["career_team"].to_list() == ["B", "B", "A"] and set(c["team"]) == {"A"}
+    assert c.filter(pl.col("career_season") == 2025)["qb_starts"].item() == 1.0        # led B in game 1 only
+    assert c.filter(pl.col("career_season") == 2026)["pass_att"].item() == 28.0
+    assert t["roster_careers"].columns[4:] == [k for k in CAREER_LABELS if k != "career_season"]
+    q = t["roster_players"].filter(pl.col("player_id") == "qbB").row(0, named=True)
+    assert q["career_seasons"] == 2 and q["career_pass_att"] == 530.0 and q["career_qb_starts"] == 1.0
