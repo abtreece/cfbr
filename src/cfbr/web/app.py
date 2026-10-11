@@ -24,6 +24,8 @@ from cfbr.web.access import premium_viewer
 from cfbr.web.bets import NO_STORE, price_str, spread_str
 from cfbr.web.bets import make_router as bets_router
 from cfbr.web.build import FINAL, STALE_GAME, web_dir
+from cfbr.web.roster import count_str, roster_card
+from cfbr.web.roster import make_router as roster_router
 from cfbr.web.store import Season, Store
 
 HERE = Path(__file__).parent
@@ -270,7 +272,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     env.auto_reload = False
     app.state.templates = templates
     env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
-                    "spread": spread_str, "price": price_str,
+                    "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL}
 
@@ -367,7 +369,8 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         resp = render(request, "team.html", s=s, season=season, team=team, hist=hist.to_dicts(),
                       latest=hist.to_dicts()[-1], games=games, fbs_teams=fbs_teams, team_seasons=team_seasons,
                       show_cfp=hist["cfp_rank"].is_not_null().any(), polls=poll_note(s, hist["week"][-1]),
-                      chart=None if locked else clean(chart), is_fbs=team in fbs_teams, locked=locked)
+                      chart=None if locked else clean(chart), is_fbs=team in fbs_teams, locked=locked,
+                      roster=roster_card(store.roster(season), team))
         return private(resp, s)
 
     @app.get("/games", response_class=HTMLResponse, include_in_schema=False)
@@ -452,5 +455,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
 
     # Paper bets: a separate router behind its own access gate (see cfbr.web.access).
     app.include_router(bets_router(cfg, store, render))
+    # Rosters: public facts, free for everyone (see cfbr.web.roster).
+    app.include_router(roster_router(store, render))
 
     return app

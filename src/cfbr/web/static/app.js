@@ -5,6 +5,18 @@ document.querySelectorAll("select[data-autosubmit]").forEach((sel) => {
   sel.addEventListener("change", () => sel.form.requestSubmit());
 });
 
+// -- row filters: <select data-row-filter="tableId" data-attr="pos"> hides rows whose data-pos differs --
+document.querySelectorAll("select[data-row-filter]").forEach((sel) => {
+  sel.addEventListener("change", () => {
+    const id = sel.dataset.rowFilter;
+    const active = Array.from(document.querySelectorAll(`select[data-row-filter="${id}"]`))
+      .filter((s) => s.value).map((s) => [s.dataset.attr, s.value]);
+    document.querySelectorAll(`#${id} tbody tr`).forEach((tr) => {
+      tr.hidden = !active.every(([attr, value]) => tr.dataset[attr] === value);
+    });
+  });
+});
+
 // -- theme toggle --------------------------------------------------------------------
 document.getElementById("theme-toggle")?.addEventListener("click", () => {
   const root = document.documentElement;

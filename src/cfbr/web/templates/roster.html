@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% from "macros.html" import tile, team_link %}
+{% block title %}{{ team }} {{ season }} roster · CFB Ratings{% endblock %}
+{% block content %}
+<form class="filters" method="get" onsubmit="location.href='/roster/'+this.season.value+'/{{ team|q }}'; return false;">
+  {% if roster_seasons|length > 1 %}
+  <label>Season
+    <select name="season" data-autosubmit>
+      {% for y in roster_seasons|reverse %}<option value="{{ y }}" {% if y == season %}selected{% endif %}>{{ y }}</option>{% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <a class="back" href="/team/{{ season }}/{{ team|q }}">← {{ team }} {{ season }}</a>
+</form>
+
+<h1>{{ team }} <span class="muted">{{ season }} roster</span></h1>
+<p class="lede">Who is on the roster, where transfers came from, who left, and what each player did last season.
+  {% if as_of %}Roster as of {{ as_of|short_ts }} {{ tz_label }}.{% endif %}</p>
+
+{% if card %}
+<div class="tiles">
+  {{ tile("Players", card.size, card.returners ~ " returners · " ~ card.transfers_in ~ " transfers in · " ~ card.no_stats ~ " no prior stats") }}
+  {{ tile("Departures", card.departures, card.transfers_out ~ " now on another roster") }}
+  {% for t in tiles %}{% if t.key in ("off_ret_share", "qb_returns", "def_ret_tackles", "qb_in_ppa") %}{{ tile(t.label, t.value) }}{% endif %}{% endfor %}
+</div>
+{% endif %}
+
+{% if tiles %}
+<details class="rules">
+  <summary>Roster summary in full</summary>
+  <div class="table-wrap">
+  <table class="data">
+    <thead><tr><th>Measure</th><th class="num">{{ team }}</th><th class="opt">What it means</th></tr></thead>
+    <tbody>
+    {% for t in tiles %}<tr><td class="team">{{ t.label }}</td><td class="num strong">{{ t.value }}</td><td class="wrap opt">{{ t.definition }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
+
+<h2>Roster</h2>
+<form class="filters" onsubmit="return false;">
+  <label>Position
+    <select data-row-filter="roster" data-attr="pos">
+      <option value="">All</option>
+      {% for p in positions %}<option>{{ p }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Status
+    <select data-row-filter="roster" data-attr="status">
+      <option value="">All</option>
+      <option value="returner">Returners</option>
+      <option value="transfer_in">Transfers in</option>
+      <option value="new">No prior stats</option>
+    </select>
+  </label>
+</form>
+<div class="table-wrap">
+<table class="data sortable" id="roster">
+  <thead><tr>
+    <th data-sort="num" class="num opt">#</th><th data-sort="text">Name</th><th data-sort="text">Pos</th>
+    <th data-sort="num" data-first="asc" class="num opt">Class</th><th data-sort="num" class="num opt">Ht</th><th data-sort="num" class="num opt">Wt</th>
+    <th data-sort="text" class="opt">Hometown</th><th data-sort="text">Status</th>
+    <th data-sort="num" class="num" title="Plays with a recorded result last season, at any school">Plays</th>
+    <th data-sort="num" class="num opt" title="Expected points added per play last season">PPA/play</th>
+    <th data-sort="num" class="num opt-xs" title="Tackles last season, at any school">Tkl</th>
+    <th data-sort="num" class="num opt" title="Tackles for loss + passes defended + interceptions last season">Havoc</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr data-pos="{{ r.position or '' }}" data-status="{{ r.status }}">
+      <td class="num opt" data-v="{{ r.jersey if r.jersey is not none else 999 }}">{{ r.jersey if r.jersey is not none else "—" }}</td>
+      <td class="team strong">{{ r.name }}</td>
+      <td data-v="{{ r.pos_order }}">{{ r.position or "—" }}</td>
+      <td class="num opt" data-v="{{ r.class_year or 9 }}">{{ r.class_label }}</td>
+      <td class="num opt" data-v="{{ r.height or 0 }}">{{ r.height_label }}</td>
+      <td class="num opt" data-v="{{ r.weight or 0 }}">{{ r.weight or "—" }}</td>
+      <td class="opt">{{ r.hometown }}</td>
+      <td class="team">{% if r.status == "transfer_in" %}Transfer{% if r.from_team %} from {{ team_link(r.from_team, season - 1, fbs_teams) }}{% endif %}
+          {% elif r.status == "returner" %}Returner{% else %}<span class="muted">No prior stats</span>{% endif %}</td>
+      <td class="num" data-v="{{ r.prev_plays or 0 }}">{{ r.prev_plays|count }}</td>
+      <td class="num opt" data-v="{{ r.prev_ppa_avg if r.prev_ppa_avg is not none else -99 }}">{{ r.prev_ppa_avg|signed(2) }}</td>
+      <td class="num opt-xs" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
+      <td class="num opt" data-v="{{ r.prev_havoc or 0 }}">{{ r.prev_havoc|count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Last-season numbers are at whatever school the player was on. "No prior stats" means no box-score production last season:
+  freshmen, most offensive linemen, and anyone without recorded stats. Rosters come from CFBD and are imperfect.</p>
+
+<h2>Departures</h2>
+{% if departures %}
+<div class="table-wrap">
+<table class="data sortable">
+  <thead><tr><th data-sort="text">Name</th><th data-sort="text">Pos</th><th data-sort="text">Now at</th>
+    <th data-sort="num" class="num">Plays</th><th data-sort="num" class="num opt">PPA total</th>
+    <th data-sort="num" class="num">Tkl</th><th data-sort="num" class="num opt">Havoc</th></tr></thead>
+  <tbody>
+  {% for r in departures %}
+    <tr>
+      <td class="team strong">{{ r.name }}</td><td>{{ r.position or "—" }}</td>
+      <td class="team">{% if r.to_team %}{{ team_link(r.to_team, season, fbs_teams) }}{% else %}<span class="muted">not on a roster</span>{% endif %}</td>
+      <td class="num" data-v="{{ r.prev_plays or 0 }}">{{ r.prev_plays|count }}</td>
+      <td class="num opt" data-v="{{ r.prev_ppa_total if r.prev_ppa_total is not none else -999 }}">{{ r.prev_ppa_total|signed(0) }}</td>
+      <td class="num" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
+      <td class="num opt" data-v="{{ r.prev_havoc or 0 }}">{{ r.prev_havoc|count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Players on last season's roster who are not on this one. "Not on a roster" covers graduation, the draft, leaving football, and players CFBD's roster misses.</p>
+{% else %}
+<p class="muted">No departures recorded.</p>
+{% endif %}
+{% endblock %}

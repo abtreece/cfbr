@@ -185,3 +185,8 @@ details.rules { margin: 0 0 20px; color: var(--text-2); font-size: 14px; }
 details.rules summary { cursor: pointer; font-size: 13px; }
 details.rules ul { margin: 8px 0 0; padding-left: 20px; }
 details.rules li { margin: 3px 0; }
+
+/* The narrowest phones drop one more secondary column (e.g. tackles on the roster). */
+@media (max-width: 370px) {
+  table.data .opt-xs { display: none; }
+}

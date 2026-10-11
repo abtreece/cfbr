@@ -20,6 +20,9 @@ from cfbr.data import Dataset
 from cfbr.ingest.fetch import current_season
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
+from cfbr.report.roster_web import write_roster_web
+
+ROSTER_FILES = ("roster_players", "roster_departures", "roster_summary")
 
 log = logging.getLogger(__name__)
 
@@ -173,6 +176,12 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
         tmp = out / f".{name}.parquet.tmp"
         df.write_parquet(tmp)
         tmp.replace(out / f"{name}.parquet")
+    # Roster facts (who's on the team, transfers, departures). Optional: a season
+    # without roster data, or a failure here, must not hold up the ratings.
+    try:
+        write_roster_web(eng.cfg, eng.ds, season, out)
+    except Exception:
+        log.exception("roster web data for %d failed; continuing without it", season)
     meta = {
         "season": season,
         "built_at": now.isoformat(timespec="seconds"),
@@ -182,6 +191,7 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
         "labels": dict(ratings.select("week", "label").unique().sort("week").iter_rows()),
         # Poll week shown beside each table (int, "final", or null if not released yet).
         "polls": {w: timeline_polls(eng.ds.polls, season, w)[1] for w in sorted(set(ratings["week"].to_list()))},
+        "roster": all((out / f"{n}.parquet").exists() for n in ROSTER_FILES),
     }
     tmp = out / ".meta.json.tmp"
     tmp.write_text(json.dumps(meta, indent=2, default=str))

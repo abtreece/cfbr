@@ -36,6 +36,14 @@ class Season:
 
 
 @dataclass(frozen=True)
+class Roster:
+    """A season's roster facts (see cfbr.report.roster_web): public, not model output."""
+    players: pl.DataFrame
+    departures: pl.DataFrame
+    summary: pl.DataFrame
+
+
+@dataclass(frozen=True)
 class Run:
     run_id: str
     metrics: dict
@@ -51,6 +59,7 @@ class Store:
         self._runs: dict[str, tuple[float, Run]] = {}
         self._bets: dict[int, tuple[float, pl.DataFrame]] = {}
         self._retro: dict[int, tuple[float, pl.DataFrame]] = {}
+        self._rosters: dict[int, tuple[float, Roster | None]] = {}
 
     def seasons(self) -> list[int]:
         if not self.web_root.is_dir():
@@ -134,6 +143,24 @@ class Store:
                     return hit[1] if hit else None
                 cache[season] = hit
             return hit[1]
+
+    def roster(self, season: int) -> Roster | None:
+        """The season's roster files, written by the web build before meta.json, so
+        meta.json's mtime is the reload signal here too. None if the build had none."""
+        meta_path = self.web_root / str(season) / "meta.json"
+        try:
+            mtime = meta_path.stat().st_mtime
+        except FileNotFoundError:
+            return None
+        with self._lock:
+            hit = self._rosters.get(season)
+            if hit and hit[0] == mtime:
+                return hit[1]
+            d = meta_path.parent
+            files = [d / f"{n}.parquet" for n in ("roster_players", "roster_departures", "roster_summary")]
+            r = Roster(*(pl.read_parquet(f) for f in files)) if all(f.exists() for f in files) else None
+            self._rosters[season] = (mtime, r)
+            return r
 
     def accuracy_log(self, season: int) -> pl.DataFrame | None:
         """Season-to-date lines appended by ``cfbr weekly``."""

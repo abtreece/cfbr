@@ -645,3 +645,109 @@ def test_bankroll_chart_is_formatted_as_dollars():
 def test_templates_do_not_hot_reload(web_cfg):
     """Templates change only on restart, together with the code that renders them."""
     assert create_app(web_cfg).state.templates.env.auto_reload is False
+
+
+# -- rosters: public facts, free even for a live season ----------------------------------
+
+def _write_roster(season_dir):
+    """Synthetic roster files next to a season's ratings, then touch meta.json (the reload signal)."""
+    from cfbr.report.roster_web import ROSTER_SUMMARY_LABELS
+
+    players = pl.DataFrame({
+        "season": [SEASON] * 4, "team": ["Texas A&M", "Texas A&M", "Texas A&M", "Ohio State"],
+        "player_id": ["1", "2", "3", "4"], "name": ["Sam Starter", "Tom Transfer", "<i>Fresh</i> Man", "Oscar Buckeye"],
+        "jersey": [7, 12, None, 1], "position": ["QB", "QB", "OL", "WR"], "class_year": [4, 5, 1, 2],
+        "height": [74, 75, 78, None], "weight": [215, 220, 310, 190], "home_city": ["Austin", "Tulsa", None, "Columbus"],
+        "home_state": ["TX", "OK", None, "OH"], "status": ["returner", "transfer_in", "new", "returner"],
+        "from_team": [None, "Hawai'i", None, None], "prev_plays": [412, 288, None, 61],
+        "prev_ppa_total": [130.5, 70.1, None, 40.0], "prev_ppa_avg": [0.317, 0.243, None, 0.656],
+        "prev_pass_plays": [380, 260, None, 0], "prev_pass_ppa_total": [120.0, 60.0, None, 0.0],
+        "prev_pass_ppa_avg": [0.316, 0.231, None, None], "prev_tackles": [None, None, None, 2.0],
+        "prev_havoc": [None, None, None, 0.5],
+    }, schema_overrides={"season": pl.Int32, "jersey": pl.Int32, "class_year": pl.Int32, "height": pl.Int32,
+                         "weight": pl.Int32, "prev_plays": pl.Int64, "prev_pass_plays": pl.Int64})
+    departures = pl.DataFrame({
+        "season": [SEASON] * 2, "team": ["Texas A&M"] * 2, "player_id": ["8", "9"], "name": ["Gone Pro", "Left Town"],
+        "position": ["RB", "LB"], "to_team": [None, "Ohio State"], "prev_plays": [190, None],
+        "prev_ppa_total": [22.0, None], "prev_tackles": [None, 61.0], "prev_havoc": [None, 7.5],
+    }, schema_overrides={"season": pl.Int32, "prev_plays": pl.Int64})
+    summary = pl.DataFrame([{"season": SEASON, "team": "Texas A&M", "roster_as_of": T0,
+                             **({k: 0.0 for k in ROSTER_SUMMARY_LABELS} | {"off_ret_share": 0.62, "qb_returns": 1.0})}],
+                           schema_overrides={"season": pl.Int32})
+    players.write_parquet(season_dir / "roster_players.parquet")
+    departures.write_parquet(season_dir / "roster_departures.parquet")
+    summary.write_parquet(season_dir / "roster_summary.parquet")
+    meta = season_dir / "meta.json"
+    st = meta.stat()
+    os.utime(meta, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+
+@pytest.fixture
+def roster_client(web_cfg):
+    _write_roster(_write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True))
+    return TestClient(create_app(web_cfg))
+
+
+def test_roster_page(roster_client):
+    r = roster_client.get("/roster/2026/Texas%20A%26M")
+    assert r.status_code == 200
+    html = " ".join(r.text.split())
+    assert 'Texas A&amp;M <span class="muted">2026 roster</span>' in html
+    assert "Sam Starter" in html and "Returner" in html and "No prior stats" in html
+    assert 'Transfer from <a href="/team/2025/Hawai%27i">Hawai&#39;i</a>' in html
+    assert "&lt;i&gt;Fresh&lt;/i&gt; Man" in html and "<i>Fresh</i>" not in html  # names are escaped
+    assert "6-2" in html and ">Sr<" in html and ">Gr<" in html  # height and class labels
+    assert "Oscar Buckeye" not in html  # another team's player
+    # Departures, with the destination linked when it's an FBS team this season.
+    assert "Gone Pro" in html and "not on a roster" in html and '<a href="/team/2026/Ohio%20State">Ohio State</a>' in html
+    # Summary: shares as percentages, QB back as Yes, no transfer QB as None.
+    assert "62%" in html and "Starting QB back" in html and ">Yes<" in html and ">None<" in html
+
+
+def test_team_page_shows_roster_card(roster_client):
+    html = " ".join(roster_client.get("/team/2026/Texas%20A%26M").text.split())
+    assert '<a href="/roster/2026/Texas%20A%26M">Full roster' in html
+    assert "1 returners · 1 transfers in" in html
+    # No roster rows for this team -> no card.
+    assert "/roster/2026/Hawai%27i" not in roster_client.get("/team/2026/Hawai%27i").text
+
+
+def test_roster_api(roster_client):
+    body = roster_client.get("/api/roster/2026/Texas%20A%26M").json()
+    assert [p["name"] for p in body["players"]] == ["Sam Starter", "Tom Transfer", "<i>Fresh</i> Man"]
+    assert body["summary"]["off_ret_share"] == 0.62
+    assert body["summary_labels"]["qb_returns"]["label"] == "Starting QB back"
+    assert len(body["departures"]) == 2
+
+
+def test_roster_404s(roster_client, client):
+    assert roster_client.get("/roster/2026/Nobody").status_code == 404
+    assert roster_client.get("/api/roster/2026/Nobody").status_code == 404
+
+
+def test_roster_404_without_roster_files(client):
+    assert client.get("/roster/2026/Texas%20A%26M").status_code == 404  # season built without roster files
+
+
+def test_rosters_are_free_during_a_live_season(web_cfg):
+    from cfbr.web.access import premium_viewer
+
+    _write_roster(_write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True))
+    app = create_app(web_cfg)
+    app.dependency_overrides[premium_viewer] = lambda: False
+    c = TestClient(app)
+    assert "Sam Starter" in c.get("/roster/2026/Texas%20A%26M").text
+    team = " ".join(c.get("/team/2026/Texas%20A%26M").text.split())
+    assert "for subscribers" in team and "Full roster" in team  # ratings locked, roster card shown
+
+
+def test_build_survives_roster_failure(engine, tmp_path, monkeypatch):
+    import cfbr.web.build as build
+
+    def boom(*a, **k):
+        raise RuntimeError("roster data unavailable")
+
+    monkeypatch.setattr(build, "write_roster_web", boom)
+    out = build_season(engine, 2023, tmp_path, now=datetime.now(UTC))
+    meta = json.loads((out / "meta.json").read_text())
+    assert meta["roster"] is False and (out / "ratings.parquet").exists()

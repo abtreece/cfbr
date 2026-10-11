@@ -57,6 +57,17 @@
 </details>
 {% endif %}
 
+{% if roster %}
+<h2>Roster</h2>
+<div class="tiles">
+  {{ tile("Players", roster.size, roster.returners ~ " returners · " ~ roster.transfers_in ~ " transfers in") }}
+  {{ tile("Returning offense", roster.ret_offense, "share of last season's offensive plays") }}
+  {{ tile("Starting QB back", roster.qb_back) }}
+  {{ tile("Departures", roster.departures, roster.transfers_out ~ " to other rosters") }}
+</div>
+<p><a href="/roster/{{ season }}/{{ team|q }}">Full roster, transfers and departures →</a></p>
+{% endif %}
+
 <h2>Games</h2>
 <p class="note">Margins are from {{ team }}'s side: positive means {{ team }} {% if not locked %}is expected to win (or won){% else %}won or is favored{% endif %} by that many points.
   Predictions use only games played before each week kicked off. #N is the opponent's AP rank going into the game.</p>
