@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 
 from cfbr.backtest.metrics import consensus_spread
-from cfbr.bets.ledger import (add_bets, candidate_bets, read_ledger, settle, snapshot_frame, summarize,
-                              summary_markdown)
+from cfbr.bets.ledger import (add_bets, candidate_bets, market, read_ledger, settle, snapshot_frame,
+                              summarize, summary_markdown)
 from cfbr.config import Config
 from cfbr.data import Dataset
 from cfbr.ingest.fetch import latest_lines_snapshot
@@ -22,7 +24,7 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     predictions.csv (the next week's games) against the newest line snapshot."""
     out_dir = cfg.paths.out_dir / str(season)
     ledger_path = out_dir / "bets.csv"
-    ledger = read_ledger(ledger_path)
+    ledger = fill_books(read_ledger(ledger_path), cfg.paths.raw_dir, season)
 
     games = ds.games.filter(pl.col("season") == season)
     closing = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
@@ -53,3 +55,23 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
              added, m["open"], m["settled"], m["won"], m["lost"], m["push"], m["units"],
              "n/a" if m["n_clv"] == 0 else f"{m['avg_clv']:+.2f}")
     return ledger_path
+
+
+def fill_books(ledger: pl.DataFrame, raw_dir: Path, season: int) -> pl.DataFrame:
+    """Fill the per-book line column for bets recorded before it existed, from
+    the same snapshot each bet was placed against (matched by placed_at)."""
+    todo = ledger.filter(pl.col("books").is_null())
+    if todo.height == 0:
+        return ledger
+    fills = []
+    for placed in todo["placed_at"].unique().to_list():
+        ts = datetime.fromisoformat(placed)
+        f = raw_dir / "lines" / str(season) / "snapshots" / f"{ts:%Y%m%dT%H%M%SZ}.json"
+        if f.exists():
+            m = market(snapshot_frame(json.loads(f.read_text()))).select("game_id", "books")
+            fills.append(m.with_columns(placed_at=pl.lit(placed)))
+    if not fills:
+        return ledger
+    f = pl.concat(fills).rename({"books": "books_fill"})
+    return (ledger.join(f, on=["game_id", "placed_at"], how="left")
+            .with_columns(books=pl.coalesce("books", "books_fill")).drop("books_fill"))

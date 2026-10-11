@@ -8,7 +8,10 @@ Rules (fixed before any results, see DECISIONS.md):
   - Bet a side when |model home margin - market home margin| >= threshold.
   - Market = median home spread across providers in the newest line snapshot.
   - A bet is recorded once, before kickoff, and never changed afterwards.
-  - Graded at the recorded consensus line; risk |odds|/100 units to win 1 at
+  - Graded twice: at the recorded consensus line (does the model beat the
+    market?) and at the best number across all books in the snapshot (what
+    shopping every book would have got). No book is excluded by jurisdiction.
+  - Risk |odds|/100 units to win 1 at
     negative odds (e.g. 1.1 to win 1 at -110).
   - Closing-line value (CLV) = points the recorded line beat the closing line by.
 """
@@ -31,13 +34,20 @@ LEDGER_SCHEMA = {
     "best_line": pl.Float64, "best_provider": pl.Utf8, "odds": pl.Int32, "stake": pl.Float64,
     "status": pl.Utf8, "home_points": pl.Int32, "away_points": pl.Int32, "closing_line": pl.Float64,
     "clv": pl.Float64, "units": pl.Float64,
+    # Added later; older ledgers get these as nulls.
+    "books": pl.Utf8, "best_status": pl.Utf8, "best_units": pl.Float64, "best_clv": pl.Float64,
 }
+
+# CFBD "providers" that are not sportsbooks: numberfire is a projection model and
+# teamrankings/consensus are aggregates. They can't be bet, so they never price a bet.
+NON_BOOKS = {"consensus", "teamrankings", "numberfire"}
 
 
 def snapshot_frame(lines_json: list) -> pl.DataFrame:
-    """Provider-level spreads from a raw /lines snapshot."""
+    """Sportsbook-level spreads from a raw /lines snapshot (non-books dropped)."""
     rows = [{"game_id": g["id"], "provider": ln.get("provider"), "spread": ln.get("spread")}
-            for g in lines_json for ln in (g.get("lines") or []) if ln.get("spread") is not None]
+            for g in lines_json for ln in (g.get("lines") or [])
+            if ln.get("spread") is not None and (ln.get("provider") or "").lower() not in NON_BOOKS]
     return pl.DataFrame(rows, schema={"game_id": pl.Int64, "provider": pl.Utf8, "spread": pl.Float64})
 
 
@@ -48,6 +58,9 @@ def market(snapshot: pl.DataFrame) -> pl.DataFrame:
         line=pl.col("spread").median(), n_providers=pl.len().cast(pl.Int32),
         best_home=pl.col("spread").max(), best_home_provider=pl.col("provider").sort_by("spread").last(),
         best_away=pl.col("spread").min(), best_away_provider=pl.col("provider").sort_by("spread").first(),
+        books=pl.format("{} {}", pl.col("provider"), pl.col("spread").map_elements(lambda x: f"{x:+g}",
+                                                                                   return_dtype=pl.Utf8))
+        .sort().str.join("; "),
     ))
 
 
@@ -79,6 +92,8 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         pl.lit(None, pl.Int32).alias("home_points"), pl.lit(None, pl.Int32).alias("away_points"),
         pl.lit(None, pl.Float64).alias("closing_line"), pl.lit(None, pl.Float64).alias("clv"),
         pl.lit(None, pl.Float64).alias("units"),
+        "books", pl.lit(None, pl.Utf8).alias("best_status"), pl.lit(None, pl.Float64).alias("best_units"),
+        pl.lit(None, pl.Float64).alias("best_clv"),
     )
 
 
@@ -117,17 +132,23 @@ def settle(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame) -> 
             r["home_points"], r["away_points"] = r["hp"], r["ap"]
             risked, won = risk(r["odds"], r["stake"])
             r["units"] = {"won": won, "lost": -risked, "push": 0.0}[r["status"]]
+            best = r["best_line"] if r["best_line"] is not None else r["line"]
+            r["best_status"] = grade(r["side"], best, r["hp"], r["ap"])
+            r["best_units"] = {"won": won, "lost": -risked, "push": 0.0}[r["best_status"]]
             if r["cl"] is not None:
                 r["closing_line"] = r["cl"]
                 r["clv"] = clv(r["side"], r["line"], r["cl"])
+                r["best_clv"] = clv(r["side"], best, r["cl"])
         rows.append({k: r[k] for k in LEDGER_SCHEMA})
     return pl.DataFrame(rows, schema=LEDGER_SCHEMA)
 
 
 def read_ledger(path: Path) -> pl.DataFrame:
-    if path.exists():
-        return pl.read_csv(path, schema_overrides=LEDGER_SCHEMA).select(list(LEDGER_SCHEMA))
-    return pl.DataFrame(schema=LEDGER_SCHEMA)
+    if not path.exists():
+        return pl.DataFrame(schema=LEDGER_SCHEMA)
+    df = pl.read_csv(path, schema_overrides={k: v for k, v in LEDGER_SCHEMA.items()})
+    missing = [pl.lit(None, t).alias(c) for c, t in LEDGER_SCHEMA.items() if c not in df.columns]
+    return df.with_columns(missing).select(list(LEDGER_SCHEMA)).cast(LEDGER_SCHEMA)
 
 
 def add_bets(ledger: pl.DataFrame, new: pl.DataFrame) -> tuple[pl.DataFrame, int]:
@@ -136,22 +157,24 @@ def add_bets(ledger: pl.DataFrame, new: pl.DataFrame) -> tuple[pl.DataFrame, int
     return pl.concat([ledger, fresh.cast(LEDGER_SCHEMA).select(list(LEDGER_SCHEMA))]), fresh.height
 
 
-def summarize(ledger: pl.DataFrame, cfg: Bets) -> dict:
-    s = ledger.filter(pl.col("status").is_in(["won", "lost", "push"]))
-    w = int((s["status"] == "won").sum())
-    l = int((s["status"] == "lost").sum())
-    p = int((s["status"] == "push").sum())
+def summarize(ledger: pl.DataFrame, cfg: Bets, basis: str = "consensus") -> dict:
+    """Record at the consensus line, or at the best number across books (basis="best")."""
+    st, un, cv = ("status", "units", "clv") if basis == "consensus" else ("best_status", "best_units", "best_clv")
+    s = ledger.filter(pl.col(st).is_in(["won", "lost", "push"]))
+    w = int((s[st] == "won").sum())
+    l = int((s[st] == "lost").sum())
+    p = int((s[st] == "push").sum())
     lo, hi = wilson_ci(w, w + l)
     risked = float(sum(risk(o, st)[0] for o, st in s.select("odds", "stake").iter_rows())) if s.height else 0.0
-    units = float(s["units"].sum()) if s.height else 0.0
-    c = s.filter(pl.col("clv").is_not_null())
+    units = float(s[un].sum()) if s.height else 0.0
+    c = s.filter(pl.col(cv).is_not_null())
     be = (-cfg.odds / (100 - cfg.odds)) if cfg.odds < 0 else 100 / (100 + cfg.odds)
     return {
         "open": int((ledger["status"] == "open").sum()), "settled": s.height, "won": w, "lost": l, "push": p,
         "win_rate": w / (w + l) if w + l else math.nan, "ci95": (lo, hi), "breakeven": be,
         "units": units, "risked": risked, "roi": units / risked if risked else math.nan,
-        "avg_clv": float(c["clv"].mean()) if c.height else math.nan,
-        "beat_close": float((c["clv"] > 0).mean()) if c.height else math.nan,
+        "avg_clv": float(c[cv].mean()) if c.height else math.nan,
+        "beat_close": float((c[cv] > 0).mean()) if c.height else math.nan,
         "n_clv": c.height,
     }
 
@@ -165,8 +188,8 @@ def _fmt(x: float, pct: bool = False, signed: bool = False) -> str:
 
 
 def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
-    def block(title: str, df: pl.DataFrame) -> list[str]:
-        m = summarize(df, cfg)
+    def block(title: str, df: pl.DataFrame, basis: str = "consensus") -> list[str]:
+        m = summarize(df, cfg, basis)
         return [f"| {title} | {m['settled']} | {m['won']}-{m['lost']}-{m['push']} | {_fmt(m['win_rate'], pct=True)} "
                 f"[{_fmt(m['ci95'][0], pct=True)}, {_fmt(m['ci95'][1], pct=True)}] | {_fmt(m['units'], signed=True)} | "
                 f"{_fmt(m['roi'], pct=True)} | {_fmt(m['avg_clv'], signed=True)} | {_fmt(m['beat_close'], pct=True)} |"]
@@ -186,7 +209,10 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
         f"consensus line by ≥ {cfg.threshold:g} points, at the line captured when flagged, {cfg.odds} odds, "
         f"{cfg.stake:g} unit to win. Break-even win rate: {_fmt(m['breakeven'], pct=True)}.", "",
         verdict, "",
-        *head, *block("all", ledger),
+        "Two records: **at consensus** (median line across books, measures whether the model beats the market) "
+        "and **best line** (the best number across every book in the snapshot, what shopping all books would get).",
+        "",
+        *head, *block("all — at consensus", ledger), *block("all — best line", ledger, "best"),
         *block(f"edge {cfg.threshold:g}–6", ledger.filter(pl.col("edge").abs() < 6)),
         *block("edge 6+", ledger.filter(pl.col("edge").abs() >= 6)),
         *block("home side", ledger.filter(pl.col("side") == "home")),
@@ -201,13 +227,13 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
         lines.append("")
     opn = ledger.filter(pl.col("status") == "open").sort("kickoff_ts")
     if opn.height:
-        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | home spread | model (home margin) | edge | best available |",
-                  "|---|---|---|---|---|---|---|"]
+        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | home spread | model (home margin) | edge | best available | all books (home spread) |",
+                  "|---|---|---|---|---|---|---|---|"]
         for r in opn.iter_rows(named=True):
             team_line = r["line"] if r["side"] == "home" else -r["line"]
             best = r["best_line"] if r["side"] == "home" else -r["best_line"]
             lines.append(f"| {r['kickoff_ts'][:16].replace('T', ' ')} | {r['away_team']} @ {r['home_team']} | "
                          f"{r['team']} {team_line:+g} | {r['line']:+g} | {r['model_margin']:+.1f} | {r['edge']:+.1f} | "
-                         f"{best:+g} ({r['best_provider']}) |")
+                         f"{best:+g} ({r['best_provider']}) | {r['books'] or '–'} |")
         lines.append("")
     return "\n".join(lines)

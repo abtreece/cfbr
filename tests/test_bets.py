@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import polars as pl
 import pytest
 
-from cfbr.bets.ledger import (add_bets, candidate_bets, clv, grade, market, read_ledger, risk, settle,
+from cfbr.bets.ledger import (LEDGER_SCHEMA, add_bets, candidate_bets, clv, grade, market, read_ledger, risk, settle,
                               snapshot_frame, summarize, summary_markdown)
 from cfbr.config import Bets
 
@@ -101,3 +102,36 @@ def test_ledger_is_append_only_and_settles(tmp_path):
     assert m["settled"] == 1 and m["breakeven"] == pytest.approx(110 / 210)
     md = summary_markdown(back, CFG, 2026)
     assert "No conclusion yet" in md and "1-0-0" in md
+
+
+def test_non_books_never_price_a_bet():
+    snap = snapshot_frame([{"id": 1, "lines": [
+        {"provider": "DraftKings", "spread": -3.0}, {"provider": "Bovada", "spread": -2.5},
+        {"provider": "numberfire", "spread": -9.0}, {"provider": "consensus", "spread": -3.0},
+        {"provider": "teamrankings", "spread": -3.0}]}])
+    assert set(snap["provider"]) == {"DraftKings", "Bovada"}  # offshore books stay in; projections don't
+    m = market(snap).row(0, named=True)
+    assert m["books"] == "Bovada -2.5; DraftKings -3"
+
+
+def test_best_line_graded_separately_from_consensus():
+    snap = snapshot_frame([{"id": 1, "lines": [{"provider": "A", "spread": -3.5}, {"provider": "B", "spread": -2.5},
+                                               {"provider": "C", "spread": -3.0}]}])
+    new = candidate_bets(_preds(), snap, PLACED, CFG).with_columns(season=pl.lit(2026, pl.Int32),
+                                                                   week=pl.lit(7, pl.Int32))
+    ledger, _ = add_bets(read_ledger(Path("/nonexistent")), new)
+    # Home wins by 3: a push at the -3 consensus, a win at the best -2.5 (book B).
+    games = pl.DataFrame({"game_id": [1], "completed": [True], "home_points": [23], "away_points": [20]})
+    r = settle(ledger, games, pl.DataFrame({"game_id": [1], "closing_line": [-3.5]})).row(0, named=True)
+    assert (r["status"], r["best_status"]) == ("push", "won")
+    assert r["clv"] == pytest.approx(0.5) and r["best_clv"] == pytest.approx(1.0)
+
+
+def test_legacy_ledger_without_new_columns_loads(tmp_path):
+    path = tmp_path / "bets.csv"
+    legacy = [c for c in LEDGER_SCHEMA if c not in ("books", "best_status", "best_units", "best_clv")]
+    new = candidate_bets(_preds(), _snapshot(), PLACED, CFG).with_columns(season=pl.lit(2026, pl.Int32),
+                                                                          week=pl.lit(7, pl.Int32))
+    add_bets(read_ledger(path), new)[0].select(legacy).write_csv(path)
+    back = read_ledger(path)
+    assert back.columns == list(LEDGER_SCHEMA) and back["books"].is_null().all()
