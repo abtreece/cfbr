@@ -109,3 +109,20 @@ def test_budget_guard_refuses_before_any_request(tmp_path, monkeypatch):
     assert oddspapi.requests_left(cfg) == 0
     with pytest.raises(oddspapi.OddsPapiBudget):
         oddspapi._get(cfg, "/fixtures", {})
+
+
+def test_pricing_lines_skips_the_fixture_list_when_no_game_could_follow(tmp_path, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(oddspapi, "_get", lambda *a, **k: pytest.fail("no request when the budget can't cover a game"))
+    month = datetime.now(UTC).isoformat()
+    # 250 - 20 reserve - 229 used = 1 left: enough for the fixture list but not for any odds call.
+    oddspapi._ledger(tmp_path).write_text("".join(json.dumps({"ts": month}) + "\n" for _ in range(229)))
+    cfg = _cfg(tmp_path)
+    assert oddspapi.requests_left(cfg) == 1
+    games = pl.DataFrame({"game_id": [1], "home_team": ["Tennessee"], "away_team": ["Alabama"], "kickoff_ts": [KICK]})
+    with caplog.at_level(logging.WARNING, logger="cfbr.ingest.oddspapi"):
+        out = pricing_lines(cfg, 2026, games, {}, datetime(2026, 10, 11, 14, tzinfo=UTC))
+    assert out.height == 0 and list(out.columns) == list(oddspapi.BOOK_SCHEMA)
+    assert any("not enough for the fixture list" in r.getMessage() for r in caplog.records)
+    assert not list((tmp_path / "oddspapi").glob("**/*.json"))  # nothing fetched, nothing saved

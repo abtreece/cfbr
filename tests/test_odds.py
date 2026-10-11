@@ -175,3 +175,39 @@ def test_extra_names_cover_feeds_cfbd_alternates_miss():
                           "kickoff_ts": [KICK, KICK]})
     ev = [_event("a", "Miami Ohio RedHawks", "Akron Zips", []), _event("b", "Louisiana-Monroe Warhawks", "Louisiana Tech Bulldogs", [])]
     assert match_events(ev, games, al) == {"a": (1, False), "b": (2, False)}
+
+
+def test_weak_prefix_only_matches_warn_and_lose_to_exact_matches(caplog):
+    import logging
+
+    al = team_aliases(TEAMS + [{"school": "Georgia", "mascot": "Bulldogs", "alternateNames": []}])
+    games = pl.DataFrame({"game_id": [1, 2], "home_team": ["Georgia", "Tennessee"], "away_team": ["Alabama", "Texas"],
+                          "kickoff_ts": [KICK, KICK]})
+    ev = [_event("g", "Georgia State Panthers", "Alabama State Hornets", []),   # both by prefix only
+          _event("h", "Tennessee Volunteers", "Texas Longhorns", [])]           # exact
+    with caplog.at_level(logging.WARNING, logger="cfbr.ingest.odds"):
+        m = match_events(ev, games, al)
+    assert m == {"g": (1, False), "h": (2, False)}
+    weak = [r for r in caplog.records if "weak match" in r.getMessage()]
+    assert len(weak) == 1 and "Georgia State Panthers" in weak[0].getMessage()
+    # An exact "School Mascot" match outranks the prefix match for the same event once the
+    # real team is in the games frame: Georgia State Panthers -> Georgia State, no warning.
+    al2 = team_aliases(TEAMS + [{"school": "Georgia", "mascot": "Bulldogs", "alternateNames": []},
+                                {"school": "Georgia State", "mascot": "Panthers", "alternateNames": []},
+                                {"school": "Alabama State", "mascot": "Hornets", "alternateNames": []}])
+    games2 = pl.DataFrame({"game_id": [1, 3], "home_team": ["Georgia", "Georgia State"],
+                           "away_team": ["Alabama", "Alabama State"], "kickoff_ts": [KICK, KICK]})
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="cfbr.ingest.odds"):
+        m = match_events([ev[0]], games2, al2)
+    assert m == {"g": (3, False)} and not [r for r in caplog.records if "weak match" in r.getMessage()]
+
+
+def test_match_stats_counts_matched_events():
+    from cfbr.ingest.odds import match_stats
+
+    al = team_aliases(TEAMS)
+    ev = [_event("a", "Tennessee Volunteers", "Alabama Crimson Tide", []),
+          _event("f", "Ohio State Buckeyes", "Michigan Wolverines", [])]
+    assert match_stats(ev, GAMES, al) == (1, 2)
+    assert match_stats([], GAMES, al) == (0, 0)

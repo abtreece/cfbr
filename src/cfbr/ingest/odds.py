@@ -172,12 +172,22 @@ def match_events(events: list, games: pl.DataFrame, aliases: dict[str, set[str]]
         if not best:
             log.debug("no CFBD game for %s @ %s", e["away_team"], e["home_team"])
             continue
-        best.sort(reverse=True)
+        best.sort(reverse=True)  # highest total score first: an exact alias beats a bare prefix
         if len(best) > 1 and best[1][0] == best[0][0] and best[1][1] != best[0][1]:
             log.warning("ambiguous match for %s @ %s; skipped", e["away_team"], e["home_team"])
             continue
+        if best[0][0] == 2:
+            # Both teams matched by prefix only ("Georgia State Panthers" starts with "Georgia").
+            # Accepted (FCS teams have no mascot data), but worth a look.
+            log.warning("weak match for %s @ %s -> game %d (both teams by name prefix only)",
+                        e["away_team"], e["home_team"], best[0][1])
         out[e["id"]] = (best[0][1], best[0][2])
     return out
+
+
+def match_stats(events: list, games: pl.DataFrame, aliases: dict[str, set[str]]) -> tuple[int, int]:
+    """(events matched to a CFBD game, events in the snapshot); the health check's match rate."""
+    return len(match_events(events, games, aliases)), len(events)
 
 
 def odds_frame(events: list, games: pl.DataFrame, aliases: dict[str, set[str]]) -> pl.DataFrame:

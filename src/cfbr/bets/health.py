@@ -16,7 +16,23 @@ from cfbr.config import Config
 
 
 def check(cfg: Config, season: int, now: datetime | None = None) -> list[str]:
+    """Never raises: an unexpected error becomes a problem string."""
     now = now or datetime.now(UTC)
+    try:
+        return _check(cfg, season, now)
+    except Exception as e:  # noqa: BLE001
+        return [f"health check itself failed: {type(e).__name__}: {e}"]
+
+
+def _guarded(problems: list[str], what: str, fn) -> None:
+    """Run one read-only check; a missing file or table never stops the others."""
+    try:
+        problems.extend(fn())
+    except Exception as e:  # noqa: BLE001
+        problems.append(f"{what} check failed: {type(e).__name__}: {e}")
+
+
+def _check(cfg: Config, season: int, now: datetime) -> list[str]:
     problems: list[str] = backup_problems(cfg, now)
     path = cfg.paths.out_dir / str(season) / "bets.csv"
     if not path.exists():
@@ -49,6 +65,11 @@ def check(cfg: Config, season: int, now: datetime | None = None) -> list[str]:
     if cfg.odds.enabled and fallback:
         problems.append(f"{fallback} of {recent.height} bets settled this week were graded against CFBD's close "
                         "(no pre-kickoff snapshot; is the odds-snapshot cron running?)")
+    _guarded(problems, "CFBD snapshot freshness", lambda: cfbd_snapshot_problems(cfg, season, now))
+    if cfg.odds.enabled:
+        _guarded(problems, "snapshot gap", lambda: snapshot_gap_problems(cfg, season))
+        _guarded(problems, "Odds API match rate", lambda: match_rate_problems(cfg, season))
+    _guarded(problems, "Sunday bets", lambda: sunday_bets_problems(cfg, season, led, now))
     if cfg.odds.enabled:
         from cfbr.ingest.odds import credits_left, latest_odds_snapshot, odds_api_key
 
@@ -75,4 +96,74 @@ def backup_problems(cfg: Config, now: datetime) -> list[str]:
     age = now - last
     if age > timedelta(days=cfg.backup.max_age_days):
         return [f"last backup is {age.days} days old ({target(cfg)})"]
+    return []
+
+
+def cfbd_snapshot_problems(cfg: Config, season: int, now: datetime) -> list[str]:
+    """(a) The CFBD lines snapshot every run takes should be fresh."""
+    from cfbr.ingest.fetch import latest_lines_snapshot
+
+    snap = latest_lines_snapshot(cfg.paths.raw_dir, season)
+    if snap is None:
+        return ["no CFBD lines snapshot this season (bets can't be priced)"]
+    age = now - snap[0]
+    if age > timedelta(hours=3):
+        return [f"newest CFBD lines snapshot is {age.total_seconds() / 3600:.0f} h old (ingest didn't take one?)"]
+    return []
+
+
+def snapshot_gap_problems(cfg: Config, season: int) -> list[str]:
+    """(b) An Odds API snapshot too far from the CFBD one is discarded by ``current_books``,
+    and bets are then silently priced from CFBD's books only."""
+    from cfbr.ingest.fetch import latest_lines_snapshot
+    from cfbr.ingest.odds import latest_odds_snapshot
+
+    snap = latest_lines_snapshot(cfg.paths.raw_dir, season)
+    odds = latest_odds_snapshot(cfg.paths.raw_dir, season)
+    if snap is None or odds is None:
+        return []
+    gap = abs((odds[0] - snap[0]).total_seconds()) / 3600
+    if gap > cfg.odds.max_snapshot_gap_hours:
+        return [f"Odds API snapshot is {gap:.1f} h from the CFBD snapshot (limit {cfg.odds.max_snapshot_gap_hours:g} h); "
+                "it was discarded and bets were priced from CFBD lines only"]
+    return []
+
+
+def match_rate_problems(cfg: Config, season: int, min_rate: float = 0.9) -> list[str]:
+    """(d) Most Odds API events should match a CFBD game; a drop means names or dates changed."""
+    import json
+
+    from cfbr.bets.closing import cached_games_frame
+    from cfbr.ingest.odds import latest_odds_snapshot, match_stats, team_aliases
+
+    odds = latest_odds_snapshot(cfg.paths.raw_dir, season)
+    games = cached_games_frame(cfg.paths.raw_dir, season)
+    if odds is None or games is None or not odds[1]:
+        return []
+    teams_path = cfg.paths.raw_dir / "teams_fbs" / str(season) / "season.json"
+    aliases = team_aliases(json.loads(teams_path.read_text())) if teams_path.exists() else {}
+    matched, total = match_stats(odds[1], games, aliases)
+    if matched < min_rate * total:
+        return [f"only {matched} of {total} Odds API events matched a CFBD game in the newest snapshot"]
+    return []
+
+
+def sunday_bets_problems(cfg: Config, season: int, led: pl.DataFrame, now: datetime) -> list[str]:
+    """(c) A Sunday run with games in the coming week should record bets (unless none qualify,
+    which this check can't tell apart; the alert is a prompt to look)."""
+    from cfbr.bets.closing import cached_games_frame
+
+    if now.weekday() != 6 or not cfg.bets.enabled:
+        return []
+    games = cached_games_frame(cfg.paths.raw_dir, season)
+    if games is None:
+        return []
+    upcoming = games.filter(~pl.col("completed") & (pl.col("kickoff_ts") > now)
+                            & (pl.col("kickoff_ts") <= now + timedelta(days=7))).height
+    if upcoming == 0:
+        return []
+    when = pl.coalesce("recorded_at", "placed_at")
+    today = led.filter(when.str.slice(0, 10) == now.strftime("%Y-%m-%d")).height
+    if today == 0:
+        return [f"no bets recorded today although {upcoming} games kick off in the next 7 days"]
     return []

@@ -67,7 +67,7 @@
 {% if open_bets %}
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Model</th><th class="num">Edge</th><th class="num opt">Edge ¢</th><th>Tier</th><th class="num opt">Risk / to win</th>
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Model</th><th class="num">Edge</th><th class="num opt">Edge ¢</th><th class="num opt">Cover %</th><th>Tier</th><th class="num opt">Risk / to win</th>
     <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded ({{ tz_label }})</th></tr></thead>
   <tbody>
   {% for b in open_bets %}
@@ -78,6 +78,7 @@
       <td class="num opt" title="Model's expected margin for {{ b.team }}">{{ b.model_team|signed }}</td>
       <td class="num">{{ b.edge_pts|num }}</td>
       <td class="num opt">{{ b.edge_cents|signed(0) if b.edge_cents is not none else "—" }}</td>
+      <td class="num opt">{{ b.cover_prob|pct(0) if b.cover_prob is not none else "—" }}</td>
       <td>{{ b.tier }}</td>
       <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
       <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_odds is not none %} ({{ b.best_odds|price }}){% endif %}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
@@ -88,7 +89,7 @@
   </tbody>
 </table>
 </div>
-<p class="note">Edge is the gap in points between the model's margin and the consensus line; Edge ¢ is that gap priced in cents of fair odds from past final margins (a point through 3 or 7 is worth more than one through 15), assuming the model's margin is the true line, so it is as over-confident as the model. "Model" is the model's expected margin for the team bet on. Hover over Books to see each book's line; "(pricing only)" marks a line used only to price the bet, never in the consensus.</p>
+<p class="note">Edge is the gap in points between the model's margin and the consensus line; Edge ¢ is that gap priced in cents of fair odds from past final margins (a point through 3 or 7 is worth more than one through 15), assuming the model's margin is the true line, so it is as over-confident as the model. Cover % is a calibrated estimate fit on 2015–2021 covers (edge size, line size, key numbers, shrunk toward 50%); it found almost no signal, so it sits near 50%. Reporting only. "Model" is the model's expected margin for the team bet on. Hover over Books to see each book's line; "(pricing only)" marks a line used only to price the bet, never in the consensus.</p>
 {% else %}
 <p class="muted">No open bets.</p>
 {% endif %}

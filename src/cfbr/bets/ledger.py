@@ -34,6 +34,7 @@ from pathlib import Path
 import polars as pl
 
 from cfbr.backtest.metrics import NON_BOOKS, wilson_ci
+from cfbr.bets.cover import FROZEN
 from cfbr.bets.pricing import PricingTable, bets_for_power, cover_probability_if_right
 from cfbr.config import Bets
 from cfbr.ingest.odds import BOOK_SCHEMA
@@ -56,6 +57,8 @@ LEDGER_SCHEMA = {
     # if the model margin were the true line; the best number's closing counterpart among the
     # pricing books; CLV of the consensus and best-line records in cents of fair price.
     "edge_cents": pl.Float64, "best_closing_line": pl.Float64, "clv_cents": pl.Float64, "best_clv_cents": pl.Float64,
+    # Calibrated cover probability (review B4; frozen logistic fit, reporting only).
+    "cover_prob": pl.Float64,
 }
 
 SETTLED = ["won", "lost", "push"]
@@ -203,6 +206,9 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         pl.lit(now.isoformat(timespec="seconds")).alias("recorded_at"), pl.lit(None, pl.Int32).alias("closing_books"),
         pl.lit(None, pl.Float64).alias("best_closing_line"), pl.lit(None, pl.Float64).alias("clv_cents"),
         pl.lit(None, pl.Float64).alias("best_clv_cents"),
+        (pl.struct("edge", "line", "pred_margin").map_elements(
+            lambda r: FROZEN.cover_prob("home" if r["edge"] > 0 else "away", r["line"], r["pred_margin"], table),
+            return_dtype=pl.Float64) if table is not None else pl.lit(None, pl.Float64)).alias("cover_prob"),
     )
 
 
@@ -549,7 +555,9 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
         "the points-to-cents table (a half point through 3 or 7 is worth far more than one through 15), and the "
         "best-line record closes against the best closing number among the pricing books. Edge and CLV are also "
         "shown in cents of fair price; edge cents assume the model's margin is the true line, which is as "
-        "over-confident as the model itself.",
+        "over-confident as the model itself. Cover prob. is the pre-registered calibrated estimate (logistic fit of "
+        "2015–2021 covers on edge size, line size and key numbers, shrunk toward 50%); it found almost no signal, so "
+        f"expect values near 50% either side of break-even ({_fmt(m['breakeven'], pct=True)}). Reporting only.",
         "",
         *head, *block("all — at consensus", ledger), *block("all — best line", ledger, "best"),
         *block("home side", ledger.filter(pl.col("side") == "home")),
@@ -590,8 +598,8 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
     lines += tests_markdown(ledger, cfg)
     opn = ledger.filter(pl.col("status") == "open").with_columns(tier=tier_expr(cfg)).sort("kickoff_ts")
     if opn.height:
-        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | books | model (home margin) | edge | edge (¢) | best available | all books (home spread, home/away price) |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | books | model (home margin) | edge | edge (¢) | cover prob. | best available | all books (home spread, home/away price) |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in opn.iter_rows(named=True):
             team_line = r["line"] if r["side"] == "home" else -r["line"]
             if r["best_line"] is None:
@@ -603,6 +611,7 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
             lines.append(f"| {r['kickoff_ts'][:16].replace('T', ' ')} | {r['away_team']} @ {r['home_team']} | "
                          f"{r['team']} {team_line:+g} | {r['tier']} | {r['line']:+g} | {r['n_providers']} | {r['model_margin']:+.1f} | {r['edge']:+.1f} | "
                          f"{_fmt(r['edge_cents'], signed=True) if r['edge_cents'] is not None else '–'} | "
+                         f"{_fmt(r['cover_prob'], pct=True) if r['cover_prob'] is not None else '–'} | "
                          f"{best_txt} | {r['books'] or '–'} |")
         lines.append("")
     return "\n".join(lines)

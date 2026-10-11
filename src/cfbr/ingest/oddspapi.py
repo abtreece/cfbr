@@ -125,6 +125,11 @@ def pricing_lines(cfg: Config, season: int, games: pl.DataFrame, aliases: dict[s
     now = now or datetime.now(UTC)
     if games.height == 0:
         return pl.DataFrame(schema=BOOK_SCHEMA)
+    # The fixture list costs a request too: don't spend it unless at least one odds call can follow.
+    if requests_left(cfg) <= 1:
+        log.warning("OddsPapi: %d requests left this month; not enough for the fixture list plus a game",
+                    max(requests_left(cfg), 0))
+        return pl.DataFrame(schema=BOOK_SCHEMA)
     catalog = market_catalog(cfg)
     fixtures = _get(cfg, "/fixtures", {"sportId": SPORT_ID, "from": f"{now:%Y-%m-%d}",
                                        "to": f"{now + timedelta(days=9):%Y-%m-%d}"})

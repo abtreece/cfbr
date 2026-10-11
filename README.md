@@ -33,7 +33,8 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
 | `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
-| `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Sat |
+| `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon |
+| `cfbr market-ratings --season 2026` | Diagnostic: invert the closing lines into market-implied ratings per slot and compare with the model's (`results/market_ratings_{season}.md`); no API calls |
 | `cfbr sim --season 2026 --week 6` | Simulate the rest of the season (win totals, conference titles, playoff odds) into `out/{season}/wNN/season_sim.*`; `cfbr weekly` runs it too |
 
 `rank` and `weekly` use `config/tuned.toml` when it exists. Pass `--config` to override.
@@ -79,6 +80,22 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 # 9 AM: early rankings + predictions. 3 PM: re-run to pick up the AP/Coaches polls.
 0 14,15 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "09" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 0 20,21 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "15" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
+```
+
+`odds-snapshot` pulls the pre-kickoff Odds API snapshot that grades paper-bet CLV. It reads kickoffs from the cached CFBD games file (no CFBD call) and exits without spending credits unless a game kicks off within 6 h, so the Sunday and Monday runs cost nothing on a normal week; about 14–18 credits a week in all.
+
+```cron
+# Odds API closing snapshots (Central): Tue-Fri 4:40 PM, Fri 9 PM, Sat 10:40 AM, 2:10 PM, 6:10 PM, 9:30 PM,
+# Sun and Mon 4:40 PM (for the rare Sunday/Monday game; free when nothing kicks off).
+# Runs that land after UTC midnight in winter (Sat 6:10 PM CST = 00:10 UTC Sunday) get their own line.
+40 21,22 * * 2-5  [ "$(TZ=America/Chicago date +\%H)" = "16" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+0 2,3 * * 6       [ "$(TZ=America/Chicago date +\%H)" = "21" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+40 15,16 * * 6    [ "$(TZ=America/Chicago date +\%H)" = "10" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+10 19,20 * * 6    [ "$(TZ=America/Chicago date +\%H)" = "14" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+10 23 * * 6       [ "$(TZ=America/Chicago date +\%H)" = "18" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+10 0 * * 0        [ "$(TZ=America/Chicago date +\%H)" = "18" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+30 2,3 * * 0      [ "$(TZ=America/Chicago date +\%H)" = "21" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+40 21,22 * * 0,1  [ "$(TZ=America/Chicago date +\%H)" = "16" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
 ```
 
 `weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet. Failures (except 5) and post-run health-check problems send a push alert through ntfy: install the ntfy app and subscribe to the topic in `.keys` (`NTFY_TOPIC`). A successful run also sends a silent (priority `min`) "cfbr weekly ok" message carrying the paper-bet ledger's hash-chain head, which doubles as a heartbeat and as a timestamp for the ledger kept off this machine.

@@ -395,6 +395,23 @@ def bets(
     typer.echo(f"wrote {path} and {path.with_name('bets.md')}")
 
 
+@app.command("market-ratings")
+def market_ratings_cmd(
+    season: Annotated[int, typer.Option()],
+    config: ConfigOpt = None,
+) -> None:
+    """Diagnostic: invert the closing consensus lines into market-implied ratings per slot and
+    compare them with the model's point-in-time ratings. Writes results/market_ratings_{season}.*
+    Lines never feed the model; this only reads them. No API calls."""
+    from cfbr.backtest.market import run_market_ratings
+    from cfbr.data import Dataset
+    from cfbr.model.engine import Engine
+
+    cfg = _default_config(config)
+    path = run_market_ratings(Engine(Dataset.load(cfg), cfg, last_completed=season - 1), season, cfg.paths.results_dir)
+    typer.echo(f"wrote {path} and {path.with_suffix('.md')}")
+
+
 @app.command("odds-snapshot")
 def odds_snapshot(
     season: Annotated[Optional[int], typer.Option(help="Defaults to the current season")] = None,
@@ -403,16 +420,17 @@ def odds_snapshot(
     config: ConfigOpt = None,
 ) -> None:
     """Pull one Odds API snapshot (the pre-kickoff closing lines for paper-bet CLV). Cron runs
-    it Tue-Sat; it spends credits only when a game kicks off soon. No CFBD calls."""
+    it Tue-Mon; it spends credits only when a game kicks off soon. No CFBD calls."""
     from cfbr.alerts import send
-    from cfbr.bets.closing import games_kicking_off
+    from cfbr.bets.closing import games_kicking_off_cached
     from cfbr.ingest.fetch import current_season
     from cfbr.ingest.odds import fetch_odds_snapshot, odds_api_key
 
     cfg = _default_config(config)
     season = season or current_season()
     window = if_games_within if if_games_within is not None else cfg.odds.snapshot_window_hours
-    n = games_kicking_off(cfg.paths.db_path, season, window)
+    # The cached games file is refreshed by every ingest; the DuckDB store only on Sundays.
+    n = games_kicking_off_cached(cfg.paths.raw_dir, season, window, db_path=cfg.paths.db_path)
     if n == 0:
         typer.echo(f"no games kick off in the next {window:g} h; no snapshot taken")
         return

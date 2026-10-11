@@ -416,3 +416,25 @@ def test_cents_recorded_and_settled_against_the_best_book_close():
     assert r["clv_cents"] is None and r["best_clv_cents"] is None and r["best_clv"] == pytest.approx(1.0)
     md = summary_markdown(settle(ledger, games, close, t), CFG, 2026, t)
     assert "avg CLV (¢)" in md and "80% power" in md
+
+
+def test_cover_prob_is_a_shrunk_reporting_column():
+    from cfbr.bets.cover import FROZEN, bet_frame, fit_cover_model, features
+
+    t = _table()
+    new = candidate_bets(_preds(), _snapshot(), PLACED, CFG, table=t)
+    assert new["cover_prob"].is_null().sum() == 0 and ((new["cover_prob"] > 0.3) & (new["cover_prob"] < 0.7)).all()
+    assert candidate_bets(_preds(), _snapshot(), PLACED, CFG)["cover_prob"].is_null().all()
+    # Features: a home bet at -3 with the model at +8 has a 5-point edge and a positive key term.
+    f = features("home", -3.0, 8.0, t)
+    assert f[0] == pytest.approx(5.0) and f[1] == pytest.approx(3.0) and f[2] > 0
+    # A fit on pure noise stays near 50%.
+    rng = __import__("numpy").random.default_rng(0)
+    n = 500
+    preds = pl.DataFrame({"season": [2015] * n, "game_id": range(n), "completed": [True] * n,
+                          "margin": rng.normal(0, 14, n).round(), "pred_margin": rng.normal(0, 10, n),
+                          "spread": rng.normal(0, 10, n).round() / 2})
+    bets = bet_frame(preds, t)
+    m = fit_cover_model(bets)
+    assert bets.height > 0 and abs(m.predict(bets.select("abs_edge", "abs_line", "key").to_numpy()).mean() - 0.5) < 0.05
+    assert FROZEN.n == 3202 and len(FROZEN.coef) == 3

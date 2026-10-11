@@ -91,3 +91,30 @@ def test_dropped_bets_are_flagged(tmp_path):
     _ledger(cfg, [ROW])
     integrity.record(out, 2026, t0 + timedelta(hours=1))
     assert any("1 recorded bets missing" in p for p in integrity.verify(out, 2026))
+
+
+def test_closing_falls_back_to_an_earlier_snapshot_when_the_last_lacks_the_game(tmp_path):
+    cfg = _cfg(tmp_path)
+    t = cfg.paths.raw_dir / "teams_fbs" / "2026"
+    t.mkdir(parents=True)
+    (t / "season.json").write_text(json.dumps(TEAMS))
+    games = pl.DataFrame({"game_id": [1], "home_team": ["Tennessee"], "away_team": ["Alabama"], "kickoff_ts": [KICK]})
+    _snap(cfg, KICK - timedelta(hours=5), {"DraftKings": 7.0, "FanDuel": 6.5})
+    _snap(cfg, KICK - timedelta(hours=3), {"DraftKings": 6.0})
+    # The last pre-kickoff snapshot has the market pulled: no spreads at all for the game.
+    _snap(cfg, KICK - timedelta(hours=1), {})
+    r = snapshot_closing(cfg, games, 2026)
+    assert r.columns == ["game_id", "closing_line", "closing_books", "closing_best_home", "closing_best_away"]
+    assert r.row(0, named=True) == {"game_id": 1, "closing_line": 6.0, "closing_books": 1,
+                                    "closing_best_home": 6.0, "closing_best_away": 6.0}
+    # A snapshot whose event doesn't match the game at all (different teams) is skipped the same way.
+    d = cfg.paths.raw_dir / "odds" / "2026" / "snapshots"
+    (d / f"{KICK - timedelta(minutes=30):%Y%m%dT%H%M%SZ}.json").write_text(json.dumps(
+        [{"id": "x", "commence_time": KICK.strftime("%Y-%m-%dT%H:%M:%SZ"), "home_team": "Ohio State Buckeyes",
+          "away_team": "Michigan Wolverines", "bookmakers": []}]))
+    assert snapshot_closing(cfg, games, 2026).row(0, named=True)["closing_line"] == 6.0
+    # Nothing in the window carries the game: no row (the caller falls back to CFBD).
+    for p in d.glob("*.json"):
+        if p.stem != f"{KICK - timedelta(minutes=30):%Y%m%dT%H%M%SZ}":
+            p.unlink()
+    assert snapshot_closing(cfg, games, 2026).height == 0

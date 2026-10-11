@@ -1,4 +1,5 @@
 import polars as pl
+import pytest
 
 from cfbr.backtest.metrics import summarize, wilson_ci
 from cfbr.report.rank import append_accuracy
@@ -164,3 +165,21 @@ def test_calibration_v2_stage2_and_shadow_gain():
     w = calibration_gain(df.filter(pl.col("in_window")))
     assert w["n"] == 1 and w["gain"] == 2.0
     assert "calibration shadow" in calibration_markdown(df, 2026)
+
+
+def test_market_ratings_summary_and_markdown():
+    from cfbr.backtest.market import markdown, summary
+
+    df = pl.DataFrame({
+        "season": [2025] * 6, "slot": ["r05"] * 3 + ["r06"] * 3, "slot_order": [5] * 3 + [6] * 3,
+        "team": ["A", "B", "FCS"] * 2, "conference": ["SEC", "MAC", None] * 2, "fbs": [True, True, False] * 2,
+        "prior_share": [0.5] * 6, "model": [10.0, -5.0, -20.0, 11.0, -6.0, -21.0],
+        "market": [8.0, -4.0, -25.0, 9.0, -4.0, -24.0], "market_home": [2.5] * 6, "n_lined": [40] * 3 + [50] * 3,
+    }).with_columns(diff=pl.col("model") - pl.col("market"))
+    s = summary(df, b_home=2.8)
+    assert s["last_slot"] == "r06" and s["by_slot"].height == 2
+    assert s["by_conference"].filter(pl.col("conference") == "SEC")["mean_diff"].item() == pytest.approx(2.0)
+    assert s["fcs"]["diff"].item() == pytest.approx(3.0)
+    md = markdown(2025, s)
+    assert "## By conference (after r06)" in md and "Pooled FCS" in md and "2.80" in md
+    assert markdown(2025, {}).endswith("No lined games yet.\n")
