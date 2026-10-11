@@ -29,3 +29,12 @@ One line each: decision — reason — phase.
 - Ratings "for week w" are those available before week w's first kickoff — P3
 - Synthetic recovery test uses a realistic team spread (SD 0.15 PPA/play) and full 13-game schedule; with SD 0.12 and 12 games the best any estimator could manage is r ≈ 0.94, so the 0.95 target tests noise, not the model — P3
 - Prior share reported as the ridge shrinkage fraction alpha/(alpha + plays), averaged over offense and defense — P3
+- Process note: the first end-to-end backtest run (results/*-first) used 2015–2025, so its printed aggregate mixed holdout games in before tuning was frozen. No holdout-specific breakdown was viewed, and that run is not used for any tuning decision; all runs until `config/tuned.toml` is frozen use 2015–2021 only — P5
+- Prior targets are each season's final ratings from a no-prior, full-season fit (same alpha), not the prior-shrunk ratings — avoids the prior predicting itself — P4
+- "Final rating from season s-1" feature uses the same no-prior full-season fit, per component (o_ppa, d_ppa, o_sr, d_sr); one OLS model per component — P4
+- 4-year recruiting average weights by class age: incoming 0.15, 1 year back 0.30, 2 years back 0.30, 3 years back 0.25 — true freshmen contribute least, upperclassmen most; missing teams get the season minimum — P4
+- Missing returning production or talent is imputed with that season's mean (both published preseason) — P4
+- New FBS programs (no prior-season FBS rating) get the mean of the bottom quartile (by O+D) of that season's predicted FBS priors, per component — spec rule — P4
+- Pooled FCS entities carry over last season's final rating for the same entity, else the mean of last season's pooled entities — P4
+- `prior_k` (k/(k+games) prior weight) not implemented: in the residual-from-prior ridge, alpha already sets prior strength, so k would be a redundant second knob — P4
+- Prior-only week-1 MAE (tuning seasons, default config): 2015 15.22, 2016 15.33, 2017 14.76, 2018 15.84, 2019 13.32, 2020 20.03, 2021 16.44 — P4 DoD

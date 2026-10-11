@@ -131,7 +131,14 @@ class Engine:
     def season_games_with_snapshots(self, season: int) -> pl.DataFrame:
         snaps = self.snapshots(season)
         g = self.games.filter(pl.col("season") == season)
-        parts = [self._attach(g.filter(pl.col("slot") == slot), snap) for slot, snap in snaps.items()]
+        a = self.cfg.model.alpha_ppa
+        parts = []
+        for slot, snap in snaps.items():
+            share = snap.select("team", prior_share=0.5 * (a / (a + pl.col("n_off")) + a / (a + pl.col("n_def"))))
+            part = self._attach(g.filter(pl.col("slot") == slot), snap)
+            part = (part.join(share.rename({"prior_share": "prior_share_h"}), left_on="home", right_on="team", how="left")
+                    .join(share.rename({"prior_share": "prior_share_a"}), left_on="away", right_on="team", how="left"))
+            parts.append(part)
         return pl.concat(parts) if parts else g
 
     def calibration(self, season: int) -> Calibration:
@@ -171,7 +178,8 @@ class Engine:
                 .with_columns(sigma=pl.lit(cal.sigma))
                 .select("game_id", "season", "week", "season_type", "slot", "slot_order", "as_of", "kickoff_ts",
                         "completed", "neutral_site", "home", "away", "home_team", "away_team", "margin",
-                        "pred_margin", "win_prob", "prior_pred", "massey_pred", "sigma"))
+                        "pred_margin", "win_prob", "prior_pred", "massey_pred", "sigma",
+                        "prior_share_h", "prior_share_a"))
 
     def slot_as_of(self, season: int, slot: str):
         r = self.slots.filter((pl.col("season") == season) & (pl.col("slot") == slot))

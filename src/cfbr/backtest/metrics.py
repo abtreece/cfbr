@@ -87,6 +87,22 @@ def report(preds: pl.DataFrame) -> dict:
         res["by_bucket"][b] = summarize(g)
     for (s, b), g in preds.group_by("season", "bucket", maintain_order=True):
         res["by_season_bucket"][f"{s}:{b}"] = summarize(g)
+    res["prior_week1_mae_by_season"] = {
+        str(s): float((g["prior_pred"] - g["margin"]).abs().mean())
+        for (s,), g in preds.filter((pl.col("slot") == "r01") & pl.col("margin").is_not_null())
+        .group_by("season", maintain_order=True)
+    }
+    res["prior_week1_mae_by_season"] = dict(sorted(res["prior_week1_mae_by_season"].items()))
+    res["prior_influence_by_slot"] = [
+        {"slot": r["slot"], "mean_prior_share": r["share"], "mae": r["mae"], "prior_only_mae": r["prior_mae"],
+         "n_games": r["n"]}
+        for r in preds.filter(pl.col("margin").is_not_null())
+        .group_by("slot", "slot_order")
+        .agg(share=((pl.col("prior_share_h") + pl.col("prior_share_a")) / 2).mean(),
+             mae=(pl.col("pred_margin") - pl.col("margin")).abs().mean(),
+             prior_mae=(pl.col("prior_pred") - pl.col("margin")).abs().mean(), n=pl.len())
+        .sort("slot_order").iter_rows(named=True)
+    ]
     res["by_season"] = dict(sorted(res["by_season"].items()))
     res["by_bucket"] = dict(sorted(res["by_bucket"].items()))
     return res
