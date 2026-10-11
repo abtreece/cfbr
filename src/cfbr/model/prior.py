@@ -18,6 +18,8 @@ import numpy as np
 import polars as pl
 from sklearn.linear_model import LinearRegression
 
+from cfbr.model.roster import DEF_FEATURES, OFF_FEATURES
+
 log = logging.getLogger(__name__)
 
 COMPONENTS = ["o_ppa", "d_ppa", "o_sr", "d_sr"]
@@ -26,9 +28,14 @@ RECRUIT_WEIGHTS = {0: 0.15, 1: 0.30, 2: 0.30, 3: 0.25}
 OFFENSE_RETURNING = ["percent_ppa", "usage"]
 
 
-def _features_for(component: str) -> list[str]:
+def _features_for(component: str, mode: str = "v1") -> list[str]:
     base = [f"prev_{component}", "talent", "recruit4"]
-    return base + OFFENSE_RETURNING if component.startswith("o_") else base
+    feats = base + OFFENSE_RETURNING if component.startswith("o_") else base
+    if mode == "roster":
+        feats = feats + (OFF_FEATURES if component.startswith("o_") else DEF_FEATURES)
+    elif mode != "v1":
+        raise ValueError(f"unknown prior.features {mode!r}")
+    return feats
 
 
 def recruiting_avg(recruiting: pl.DataFrame, season: int) -> pl.DataFrame:
@@ -67,14 +74,29 @@ def season_features(
     return df.with_columns(season=pl.lit(season), new_program=pl.col("prev_o_ppa").is_null())
 
 
-def fit_prior_models(train: pl.DataFrame) -> dict[str, LinearRegression]:
-    """``train`` = stacked season_features rows joined with targets (``o_ppa`` ...)."""
+PriorModels = dict[str, list[tuple[list[str], LinearRegression]]]
+
+
+def fit_prior_models(train: pl.DataFrame, mode: str = "v1") -> PriorModels:
+    """``train`` = stacked season_features rows joined with targets (``o_ppa`` ...).
+
+    Returns, per component, models in priority order. In roster mode the first
+    model adds the roster features (fit on rows that have them) and the v1 model
+    is the fallback for rows that don't (e.g. no defensive player stats before 2016).
+    """
     rows = train.filter(~pl.col("new_program"))
-    models = {}
+    models: PriorModels = {}
     for comp in COMPONENTS:
-        feats = _features_for(comp)
-        r = rows.drop_nulls([comp, *feats])
-        models[comp] = LinearRegression().fit(r.select(feats).to_numpy(), r[comp].to_numpy())
+        models[comp] = []
+        modes = ["roster", "v1"] if mode == "roster" else ["v1"]
+        for m in modes:
+            feats = _features_for(comp, m)
+            if any(f not in rows.columns for f in feats):
+                continue
+            r = rows.drop_nulls([comp, *feats])
+            if r.height < 2 * len(feats) + 10:
+                continue
+            models[comp].append((feats, LinearRegression().fit(r.select(feats).to_numpy(), r[comp].to_numpy())))
     return models
 
 
@@ -84,10 +106,15 @@ def predict_priors(models: dict[str, LinearRegression], feats: pl.DataFrame) -> 
     out = feats.select("team", "new_program")
     known = feats.filter(~pl.col("new_program"))
     cols = {}
-    for comp, m in models.items():
-        x = known.select(_features_for(comp)).to_numpy()
-        pred = m.predict(x) if len(x) else np.array([])
-        cols[comp] = dict(zip(known["team"].to_list(), pred))
+    for comp, candidates in models.items():
+        cols[comp] = {}
+        for feats, m in candidates:  # first model whose features the row has
+            todo = known.filter(~pl.col("team").is_in(list(cols[comp])))
+            if any(f not in todo.columns for f in feats):
+                continue
+            rows = todo.drop_nulls(feats)
+            if rows.height:
+                cols[comp].update(zip(rows["team"].to_list(), m.predict(rows.select(feats).to_numpy())))
     preds = pl.DataFrame({"team": known["team"], **{c: [cols[c][t] for t in known["team"]] for c in COMPONENTS}})
     out = out.join(preds, on="team", how="left")
     if out["new_program"].any() and preds.height:

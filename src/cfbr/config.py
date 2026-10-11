@@ -56,6 +56,9 @@ class Baseline(BaseModel):
 
 class Prior(BaseModel):
     fit_scheme: str = "hybrid"
+    # "v1": prev ratings + CFBD returning production + talent + recruiting.
+    # "roster": v1 plus player-level roster features (model/roster.py).
+    features: str = "v1"
 
 
 class Seasons(BaseModel):

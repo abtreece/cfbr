@@ -24,6 +24,7 @@ from cfbr.model.massey import fit_massey
 from cfbr.model.prior import (COMPONENTS, fit_prior_models, pooled_priors, predict_priors,
                               season_features)
 from cfbr.model.ridge import fit_efficiency_arrays, home_indicator, recency_weights
+from cfbr.model.roster import roster_features
 from cfbr.model.schemes import training_seasons
 
 log = logging.getLogger(__name__)
@@ -150,18 +151,28 @@ class Engine:
             raise RuntimeError(f"no training seasons for prior of {season}")
         finals = {s: self.final(s) for s in range(min(train_seasons) - 1, max(train_seasons) + 1)}
         finals[season - 1] = self.final(season - 1)
+        mode = self.cfg.prior.features
         rows = []
         for s in train_seasons:
-            f = season_features(s, self.fbs(s), finals, self.ds.returning, self.ds.talent, self.ds.recruiting)
+            f = self._prior_features(s, finals, mode)
             rows.append(f.join(finals[s].select("team", *COMPONENTS), on="team", how="left"))
-        models = fit_prior_models(pl.concat(rows, how="diagonal_relaxed"))
-        feats = season_features(season, self.fbs(season), finals, self.ds.returning, self.ds.talent,
-                                self.ds.recruiting)
+        models = fit_prior_models(pl.concat(rows, how="diagonal_relaxed"), mode)
+        feats = self._prior_features(season, finals, mode)
         fbs_prior = predict_priors(models, feats).select("team", *COMPONENTS)
         pooled = [e for e in self.entities(season) if e not in set(self.fbs(season))]
         out = pl.concat([fbs_prior, pooled_priors(season, pooled, finals).select("team", *COMPONENTS)])
         self._priors[season] = out
         return out
+
+    def _prior_features(self, season: int, finals: dict[int, pl.DataFrame], mode: str) -> pl.DataFrame:
+        f = season_features(season, self.fbs(season), finals, self.ds.returning, self.ds.talent, self.ds.recruiting)
+        if mode == "roster":
+            if self.ds.roster is None or self.ds.player_ppa is None or self.ds.player_defense is None:
+                raise RuntimeError("prior.features = 'roster' needs roster/player tables (run cfbr ingest --backfill)")
+            r = roster_features(season, self.fbs(season), self.ds.roster, self.ds.player_ppa,
+                                self.ds.player_defense, self.ds.team_status)
+            f = f.join(r, on="team", how="left")
+        return f
 
     def snapshot(self, season: int, as_of) -> pl.DataFrame:
         return self._fit(season, self.priors(season), as_of)

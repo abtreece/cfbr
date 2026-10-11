@@ -1,0 +1,73 @@
+import polars as pl
+import pytest
+
+from cfbr.model.prior import fit_prior_models, predict_priors
+from cfbr.model.roster import ROSTER_FEATURES, roster_features
+
+
+def _data(with_defense=True):
+    # Season 2025 production, season 2026 rosters.
+    ppa = pl.DataFrame({
+        "season": [2025] * 5, "player_id": ["qbA", "rbA", "wrA", "qbB", "rbFCS"],
+        "team": ["A", "A", "A", "B", "F"], "position": ["QB", "RB", "WR", "QB", "RB"],
+        "total_ppa": [80.0, 20.0, 10.0, 60.0, 15.0], "plays": [400.0, 150.0, 50.0, 350.0, 100.0],
+        "pass_ppa": [75.0, None, None, 58.0, None], "pass_plays": [380.0, None, None, 330.0, None],
+    })
+    roster = pl.DataFrame({
+        "season": [2026] * 4, "player_id": ["rbA", "wrA", "qbB", "rbFCS"],
+        "team": ["A", "B", "A", "A"], "position": ["RB", "WR", "QB", "RB"], "class_year": [3, 4, 4, 2],
+    })
+    d = pl.DataFrame({
+        "season": [2025] * 3, "player_id": ["lbA", "cbA", "lbB"], "team": ["A", "A", "B"],
+        "tackles": [100.0, 50.0, 80.0] if with_defense else [0.0, 0.0, 0.0],
+        "tfl": [10.0, 2.0, 8.0], "sacks": [5.0, 0.0, 4.0], "pd": [2.0, 10.0, 1.0], "hurries": [3.0, 0.0, 2.0],
+        "ints": [1.0, 3.0, 0.0],
+    })
+    roster = pl.concat([roster, pl.DataFrame({"season": [2026, 2026], "player_id": ["lbA", "lbB"], "team": ["A", "A"],
+                                              "position": ["LB", "LB"], "class_year": [3, 4]})])
+    status = pl.DataFrame({"season": [2025] * 3, "team": ["A", "B", "F"], "classification": ["fbs", "fbs", "fcs"],
+                           "conference": ["X", "X", "Y"]})
+    return roster, ppa, d, status
+
+
+def test_returners_departures_and_transfers():
+    roster, ppa, d, status = _data()
+    f = {r["team"]: r for r in roster_features(2026, ["A", "B"], roster, ppa, d, status).iter_rows(named=True)}
+    a = f["A"]
+    assert a["off_ret_share"] == pytest.approx(150 / 600)        # only rbA returned
+    assert a["off_out"] == pytest.approx(80 + 10)                 # qbA left, wrA moved to B
+    assert a["off_in_fbs"] == pytest.approx(60.0)                 # qbB from FBS team B
+    assert a["off_in_fcs"] == pytest.approx(15.0)                 # rbFCS from FCS team F
+    assert a["qb_returns"] == 0.0 and a["qb_in_ppa"] == pytest.approx(58.0)
+    assert a["def_ret_tackles"] == pytest.approx(100 / 150)       # lbA returned, cbA gone
+    assert a["def_ret_havoc"] == pytest.approx((10 + 2 + 1) / (10 + 2 + 1 + 2 + 10 + 3))
+    assert a["def_in_tackles"] == pytest.approx(80.0)             # lbB transferred in from B
+    assert f["B"]["off_in_fbs"] == pytest.approx(10.0)            # wrA
+    assert f["B"]["qb_returns"] == 0.0                            # qbB left B
+
+
+def test_defense_features_null_without_defensive_stats():
+    roster, ppa, d, status = _data(with_defense=False)
+    f = roster_features(2026, ["A"], roster, ppa, d, status)
+    assert f["def_ret_tackles"].is_null().all() and f["off_ret_share"].is_not_null().all()
+
+
+def test_roster_prior_falls_back_to_v1_when_features_missing():
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    n = 120
+    base = {"team": [f"T{i}" for i in range(n)], "new_program": [False] * n,
+            "talent": rng.normal(700, 50, n), "recruit4": rng.normal(180, 30, n),
+            "percent_ppa": rng.uniform(0.2, 0.8, n), "usage": rng.uniform(0.2, 0.8, n)}
+    for c in ("o_ppa", "d_ppa", "o_sr", "d_sr"):
+        base[f"prev_{c}"] = rng.normal(0, 0.1, n)
+        base[c] = 0.5 * base[f"prev_{c}"] + rng.normal(0, 0.03, n)
+    for c in ROSTER_FEATURES:
+        base[c] = rng.normal(0, 1, n)
+    train = pl.DataFrame(base)
+    models = fit_prior_models(train, "roster")
+    assert all(len(v) == 2 for v in models.values())          # roster model + v1 fallback
+    feats = train.head(4).with_columns(def_ret_tackles=pl.lit(None, pl.Float64))
+    out = predict_priors(models, feats)
+    assert out.select(["o_ppa", "d_ppa", "o_sr", "d_sr"]).null_count().sum_horizontal().item() == 0

@@ -96,6 +96,19 @@ def has_poll(weeks: list, poll: str, week: int) -> bool:
                for w in weeks)
 
 
+# Player-level data for the roster-based prior: season s's prior uses the
+# season-s roster (published preseason) and season s-1 player production.
+PLAYER_SEASON_ENDPOINTS = ["/ppa/players/season", "/stats/player/season"]
+
+
+def fetch_player_data(client: CFBDClient, year: int, live: bool) -> None:
+    """Roster for ``year``; player production only for completed seasons."""
+    client.get("/roster", {"year": year}, year, "season")
+    if not live:
+        for ep in PLAYER_SEASON_ENDPOINTS:
+            client.get(ep, {"year": year}, year, "season")
+
+
 def completed_play_weeks(games: list) -> list[tuple[str, int]]:
     """(seasonType, week) pairs in which every game involving an FBS team is
     completed. Fetching plays only for finished weeks keeps a mid-week run
@@ -140,6 +153,8 @@ def backfill(client: CFBDClient, first: int, last: int, recruiting_lookback: int
         if year < live:
             fetch_season_level(client, year)
     for year in range(first, last + 1):
+        fetch_player_data(client, year, live=year >= live)
+    for year in range(first, last + 1):
         for st, wk in completed_play_weeks(_season_games(client, year)):
             fetch_plays(client, year, st, wk)
 
@@ -151,6 +166,7 @@ def weekly(client: CFBDClient, year: int, week: int) -> None:
     polls, plays); a re-run costs 1 (lines are always re-fetched for the bet
     tracker) plus 1 while that week's polls are pending."""
     fetch_season_level(client, year, live_week=week)
+    fetch_player_data(client, year, live=True)  # cached after the first call
     for st, wk in completed_play_weeks(_season_games(client, year)):
         if st == "regular" and wk > week:
             continue

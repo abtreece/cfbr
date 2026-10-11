@@ -58,6 +58,9 @@ class Dataset:
     recruiting: pl.DataFrame
     lines: pl.DataFrame
     polls: pl.DataFrame = field(default_factory=lambda: pl.DataFrame(schema=POLL_SCHEMA))
+    roster: pl.DataFrame | None = None
+    player_ppa: pl.DataFrame | None = None
+    player_defense: pl.DataFrame | None = None
 
     @classmethod
     def load(cls, cfg: Config) -> "Dataset":
@@ -73,10 +76,14 @@ class Dataset:
             has_polls = con.execute(
                 "SELECT count(*) FROM information_schema.tables WHERE table_name = 'polls'").fetchone()[0]
             polls = con.execute("SELECT * FROM polls").pl() if has_polls else pl.DataFrame(schema=POLL_SCHEMA)
+            tables = {r[0] for r in con.execute("SELECT table_name FROM information_schema.tables").fetchall()}
+            player = {t: (con.execute(f"SELECT * FROM {t}").pl() if t in tables else None)
+                      for t in ("roster", "player_ppa", "player_defense")}
         finally:
             con.close()
         games = games.filter(~(pl.col("home_fcs") & pl.col("away_fcs")))
-        return cls(scrimmage, assign_slots(games), team_status, returning, talent, recruiting, lines, polls)
+        return cls(scrimmage, assign_slots(games), team_status, returning, talent, recruiting, lines, polls,
+                   player["roster"], player["player_ppa"], player["player_defense"])
 
     def model_plays(self, cfg: Config) -> pl.DataFrame:
         return apply_filters(self.scrimmage, cfg)

@@ -40,6 +40,8 @@ alpha = 10.0
 [prior]
 # hybrid: LOSO inside tuning seasons, expanding window for holdout/live seasons.
 fit_scheme = "hybrid"
+# "v1" (default) or "roster" (adds player-level roster/transfer features; see DECISIONS.md).
+features = "v1"
 
 [seasons]
 tuning = [2015, 2021]

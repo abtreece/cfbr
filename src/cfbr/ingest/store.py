@@ -162,6 +162,61 @@ def build_polls(raw: Path) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=POLL_SCHEMA)
 
 
+def build_roster(raw: Path) -> pl.DataFrame:
+    rows = [{"season": y, "player_id": str(r["id"]), "team": r.get("team"), "position": r.get("position"),
+             "class_year": r.get("year") if isinstance(r.get("year"), int) and r.get("year") <= 6 else None}
+            for y, p in _season_files(raw, "roster") for r in _read(p) if r.get("id") is not None]
+    return pl.DataFrame(rows, schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8,
+                                      "position": pl.Utf8, "class_year": pl.Int32})
+
+
+def build_player_ppa(raw: Path) -> pl.DataFrame:
+    """Season PPA per player (offense). Play count = total / average."""
+    rows = []
+    for y, p in _season_files(raw, "ppa_players_season"):
+        for r in _read(p):
+            avg, tot = r.get("averagePPA") or {}, r.get("totalPPA") or {}
+            a, t = avg.get("all"), tot.get("all")
+            ap, tp = avg.get("pass"), tot.get("pass")
+            rows.append({
+                "season": y, "player_id": str(r["id"]), "team": r.get("team"), "position": r.get("position"),
+                "total_ppa": t, "plays": (t / a) if a and t is not None else None,
+                "pass_ppa": tp, "pass_plays": (tp / ap) if ap and tp is not None else None,
+            })
+    return pl.DataFrame(rows, schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8, "position": pl.Utf8,
+                                      "total_ppa": pl.Float64, "plays": pl.Float64, "pass_ppa": pl.Float64,
+                                      "pass_plays": pl.Float64})
+
+
+DEF_STATS = {("defensive", "TOT"): "tackles", ("defensive", "TFL"): "tfl", ("defensive", "SACKS"): "sacks",
+             ("defensive", "PD"): "pd", ("defensive", "QB HUR"): "hurries", ("interceptions", "INT"): "ints"}
+
+
+def build_player_defense(raw: Path) -> pl.DataFrame:
+    rows = []
+    for y, p in _season_files(raw, "stats_player_season"):
+        for r in _read(p):
+            col = DEF_STATS.get((r.get("category"), r.get("statType")))
+            if col is None:
+                continue
+            try:
+                v = float(r.get("stat"))
+            except (TypeError, ValueError):
+                continue
+            rows.append({"season": y, "player_id": str(r["playerId"]), "team": r.get("team"), "stat": col, "value": v})
+    long = pl.DataFrame(rows, schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8, "stat": pl.Utf8,
+                                      "value": pl.Float64})
+    cols = list(dict.fromkeys(DEF_STATS.values()))
+    if long.is_empty():
+        return pl.DataFrame(schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8,
+                                    **{c: pl.Float64 for c in cols}})
+    wide = long.pivot(on="stat", index=["season", "player_id", "team"], values="value", aggregate_function="sum")
+    for c in cols:
+        if c not in wide.columns:
+            wide = wide.with_columns(pl.lit(0.0).alias(c))
+    return wide.select("season", "player_id", "team", *cols).fill_null(0.0)
+
+
 def build_calendar(raw: Path) -> pl.DataFrame:
     rows = [{"season": y, "week": w["week"], "season_type": w["seasonType"], "start_date": w.get("startDate"),
              "end_date": w.get("endDate"), "first_game_start": w.get("firstGameStart"),
@@ -230,7 +285,8 @@ def build_store(raw: Path, db_path: Path) -> dict[str, int]:
         for name, builder in [
             ("teams_season", build_teams), ("games", build_games), ("lines", build_lines),
             ("returning_production", build_returning), ("talent", build_talent), ("recruiting", build_recruiting),
-            ("calendar", build_calendar), ("polls", build_polls),
+            ("calendar", build_calendar), ("polls", build_polls), ("roster", build_roster),
+            ("player_ppa", build_player_ppa), ("player_defense", build_player_defense),
         ]:
             df = builder(raw)
             con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM df")
