@@ -48,3 +48,10 @@ One line each: decision — reason — phase.
 - Frozen config: garbage-time filter disabled (tuning MAE 13.382 off vs 13.443 on with the spec thresholds) — data preferred keeping all plays once recency weighting is on — P6
 - `prior_k` stays in the config schema (always 0, unused) so the frozen `config/tuned.toml` stays loadable — P6
 - Holdout 2022–2025 evaluated once after freezing: MAE 13.00 vs closing line 12.03 (gap +0.97); Massey 14.99 — P6
+- Added a local web app (FastAPI + Jinja, server-rendered, no CDN assets), overriding the spec's v1 non-goal "A web UI"; built after Phases 5–7 were done — user request 2026-10-11 — Web
+- The server never fits models: `cfbr web build` precomputes week-by-week ratings and per-game predictions to `out/web/{season}/`, and `cfbr weekly` rebuilds the current season after `rank` — a single `rank` run takes ~20 s and 1.2 GB, too slow per request — Web
+- Site ratings "after week N" use `cfbr rank`'s as-of rule, so the site and `out/{season}/wNN/` agree exactly (tested). In a completed season the last regular-season table stops before the first bowl, and a separate "Final" table includes the postseason — Web
+- Web data for every season uses one engine with last_completed = current season − 1, matching the backtest (`cfbr rank` on a past season uses season − 1 instead) — Web
+- A game still not completed 4 days after kickoff is treated as cancelled, so it doesn't keep its week off the site forever — Web
+- Accuracy-by-week compares model, closing line and Massey on the same games (those with a closing line) and pools postseason windows into one point, since some windows hold only a game or two — Web
+- The server binds 127.0.0.1 by default; `--host 0.0.0.0` exposes it on the LAN without authentication. Times are shown in US Central — Web

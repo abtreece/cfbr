@@ -26,10 +26,29 @@ The CFBD free tier allows 1,000 calls a month. A full backfill for 2014–presen
 | `cfbr tune` | Optuna search on the tuning seasons; freezes `config/tuned.toml` |
 | `cfbr holdout` | Evaluate the frozen config on the holdout seasons (run once) |
 | `cfbr rank --season 2026 --week 6` | Write `out/2026/w06/` rankings and next-week predictions |
-| `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line |
+| `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line → web data for the season |
+| `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
+| `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
 | `cfbr quota` | Show API usage this month |
 
 `rank` and `weekly` use `config/tuned.toml` when it exists. Pass `--config` to override.
+
+## Web app
+
+A local web app for browsing the ratings:
+
+```bash
+uv run cfbr web build          # once; `cfbr weekly` keeps the current season up to date
+uv run cfbr web serve          # http://127.0.0.1:8000 (add --host 0.0.0.0 --port 8000 for your LAN; there is no login)
+```
+
+- **Rankings**: any season, after any week (or preseason/final), filterable by conference and sortable. Includes rank and rating changes, the prior share, and a trend sparkline.
+- **Team pages**: rating, offense and defense through the season, plus a game log with the model's prediction, the closing line and the result.
+- **Games**: each week's predictions against the closing line, plus results, errors and against-the-spread grading once games are final.
+- **Accuracy**: walk-forward accuracy per season and per week against the closing line and the Massey baseline. Also shows the `cfbr weekly` run log and every backtest run under `results/`.
+- **JSON API** under `/api/` (docs at `/api/docs`).
+
+The server never fits a model. It reads `out/web/{season}/` and picks up new files from `cfbr weekly` without a restart. The ratings shown "after week N" are exactly what `cfbr rank` writes to `out/{season}/wNN/`.
 
 ## Cron (Sunday mornings, Central time)
 

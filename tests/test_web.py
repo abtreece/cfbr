@@ -132,8 +132,9 @@ def test_team_names_are_escaped(client):
 
 def test_team_page_takes_team_perspective(client):
     html = client.get("/team/2026/Ohio%20State").text
-    # Ohio State won 24-17 at Hawai'i, which was favored by 4 -> Ohio State's model margin is -4.0.
-    assert "24–17" in html and "−4.0" in html
+    # Ohio State won 24-17 at Hawai'i; the home-side prediction of -4 means Ohio State by 4.
+    assert "<span class=\"up\">W</span> 24–17" in " ".join(html.split())
+    assert "+4.0" in html
 
 
 def test_upcoming_slot_is_default_in_live_season(client):

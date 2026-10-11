@@ -248,7 +248,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         return render(request, "rankings.html", s=s, season=s.meta["season"], week=week, conf=conf, rows=rows,
                       conferences=conferences, lo=lo, hi=hi, as_of=as_of, kind=season_kind(cfg, s.meta["season"]))
 
-    @app.get("/team/{season}/{team}", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/team/{season}/{team:path}", response_class=HTMLResponse, include_in_schema=False)
     def team_page(request: Request, season: int, team: str):
         s = get_season(season)
         hist = s.ratings.filter(pl.col("team") == team).sort("week")
@@ -317,7 +317,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         rows = [{k: v for k, v in r.items() if k != "trend"} for r in rankings_rows(s, week, conf or None)]
         return clean({"season": s.meta["season"], "week": week, "label": s.label(week), "teams": rows})
 
-    @app.get("/api/team/{season}/{team}")
+    @app.get("/api/team/{season}/{team:path}")
     def api_team(season: int, team: str):
         s = get_season(season)
         hist = s.ratings.filter(pl.col("team") == team).sort("week")
