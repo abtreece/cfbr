@@ -210,7 +210,7 @@ def rank(
 
 
 EXIT_MEANING = {3: "API quota nearly used up", 4: "another run held the lock",
-                6: "paper-bet step, prior shadow comparison or season simulation failed"}
+                6: "paper-bet step, a shadow comparison (prior or totals) or season simulation failed"}
 
 
 @app.command()
