@@ -424,7 +424,12 @@ def test_bets_page(bets_client):
     assert "−3 (−105) <span class=\"muted\">TestBook</span>" in html
     assert "−4.5 <span class=\"muted\">TestBook</span>" in html
     # Rules describe the current pricing rule: offshore books never set the best line.
-    assert "Bovada" in html and "never set the best line" in html
+    assert "Bovada" in html and "never sets the best line" in html
+    assert "Only DraftKings, FanDuel, bet365 can set the best line" in html and "bet365 has no feed" in html
+    # What-if panel: hypothetical framing, the live plan first and marked, all three plans.
+    assert "What if: staking plans" in html and "not a separate record" in html
+    assert "Flat 1% (live)" in html.replace('<span class="muted">', "").replace("</span>", "")
+    assert "Flat 2%" in html and "All-in" in html
     # Lines are shown from the bet team's side: an away bet at home +4 is "−4".
     assert "Texas A&amp;M −3.5" in html and "&lt;b&gt;Evil&lt;/b&gt; −4" in html
     assert "<b>Evil</b>" not in html
@@ -453,6 +458,8 @@ def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
     assert body["weekly"][0]["balance"] == pytest.approx(999) and body["summary"]["balance"] == pytest.approx(999)
     assert [t["name"] for t in body["tiers"]] == ["Small", "Medium", "Large"]
     assert [t["key"] for t in body["tests"]] == ["core_filter", "second_look"]
+    assert [p["key"] for p in body["what_if"]] == ["flat_1", "flat_2", "all_in"]
+    assert body["what_if"][0]["balance"] == pytest.approx(body["summary"]["balance"])
     assert sum(g["settled"] for g in body["tests"][0]["groups"]) == m["settled"]
     assert {b["tier"] for b in body["bets"]} <= {"Small", "Medium", "Large"}
 
@@ -474,6 +481,7 @@ def test_retro_bets_page_and_api(web_cfg):
     # Each model: week 1 went 1-1 (+$10 - $11), week 2 won: bankroll $1,000 -> $999 -> $1,009.
     assert "Week 1" in html and "−$1" in html and "$1,009" in html and "Retro U −7" in html
     assert "3 in common, 3 on the same side" in html
+    assert html.count("What if: staking plans") == 2  # one panel per model
     body = c.get("/api/bets/retro").json()
     assert body["retroactive"] is True and [m["model"] for m in body["models"]] == ["v1", "roster"]
     led = read_retro(web_cfg.paths.out_dir / str(SEASON) / "bets_retro.csv")

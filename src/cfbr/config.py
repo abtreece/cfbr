@@ -85,6 +85,9 @@ class Bets(BaseModel):
     # never priced at one, so they never supply the best-line number.
     offshore_books: list[str] = ["Bovada", "BetOnline", "LowVig", "MyBookie", "BetUS", "Bookmaker", "5Dimes",
                                  "SportsBetting", "Heritage"]
+    # Books a bet may be priced at (the best line). Every book, offshore included, still
+    # counts toward the consensus line. Empty = any non-offshore book.
+    pricing_books: list[str] = ["DraftKings", "FanDuel", "bet365"]
     # Dollar reporting only: a starting bankroll and the dollar value of one unit
     # (1% of the bankroll, so a 1-unit bet at -110 risks $11 to win $10).
     bankroll: float = 1000.0

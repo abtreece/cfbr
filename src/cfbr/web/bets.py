@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from cfbr.bets.experiments import tracked_tests
-from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly
+from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly, what_if
 from cfbr.config import Config
 from cfbr.web.access import bets_access
 from cfbr.web.store import Store
@@ -72,6 +72,15 @@ def breakdown(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
     return out[:1] + [{"label": "All bets, best line", **summarize(ledger, cfg.bets, "best")}] + out[1:]
 
 
+def what_if_chart(plans: list[dict], bankroll: float) -> dict | None:
+    """One bankroll line per staking plan (the live flat-1% plan first, so it gets the first series color)."""
+    if not plans or not plans[0]["weeks"]:
+        return None
+    return {"signed": False, "format": "dollars", "x": ["Start"] + plans[0]["weeks"],
+            # Whole dollars keep the end labels short enough to fit at phone width.
+            "series": [{"name": p["name"], "values": [round(bankroll)] + [round(v) for v in p["path"]]} for p in plans]}
+
+
 def money_chart(weeks: list[dict], bankroll: float) -> dict | None:
     """Bankroll from the start through each week with settled bets."""
     if not weeks:
@@ -111,6 +120,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             ctx |= {"summary": summarize(ledger, cfg.bets), "best": summarize(ledger, cfg.bets, "best"),
                     "breakdown": breakdown(ledger, cfg), "weeks": weeks, "tiers": by_tier(ledger, cfg.bets),
                     "tests": tracked_tests(ledger, cfg.bets),
+                    "what_if": (wi := what_if(ledger, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll),
                     "open_bets": [r for r in rows if r["status"] == "open"],
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
@@ -136,6 +146,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             "tiers": [clean_summary(t) for t in by_tier(ledger, cfg.bets)],
             "tests": [clean_summary(t) | {"groups": [clean_summary(g) for g in t["groups"]]}
                       for t in tracked_tests(ledger, cfg.bets)],
+            "what_if": what_if(ledger, cfg.bets),
             "bets": (ledger.with_columns(tier=tier_expr(cfg.bets), dollars=pl.col("units") * cfg.bets.unit_value)
                      .sort("kickoff_ts", "game_id").to_dicts()),
         })
@@ -177,7 +188,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             "models": [{"model": m["model"], "label": m["label"], "summary": clean_summary(m["summary"]),
                         "summary_best_line": clean_summary(m["best"]),
                         "weekly": [clean_summary(w) for w in m["weeks"]],
-                        "tiers": [clean_summary(t) for t in m["tiers"]]} for m in retro_models(led, cfg)],
+                        "tiers": [clean_summary(t) for t in m["tiers"]], "what_if": m["what_if"]}
+                       for m in retro_models(led, cfg)],
             "bets": (led.with_columns(tier=tier_expr(cfg.bets), dollars=pl.col("units") * cfg.bets.unit_value)
                      .sort("model", "kickoff_ts", "game_id").to_dicts()),
         })
@@ -197,7 +209,8 @@ def retro_models(led: pl.DataFrame, cfg: Config) -> list[dict]:
         weeks = weekly(d, cfg.bets)
         out.append({"model": model, "label": label[:1].upper() + label[1:], "summary": summarize(d, cfg.bets),
                     "best": summarize(d, cfg.bets, "best"), "weeks": weeks, "tiers": by_tier(d, cfg.bets),
-                    "chart": money_chart(weeks, cfg.bets.bankroll), "rows": list(reversed(bet_rows(d, cfg)))})
+                    "chart": money_chart(weeks, cfg.bets.bankroll), "rows": list(reversed(bet_rows(d, cfg))),
+                    "what_if": (wi := what_if(d, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll)})
     return out
 
 

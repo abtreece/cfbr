@@ -87,6 +87,8 @@
 </table>
 </div>
 
+{% with plans=m.what_if, chart=m.what_if_chart, cid="what-if-" ~ m.model, hx="h3" %}{% include "_what_if.html" %}{% endwith %}
+
 <h3>By edge tier</h3>
 <div class="table-wrap">
 <table class="data">

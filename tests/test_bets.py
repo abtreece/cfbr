@@ -9,7 +9,7 @@ from cfbr.bets.ledger import (LEDGER_SCHEMA, add_bets, by_tier, candidate_bets, 
                               risk, settle, snapshot_frame, summarize, summary_markdown, tier_expr, tiers, weekly)
 from cfbr.config import Bets
 
-CFG = Bets()
+CFG = Bets(pricing_books=[])  # synthetic book names below; the pricing list has its own test
 PLACED = datetime(2026, 10, 11, 14, 5, tzinfo=UTC)
 
 
@@ -253,3 +253,36 @@ def test_tracked_tests_split_the_ledger_by_fixed_rules():
     md = summary_markdown(d, CFG, 2026)
     assert "## Tracked tests" in md and "### T1 · Core filter" in md and "**No conclusion yet**" in md
     assert "the pre-set minimum is 50 per group" in md
+
+
+def test_only_pricing_books_set_the_best_line_but_all_books_feed_the_consensus():
+    snap = snapshot_frame([{"id": 1, "lines": [
+        {"provider": "DraftKings", "spread": -3.5}, {"provider": "FanDuel", "spread": -3.0},
+        {"provider": "theScore Bet", "spread": -2.5}, {"provider": "Bovada", "spread": -1.5}]}])
+    m = market(snap, Bets().offshore_books, -110, Bets().pricing_books).row(0, named=True)
+    assert m["line"] == pytest.approx(-2.75)                                   # all four books
+    assert (m["best_home"], m["best_home_provider"]) == (-3.0, "FanDuel")      # theScore's -2.5 can't price
+    assert (m["best_away"], m["best_away_provider"]) == (-3.5, "DraftKings")
+    only_other = snapshot_frame([{"id": 2, "lines": [{"provider": "theScore Bet", "spread": -2.5}]}])
+    assert market(only_other, [], -110, ["DraftKings", "FanDuel", "bet365"])["best_home"].to_list() == [None]
+    assert Bets().pricing_books == ["DraftKings", "FanDuel", "bet365"]
+
+
+def test_what_if_restakes_the_same_bets():
+    from cfbr.bets.ledger import what_if
+
+    rows = [_settled(i, 7, 4, "won") for i in range(1, 4)] + [_settled(4, 7, 4, "lost")]   # week 7: 3-1
+    rows += [_settled(5, 8, 4, "lost")]                                                      # week 8: one bet, lost
+    d = _ledger(rows)
+    flat1, flat2, allin = what_if(d, Bets())
+    assert flat1["balance"] == pytest.approx(summarize(d, Bets())["balance"])  # the live plan is the record
+    assert flat1["balance"] == pytest.approx(1000 + 30 - 11 - 11)
+    assert flat2["balance"] == pytest.approx(1000 + 60 - 22 - 22) and not flat2["capped"]
+    # All-in: week 7 stakes $250 a bet (3 wins at 10/11, 1 loss), then everything on one losing game.
+    assert allin["path"][0] == pytest.approx(1000 + 3 * 250 * 10 / 11 - 250, abs=0.01)  # path is in cents
+    assert allin["balance"] == 0 and allin["low"] == 0 and allin["bust"] == "Week 8"
+    # A flat plan that would need more than the bankroll is capped, not allowed to go negative.
+    tiny = what_if(d, Bets(bankroll=30.0))[1]
+    assert tiny["capped"] == ["Week 7"]
+    md = summary_markdown(d, Bets(), 2026)
+    assert "## What if: staking plans" in md and "bust in Week 8" in md

@@ -19,7 +19,8 @@ from datetime import timedelta
 import polars as pl
 
 from cfbr.backtest.metrics import consensus_spread
-from cfbr.bets.ledger import (LEDGER_SCHEMA, by_tier, candidate_bets, money, settle, summarize, weekly, _fmt)
+from cfbr.bets.ledger import (LEDGER_SCHEMA, by_tier, candidate_bets, money, settle, summarize, weekly, what_if_markdown,
+                              _fmt)
 from cfbr.config import Bets, Config
 from cfbr.data import Dataset
 from cfbr.ingest.odds import BOOK_SCHEMA
@@ -110,7 +111,8 @@ def retro_markdown(led: pl.DataFrame, cfg: Bets, season: int, through_week: int)
                   f"{money(w['risked_dollars'], signed=False)}{' ⚠' if w['over_bankroll'] else ''} | {money(w['dollars'])} | "
                   f"{money(w['balance'], signed=False)} | {_fmt(w['roi'], pct=True)} | "
                   f"{_fmt(w['avg_clv'], signed=True)} |" for w in weekly(d, cfg)]
-        lines += ["", f"### {label}: by edge tier", "",
+        lines += ["", *what_if_markdown(d, cfg, f"### {label}: what if (staking plans)"),
+                  f"### {label}: by edge tier", "",
                   "| tier | bets | W-L-P | win % | $ | ROI | avg CLV (pts) | backtest cover |",
                   "|---|---|---|---|---|---|---|---|"]
         for t in by_tier(d, cfg):

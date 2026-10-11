@@ -1,0 +1,27 @@
+{# What-if staking panel. Expects: plans (bets.ledger.what_if), chart (what_if_chart), cid, rules, heading tag hx. #}
+{% from "macros.html" import line_chart %}
+{% if plans and plans[0].weeks %}
+<{{ hx }}>What if: staking plans</{{ hx }}>
+<p class="note">Hypothetical: the same graded bets re-staked from the {{ rules.bankroll|money(false) }} starting bankroll.
+  This is not a separate record and not a recommendation; with this few bets, the plan that looks best is mostly luck.
+  All-in splits the whole bankroll across that week's bets, so a week with one bet puts everything on one game.</p>
+{% if chart %}{{ line_chart(cid, chart, "Bankroll by staking plan", "dollars") }}{% endif %}
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Plan</th><th class="opt">Stake</th><th class="num">Bankroll now</th><th class="num">Low point</th></tr></thead>
+  <tbody>
+  {% for p in plans %}
+    <tr {% if loop.first %}class="selected"{% endif %}>
+      <td class="team wrap">{{ p.name }}{% if loop.first %} <span class="muted">(live)</span>{% endif %}
+        {% if p.bust %}<br><span class="down">bust in {{ p.bust }}</span>
+        {% elif p.capped %}<br><span class="muted">capped in {{ p.capped|join(", ") }}</span>{% endif %}</td>
+      <td class="opt">{{ p.stake }}</td>
+      <td class="num strong">{{ p.balance|money(false) }}</td>
+      <td class="num">{{ p.low|money(false) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">"Capped" means that week's bets would have needed more than the bankroll at the time, so they were scaled down to all of it.</p>
+{% endif %}

@@ -33,7 +33,7 @@
   {{ tile("Bankroll", summary.balance|money(false), summary.dollars|money ~ " from " ~ rules.bankroll|money(false) ~ " · ROI " ~ summary.roi|pct) }}
   {{ tile("Avg CLV", (summary.avg_clv|signed(2) ~ " pts") if summary.n_clv else "—",
           ("beat the close " ~ summary.beat_close|pct(0) ~ " of " ~ summary.n_clv) if summary.n_clv else "after games close") }}
-  {{ tile("Best line", best.units|signed(2), "units at the best non-offshore book · " ~ best.won ~ "–" ~ best.lost ~ "–" ~ best.push) }}
+  {{ tile("Best line", best.units|signed(2), "units at the best of " ~ rules.pricing_books|join(", ") ~ " · " ~ best.won ~ "–" ~ best.lost ~ "–" ~ best.push) }}
   {{ tile("Open bets", summary.open, summary.open_risk_dollars|money(false) ~ " at risk") }}
 </div>
 
@@ -52,7 +52,8 @@
       Dollar figures start from a {{ rules.bankroll|money(false) }} bankroll; every bet is a flat {{ rules.unit_value|money(false) }} unit ({{ (rules.unit_value / rules.bankroll)|pct(0) }} of the starting bankroll, not compounding), so it risks {{ unit_risk|money(false) }} to win {{ unit_win|money(false) }}.
       Also graded at the best number available ("best line"): the best spread among the books a bet could actually be placed at,
       ties broken by the better price, and graded at that book's own price (shown in brackets; {{ rules.odds }} when the feed has no price).
-      Offshore books ({{ rules.offshore_books|join(", ") }}) count toward the consensus but never set the best line, so a bet can have no best line.</li>
+      Only {{ rules.pricing_books|join(", ") }} can set the best line{% if "bet365" in rules.pricing_books %} (bet365 has no feed in our data sources yet){% endif %}. Every other book,
+      including offshore books ({{ rules.offshore_books|join(", ") }}), counts toward the consensus but never sets the best line, so a bet can have no best line.</li>
     <li>Closing-line value (CLV) is how many points better the recorded line was than the closing consensus. It is the first sign of a real edge, since win rate is mostly noise at small samples.</li>
     <li>Betting lines are never model inputs; the model's predictions are made first.</li>
   </ul>
@@ -154,6 +155,8 @@
   </tbody>
 </table>
 </div>
+
+{% with plans=what_if, chart=what_if_chart, cid="what-if", hx="h2" %}{% include "_what_if.html" %}{% endwith %}
 
 <h2>Tracked tests</h2>
 <p class="note">Pre-registered splits of the bets above, with rules fixed on Oct 11, 2026 before any of these bets settled. They don't change
