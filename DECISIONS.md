@@ -28,7 +28,7 @@ One line each: decision — reason — phase.
 - Massey baseline: ridge (alpha 10) on margins capped at ±28, same-season games kicked off before the as-of time, no prior — P3
 - Ratings "for week w" are those available before week w's first kickoff — P3
 - Synthetic recovery test uses a realistic team spread (SD 0.15 PPA/play) and full 13-game schedule; with SD 0.12 and 12 games the best any estimator could manage is r ≈ 0.94, so the 0.95 target tests noise, not the model — P3
-- Prior share reported as the ridge shrinkage fraction alpha/(alpha + plays), averaged over offense and defense — P3
+- Prior share reported as the ridge shrinkage fraction alpha/(alpha + effective plays), where effective plays are the recency-weighted counts the fit used, averaged over offense/defense and over the PPA and success-rate fits (each with its own alpha). Originally used raw play counts and alpha_ppa only; fixed 2026-10-11 after it misreported week-6 shares — P3/P7
 - Process note: the first end-to-end backtest run (results/*-first) used 2015–2025, so its printed aggregate mixed holdout games in before tuning was frozen. No holdout-specific breakdown was viewed, and that run is not used for any tuning decision; all runs until `config/tuned.toml` is frozen use 2015–2021 only — P5
 - Prior targets are each season's final ratings from a no-prior, full-season fit (same alpha), not the prior-shrunk ratings — avoids the prior predicting itself — P4
 - "Final rating from season s-1" feature uses the same no-prior full-season fit, per component (o_ppa, d_ppa, o_sr, d_sr); one OLS model per component — P4

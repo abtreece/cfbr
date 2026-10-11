@@ -125,9 +125,12 @@ class Engine:
         m = self.cfg.model
         f_ppa = fit_efficiency_arrays(off, de, h, a.ppa[:k], teams, m.alpha_ppa, p["o_ppa"], p["d_ppa"], w, a.center)
         f_sr = fit_efficiency_arrays(off, de, h, a.success[:k], teams, m.alpha_sr, p["o_sr"], p["d_sr"], w, a.center)
+        n = len(teams)
+        w_off = np.bincount(off, weights=w, minlength=n).astype(float)
+        w_def = np.bincount(de, weights=w, minlength=n).astype(float)
         return pl.DataFrame({
             "team": teams, "o_ppa": f_ppa.o, "d_ppa": f_ppa.d, "o_sr": f_sr.o, "d_sr": f_sr.d,
-            "n_off": f_ppa.n_off, "n_def": f_ppa.n_def,
+            "n_off": f_ppa.n_off, "n_def": f_ppa.n_def, "w_off": w_off, "w_def": w_def,
         })
 
     def final(self, season: int) -> pl.DataFrame:
@@ -188,10 +191,9 @@ class Engine:
     def _season_games_with_snapshots(self, season: int) -> pl.DataFrame:
         snaps = self.snapshots(season)
         g = self.games.filter(pl.col("season") == season)
-        a = self.cfg.model.alpha_ppa
         parts = []
         for slot, snap in snaps.items():
-            share = snap.select("team", prior_share=0.5 * (a / (a + pl.col("n_off")) + a / (a + pl.col("n_def"))))
+            share = snap.select("team", prior_share=prior_share_expr(self.cfg))
             part = self._attach(g.filter(pl.col("slot") == slot), snap)
             part = (part.join(share.rename({"prior_share": "prior_share_h"}), left_on="home", right_on="team", how="left")
                     .join(share.rename({"prior_share": "prior_share_a"}), left_on="away", right_on="team", how="left"))
@@ -260,9 +262,16 @@ class Engine:
 def team_ratings_points(snap: pl.DataFrame, cal: Calibration, cfg: Config) -> pl.DataFrame:
     """Ratings in points plus prior share for reporting."""
     rating, off, de = cal.rating(snap["o_ppa"], snap["d_ppa"], snap["o_sr"], snap["d_sr"])
-    a = cfg.model.alpha_ppa
-    share = 0.5 * (a / (a + snap["n_off"]) + a / (a + snap["n_def"]))
-    return snap.select("team").with_columns(
+    return snap.select("team", prior_share=prior_share_expr(cfg)).with_columns(
         rating=pl.Series(np.asarray(rating)), offense=pl.Series(np.asarray(off)),
-        defense=pl.Series(np.asarray(de)), prior_share=pl.Series(np.asarray(share)),
-    )
+        defense=pl.Series(np.asarray(de)),
+    ).select("team", "rating", "offense", "defense", "prior_share")
+
+
+def prior_share_expr(cfg: Config) -> pl.Expr:
+    """Approximate share of a rating still coming from the prior: the ridge
+    shrinkage alpha / (alpha + effective plays), where effective plays are the
+    recency-weighted counts the fit actually used. Averaged over offense and
+    defense and over the PPA and success-rate fits (each with its own alpha)."""
+    terms = [a / (a + pl.col(c)) for a in (cfg.model.alpha_ppa, cfg.model.alpha_sr) for c in ("w_off", "w_def")]
+    return sum(terms) / len(terms)

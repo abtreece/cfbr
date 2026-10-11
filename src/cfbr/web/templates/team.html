@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% from "macros.html" import tile, delta, line_chart, team_link %}
+{% block title %}{{ team }} {{ season }} · CFB Ratings{% endblock %}
+{% block content %}
+<form class="filters" method="get" onsubmit="location.href='/team/'+this.season.value+'/{{ team|q }}'; return false;">
+  <label>Season
+    <select name="season" data-autosubmit>
+      {% for y in team_seasons|reverse %}<option value="{{ y }}" {% if y == season %}selected{% endif %}>{{ y }}</option>{% endfor %}
+    </select>
+  </label>
+  <a class="back" href="/rankings?season={{ season }}">← {{ season }} rankings</a>
+</form>
+
+<h1>{{ team }} <span class="muted">{{ season }}</span></h1>
+<p class="lede">{{ latest.conference or ("Pooled FCS opponents" if not is_fbs else "") }} · {{ latest.label }}</p>
+
+<div class="tiles">
+  {% if is_fbs %}{{ tile("Rank", "#" ~ latest.rank, "of FBS") }}{% endif %}
+  {{ tile("Rating", latest.rating|signed, "pts vs. avg FBS") }}
+  {{ tile("Offense", latest.offense|signed) }}
+  {{ tile("Defense", latest.defense|signed) }}
+  {{ tile("Record", latest.w ~ "–" ~ latest.l) }}
+  {{ tile("Prior share", latest.prior_share|pct(0)) }}
+</div>
+
+{{ line_chart("team-chart", chart, "Rating, offense and defense through the season", "points") }}
+
+<details class="table-view">
+  <summary>Week-by-week table</summary>
+  <div class="table-wrap">
+  <table class="data">
+    <thead><tr><th>After</th><th class="num">Rk</th><th class="num">±</th><th class="num">Rating</th><th class="num">Off</th>
+      <th class="num">Def</th><th class="num">Δ Rating</th><th class="num">Record</th><th class="num">Prior</th></tr></thead>
+    <tbody>
+    {% for h in hist %}
+      <tr><td><a href="/rankings?season={{ season }}&amp;week={{ h.week }}">{{ h.label }}</a></td>
+        <td class="num">{{ h.rank if h.rank is not none else "—" }}</td><td class="num">{{ delta(h.rank_change, 0) }}</td>
+        <td class="num strong">{{ h.rating|signed }}</td><td class="num">{{ h.offense|signed }}</td>
+        <td class="num">{{ h.defense|signed }}</td><td class="num">{{ delta(h.rating_change) }}</td>
+        <td class="num">{{ h.w }}–{{ h.l }}</td><td class="num">{{ h.prior_share|pct(0) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+
+<h2>Games</h2>
+<p class="note">Margins are from {{ team }}'s side: positive means {{ team }} is expected to win (or won) by that many points.
+  Predictions use only games played before each week kicked off.</p>
+<div class="table-wrap">
+<table class="data">
+  <thead>
+    <tr><th>Date</th><th>Wk</th><th>Opponent</th><th>Result</th>
+      <th class="num">Model</th><th class="num">Win %</th><th class="num">Vegas</th><th class="num">Actual</th>
+      <th class="num">Model err</th><th class="num">Vegas err</th></tr>
+  </thead>
+  <tbody>
+  {% for g in games %}
+    <tr {% if not g.completed %}class="upcoming"{% endif %}>
+      <td>{{ g.kickoff_ts|kickoff }}</td>
+      <td>{{ g.slot|slot_label }}</td>
+      <td>{{ "vs" if g.neutral_site else ("" if g.is_home else "@") }} {{ team_link(g.opponent, season, fbs_teams) }}</td>
+      <td>{% if g.completed and g.t_margin is not none %}
+            <span class="{{ 'up' if g.t_margin > 0 else 'down' }}">{{ "W" if g.t_margin > 0 else ("L" if g.t_margin < 0 else "T") }}</span>
+            {{ g.team_points }}–{{ g.opp_points }}
+          {% else %}<span class="muted">upcoming</span>{% endif %}</td>
+      <td class="num strong">{{ g.t_pred|signed }}</td>
+      <td class="num">{{ g.t_win_prob|pct(0) }}</td>
+      <td class="num">{{ g.t_vegas|signed }}</td>
+      <td class="num">{{ g.t_margin|signed(0) if g.completed else "—" }}</td>
+      <td class="num">{{ g.model_err|num }}</td>
+      <td class="num">{{ g.vegas_err|num }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

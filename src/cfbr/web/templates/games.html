@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, tile, team_link %}
+{% block title %}{{ season }} {{ slot|slot_label }} games · CFB Ratings{% endblock %}
+{% block content %}
+<form class="filters" method="get" action="/games">
+  {{ season_select(seasons, season) }}
+  <label>Week
+    <select name="slot" data-autosubmit>
+      {% for x in slot_order %}<option value="{{ x }}" {% if x == slot %}selected{% endif %}>{{ x|slot_label }}</option>{% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+
+<h1>{{ season }} · {{ slot|slot_label }}</h1>
+<p class="lede">Predictions use only games played before this week's first kickoff.
+  {% if slot.startswith('p') %}Postseason weeks are 7-day windows from the first bowl game.{% endif %}</p>
+
+{% if summary and summary.n_games %}
+<div class="tiles">
+  {{ tile("Games final", summary.n_games) }}
+  {{ tile("Model MAE", summary.mae|num ~ " pts") }}
+  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num ~ " pts", "model " ~ summary.model_mae_lined|num ~ " on same games") }}{% endif %}
+  {{ tile("Winners picked", summary.su_accuracy|pct(0)) }}
+  {% if summary.ats_n %}{{ tile("Against the spread", summary.ats_wins ~ "–" ~ (summary.ats_n - summary.ats_wins),
+       "95% CI " ~ summary.ats_ci95_low|pct(0) ~ "–" ~ summary.ats_ci95_high|pct(0)) }}{% endif %}
+</div>
+{% endif %}
+
+<div class="table-wrap">
+<table class="data">
+  <thead>
+    <tr><th>Kickoff ({{ tz_label }})</th><th>Matchup</th><th>Model</th><th class="num">Win %</th><th>Vegas</th>
+      <th>Model vs Vegas</th>{% if any_final %}<th>Final</th><th class="num">Model err</th><th class="num">Vegas err</th><th>ATS</th>{% endif %}</tr>
+  </thead>
+  <tbody>
+  {% for g in rows %}
+    <tr {% if not g.completed %}class="upcoming"{% endif %}>
+      <td>{{ g.kickoff_ts|kickoff }}</td>
+      <td class="wrap">{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ team_link(g.home_team, season, fbs_teams) }}</td>
+      <td class="strong wrap">{{ g.model_pick }}</td>
+      <td class="num">{{ g.fav_prob|pct(0) }}</td>
+      <td class="wrap">{{ g.vegas_pick or "—" }}</td>
+      <td class="wrap">{{ g.edge or "—" }}</td>
+      {% if any_final %}
+      <td>{% if g.completed and g.home_points is not none %}{{ g.away_points }}–{{ g.home_points }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="num">{{ g.model_err|num }}</td>
+      <td class="num">{{ g.vegas_err|num }}</td>
+      <td>{% if g.ats == "win" %}<span class="up">✓ win</span>{% elif g.ats == "loss" %}<span class="down">✗ loss</span>{% elif g.ats %}<span class="muted">{{ g.ats }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      {% endif %}
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ 10 if any_final else 6 }}" class="muted">No games.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Final score is shown away–home. "Model vs Vegas" is how many points the model's margin differs from the closing line, and toward which team.
+  ATS grades the model's side of the closing line; pushes and exact agreement are not graded.</p>
+{% endblock %}

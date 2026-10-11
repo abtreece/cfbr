@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, tile, line_chart %}
+{% block title %}{{ season }} accuracy · CFB Ratings{% endblock %}
+{% block content %}
+<form class="filters" method="get" action="/accuracy">
+  {{ season_select(seasons, season) }}
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+
+<h1>{{ season }} accuracy</h1>
+<p class="lede">
+  Every prediction was made walk-forward, using only games played before that week kicked off.
+  {% if kind == "tuning" %}<span class="badge">Tuning season</span> Hyperparameters were tuned on {{ cfg.seasons.tuning[0] }}–{{ cfg.seasons.tuning[1] }}, so these numbers are slightly optimistic.
+  {% elif kind == "holdout" %}<span class="badge">Holdout season</span> Never used for tuning.
+  {% else %}<span class="badge">Live season</span> Season to date.{% endif %}
+</p>
+
+{% if summary.n_games %}
+<div class="tiles">
+  {{ tile("Games", summary.n_games) }}
+  {{ tile("Model MAE", summary.mae|num(2) ~ " pts") }}
+  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num(2) ~ " pts", "model " ~ summary.model_mae_lined|num(2) ~ " on the same " ~ summary.n_lined ~ " games") }}{% endif %}
+  {{ tile("Massey MAE", summary.massey_mae|num(2) ~ " pts", "score-only baseline") }}
+  {{ tile("Winners picked", summary.su_accuracy|pct(1)) }}
+  {% if summary.ats_n %}{{ tile("Against the spread", summary.ats_win_rate|pct(1),
+       "95% CI " ~ summary.ats_ci95_low|pct(1) ~ "–" ~ summary.ats_ci95_high|pct(1) ~ " · n=" ~ summary.ats_n) }}{% endif %}
+</div>
+
+{% if by_slot %}
+{{ line_chart("acc-chart", chart, "Mean absolute error by week, games with a closing line", "points; lower is better") }}
+<details class="table-view">
+  <summary>Week-by-week table</summary>
+  <div class="table-wrap">
+  <table class="data">
+    <thead><tr><th>Week</th><th class="num">Games</th><th class="num">Model</th><th class="num">Vegas</th><th class="num">Massey</th></tr></thead>
+    <tbody>
+    {% for r in by_slot %}
+      <tr><td><a href="/games?season={{ season }}&amp;slot={{ r.slot }}">{{ r.label }}</a></td><td class="num">{{ r.n }}</td>
+        <td class="num strong">{{ r.model|num(2) }}</td><td class="num">{{ r.vegas|num(2) }}</td><td class="num">{{ r.massey|num(2) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
+{% else %}
+<p class="muted">No completed games yet.</p>
+{% endif %}
+
+{% if log is not none and log.height %}
+<h2>Weekly run log</h2>
+<p class="note">One line per <code>cfbr weekly</code> run: season-to-date accuracy through that week.</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Through</th><th>Run at</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Vegas MAE</th>
+    <th class="num">Massey MAE</th><th class="num">ATS</th></tr></thead>
+  <tbody>
+  {% for r in log.iter_rows(named=True) %}
+    <tr><td>Week {{ r.through_week }}</td><td>{{ r.run_at }}</td><td class="num">{{ r.n_games }}</td>
+      <td class="num strong">{{ r.mae|num(2) }}</td><td class="num">{{ r.line_mae|num(2) }}</td>
+      <td class="num">{{ r.massey_mae|num(2) }}</td><td class="num">{{ r.ats_win_rate|pct(1) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+<h2>All seasons</h2>
+<p class="note">Same model and config for every season. Vegas and model MAE in the "same games" columns use only games with a closing line.</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Season</th><th>Set</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Model (same games)</th>
+    <th class="num">Vegas</th><th class="num">Gap</th><th class="num">Massey</th><th class="num">Winners</th><th class="num">ATS [95% CI]</th></tr></thead>
+  <tbody>
+  {% for r in per_season|reverse %}
+    <tr {% if r.season == season %}class="selected"{% endif %}>
+      <td><a href="/accuracy?season={{ r.season }}">{{ r.season }}</a></td><td>{{ r.kind }}</td><td class="num">{{ r.n_games }}</td>
+      <td class="num strong">{{ r.mae|num(2) }}</td><td class="num">{{ r.model_mae_lined|num(2) }}</td>
+      <td class="num">{{ r.line_mae|num(2) }}</td>
+      <td class="num">{{ (r.model_mae_lined - r.line_mae)|signed(2) if r.n_lined else "—" }}</td>
+      <td class="num">{{ r.massey_mae|num(2) }}</td><td class="num">{{ r.su_accuracy|pct(1) }}</td>
+      <td class="num">{% if r.ats_n %}{{ r.ats_win_rate|pct(1) }} [{{ r.ats_ci95_low|pct(1) }}, {{ r.ats_ci95_high|pct(1) }}]{% else %}—{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if runs %}
+<h2>Backtest runs</h2>
+<p class="note">From <code>results/</code>. Each run records its own config; runs before tuning used <code>config/default.toml</code>.</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Run</th><th>Seasons</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Vegas</th>
+    <th class="num">Massey</th><th class="num">ATS [95% CI]</th></tr></thead>
+  <tbody>
+  {% for run in runs %}{% set o = run.metrics.overall %}
+    <tr><td><code>{{ run.run_id }}</code></td>
+      <td>{{ run.metrics.seasons[0] }}–{{ run.metrics.seasons[-1] }}</td><td class="num">{{ o.n_games }}</td>
+      <td class="num strong">{{ o.mae|num(2) }}</td><td class="num">{{ o.line_mae|num(2) }}</td><td class="num">{{ o.massey_mae|num(2) }}</td>
+      <td class="num">{% if o.ats_n %}{{ o.ats_win_rate|pct(1) }} [{{ o.ats_ci95_low|pct(1) }}, {{ o.ats_ci95_high|pct(1) }}]{% else %}—{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CFB Ratings{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <script>
+    try { const t = localStorage.getItem("cfbr-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="site">
+    <a class="brand" href="/rankings">CFB Ratings</a>
+    <nav>
+      {% set path = request.url.path %}
+      <a href="/rankings" {% if path.startswith('/rankings') or path.startswith('/team') %}aria-current="page"{% endif %}>Rankings</a>
+      <a href="/games" {% if path.startswith('/games') %}aria-current="page"{% endif %}>Games</a>
+      <a href="/accuracy" {% if path.startswith('/accuracy') %}aria-current="page"{% endif %}>Accuracy</a>
+    </nav>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark theme">◐</button>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site">
+    Rating = expected point margin against an average FBS team on a neutral field.
+    Closing lines are shown for comparison only; they are never model inputs.
+  </footer>
+  <script src="{{ url_for('static', path='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, delta %}
+{% block title %}{{ season }} {{ s.label(week) }} rankings · CFB Ratings{% endblock %}
+{% block content %}
+<form class="filters" method="get" action="/rankings">
+  {{ season_select(seasons, season) }}
+  <label>Through
+    <select name="week" data-autosubmit>
+      {% for w in s.weeks|reverse %}<option value="{{ w }}" {% if w == week %}selected{% endif %}>{{ s.label(w) }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Conference
+    <select name="conf" data-autosubmit>
+      <option value="">All FBS</option>
+      {% for c in conferences %}<option {% if c == conf %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+  </label>
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+
+<h1>{{ season }} ratings · {{ s.label(week) }}{% if conf %} · {{ conf }}{% endif %}</h1>
+<p class="lede">
+  {% if week == 0 %}Preseason prior, before any {{ season }} games.
+  {% elif week == FINAL %}After all {{ season }} games, including the postseason.
+  {% else %}Every game through week {{ week }}: ratings as of {{ as_of|kickoff }}, before the next week kicks off.{% endif %}
+  {% if kind == "live" and s.meta.live %}<span class="badge">Live season</span>{% endif %}
+  {% if kind == "tuning" %}<span class="badge">Tuning season</span>{% elif kind == "holdout" %}<span class="badge">Holdout season</span>{% endif %}
+</p>
+
+<div class="table-wrap">
+<table class="data sortable" id="rankings">
+  <thead>
+    <tr>
+      <th data-sort="num" class="num">Rk</th>
+      <th data-sort="num" class="num" title="Rank change since the previous table">±</th>
+      <th data-sort="text">Team</th>
+      <th data-sort="text" class="opt">Conf</th>
+      <th data-sort="num" class="num">Record</th>
+      <th data-sort="num" class="num" title="Expected margin vs. an average FBS team, neutral field">Rating</th>
+      <th data-sort="num" class="num opt" title="Offense component, points">Off</th>
+      <th data-sort="num" class="num opt" title="Defense component, points (higher is better)">Def</th>
+      <th data-sort="num" class="num opt" title="Rating change since the previous table">Δ Rating</th>
+      <th data-sort="num" class="num opt" title="How much of the rating still comes from the preseason prior">Prior</th>
+      <th class="opt" aria-label="Rating trend this season">Trend</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="num" data-v="{{ r.rank }}">{{ r.rank }}</td>
+      <td class="num" data-v="{{ r.rank_change if r.rank_change is not none else 0 }}">{{ delta(r.rank_change, 0) }}</td>
+      <td class="team"><a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a></td>
+      <td class="opt">{{ r.conference or "—" }}</td>
+      <td class="num" data-v="{{ r.w - r.l }}">{{ r.w }}–{{ r.l }}</td>
+      <td class="num strong" data-v="{{ r.rating }}">{{ r.rating|signed }}</td>
+      <td class="num opt" data-v="{{ r.offense }}">{{ r.offense|signed }}</td>
+      <td class="num opt" data-v="{{ r.defense }}">{{ r.defense|signed }}</td>
+      <td class="num opt" data-v="{{ r.rating_change if r.rating_change is not none else 0 }}">{{ delta(r.rating_change) }}</td>
+      <td class="num opt" data-v="{{ r.prior_share }}">{{ r.prior_share|pct(0) }}</td>
+      <td class="spark opt">
+        {% set pts = sparkline(r.trend or [], lo, hi) %}
+        {% if pts %}<svg width="72" height="18" viewBox="-2 -2 76 22" role="img"
+             aria-label="Rating trend: {% for v in r.trend %}{{ v|signed }}{% if not loop.last %}, {% endif %}{% endfor %}">
+          <title>{% for v in r.trend %}{{ v|signed }}{% if not loop.last %} → {% endif %}{% endfor %}</title>
+          <polyline points="{{ pts }}"/></svg>{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="11" class="muted">No teams.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Click a column header to sort. Prior share falls as a team's plays accumulate; by midseason most of a rating comes from this season's games.</p>
+{% endblock %}

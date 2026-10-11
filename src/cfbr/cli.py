@@ -227,6 +227,7 @@ def weekly(config: ConfigOpt = None) -> None:
     from cfbr.model.engine import Engine
     from cfbr.prep.plays import build_prep
     from cfbr.report.rank import append_accuracy, run_rank, season_accuracy
+    from cfbr.web.build import build_season, web_dir
 
     cfg = _default_config(config)
     cfg.paths.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -265,12 +266,15 @@ def weekly(config: ConfigOpt = None) -> None:
     build_prep(cfg)
     ds = Dataset.load(cfg)
     out = run_rank(cfg, season, week, last_completed=season - 1, ds=ds)
-    m = season_accuracy(Engine(ds, cfg, last_completed=season - 1), season, week)
+    eng = Engine(ds, cfg, last_completed=season - 1)
+    m = season_accuracy(eng, season, week)
     acc_path = cfg.paths.out_dir / str(season) / "accuracy.csv"
     append_accuracy(acc_path, season, week, m)
     log.info("season-to-date: %s", json.dumps({k: m.get(k) for k in ("n_games", "mae", "line_mae", "model_mae_lined",
                                                                      "ats_win_rate", "massey_mae")}, default=float))
-    typer.echo(f"wrote {out} and {acc_path}")
+    # Last, so a web-data failure can't cost the rankings or the accuracy line.
+    web_out = build_season(eng, season, web_dir(cfg))
+    typer.echo(f"wrote {out}, {acc_path} and {web_out}")
 
 
 @app.command()
@@ -286,6 +290,44 @@ def quota(config: ConfigOpt = None) -> None:
         client.close()
     typer.echo(f"local ledger: {client.calls_this_month()} calls this month")
     typer.echo(f"CFBD: {info.get('usedCalls')} used, {info.get('remainingCalls')} remaining, resets {info.get('resetAt')}")
+
+
+web_app = typer.Typer(no_args_is_help=True, help="Local web app over the ratings.")
+app.add_typer(web_app, name="web")
+
+
+@web_app.command("build")
+def web_build(
+    seasons: Annotated[Optional[str], typer.Option(help="e.g. 2015-2026 or 2026; default all seasons")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Precompute week-by-week ratings and game predictions into out/web/."""
+    from cfbr.backtest.harness import parse_seasons
+    from cfbr.web.build import build
+
+    cfg = _default_config(config)
+    log.info("config: %s", cfg.source)
+    for out in build(cfg, parse_seasons(seasons) if seasons else None):
+        typer.echo(f"wrote {out}")
+
+
+@web_app.command("serve")
+def web_serve(
+    host: Annotated[str, typer.Option(help="Use 0.0.0.0 to allow other machines on the network")] = "127.0.0.1",
+    port: Annotated[int, typer.Option()] = 8000,
+    config: ConfigOpt = None,
+) -> None:
+    """Serve the web app (reads out/web/; run `cfbr web build` first)."""
+    import uvicorn
+
+    from cfbr.web.app import create_app
+    from cfbr.web.build import web_dir
+
+    cfg = _default_config(config)
+    if not any(web_dir(cfg).glob("*/meta.json")):
+        log.warning("no web data in %s yet; run `cfbr web build`", web_dir(cfg))
+    typer.echo(f"serving on http://{host}:{port}")
+    uvicorn.run(create_app(cfg), host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

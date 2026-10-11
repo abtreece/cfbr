@@ -1,0 +1,31 @@
+{% macro season_select(seasons, season) -%}
+<label>Season
+  <select name="season" data-autosubmit>
+    {% for y in seasons|reverse %}<option value="{{ y }}" {% if y == season %}selected{% endif %}>{{ y }}</option>{% endfor %}
+  </select>
+</label>
+{%- endmacro %}
+
+{% macro team_link(name, season, fbs_teams) -%}
+{% if name in fbs_teams %}<a href="/team/{{ season }}/{{ name|q }}">{{ name }}</a>{% else %}{{ name }}{% endif %}
+{%- endmacro %}
+
+{% macro delta(x, digits=1, good_up=True) -%}
+{% if x is none or x != x %}<span class="muted">—</span>
+{%- elif x > 0 %}<span class="{{ 'up' if good_up else 'down' }}">▲ {{ x|num(digits) if digits else x }}</span>
+{%- elif x < 0 %}<span class="{{ 'down' if good_up else 'up' }}">▼ {{ (-x)|num(digits) if digits else -x }}</span>
+{%- else %}<span class="muted">0</span>{% endif %}
+{%- endmacro %}
+
+{% macro tile(label, value, sub=None) -%}
+<div class="tile"><div class="tile-label">{{ label }}</div><div class="tile-value">{{ value }}</div>
+  {% if sub %}<div class="tile-sub">{{ sub }}</div>{% endif %}</div>
+{%- endmacro %}
+
+{% macro line_chart(id, chart, title, y_label) -%}
+<figure class="chart" id="{{ id }}" tabindex="0" aria-label="{{ title }}">
+  <figcaption>{{ title }} <span class="muted">({{ y_label }})</span></figcaption>
+  <div class="chart-body"></div>
+  <script type="application/json">{{ chart|tojson }}</script>
+</figure>
+{%- endmacro %}
