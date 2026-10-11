@@ -10,9 +10,13 @@
 # Excluded on that basis (2026-10-11): secsports.com (incl. SEC reports served via
 # the HD Intelligence embed), espn.com, sports.yahoo.com, cbssports.com, theathletic.com.
 #
+# SEC/ESPN note: secsports.com and espn.com are governed by the Disney Terms of Use,
+# which prohibit automated access to compile any data set or database (and name machine
+# learning explicitly). That, not robots.txt, is the binding reason they're excluded.
+#
 # Official availability coverage (2026-10-11): Big Ten, ACC, Big 12, American, MAC
 # (all via the HD Intelligence embed on the conference's own page). Not yet collected:
-# SEC (AI opt-out), Pac-12, Mountain West, Sun Belt (no report found on the linked
+# SEC (Disney Terms of Use), Pac-12, Mountain West, Sun Belt (no report found on the linked
 # pages yet), Conference USA (different vendor, image graphics), independents. Coverage
 # is expected to stay incomplete; the model must treat "no report" as unknown.
 
