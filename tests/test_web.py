@@ -629,6 +629,14 @@ def test_premium_viewers_see_live_model_output(web_cfg):
 
 
 
+def test_bankroll_chart_is_formatted_as_dollars():
+    from cfbr.web.bets import money_chart
+
+    spec = money_chart([{"label": "Week 5", "balance": 986.0}, {"label": "Week 6", "balance": 951.0}], 1000.0)
+    assert spec["format"] == "dollars" and spec["signed"] is False
+    assert spec["x"] == ["Start", "Week 5", "Week 6"] and spec["series"][0]["values"] == [1000.0, 986.0, 951.0]
+
+
 def test_templates_do_not_hot_reload(web_cfg):
     """Templates change only on restart, together with the code that renders them."""
     assert create_app(web_cfg).state.templates.env.auto_reload is False

@@ -56,6 +56,7 @@ const el = (tag, attrs = {}, parent) => {
 };
 const fmt = (v) => (v == null ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(1));
 const fmtPlain = (v) => (v == null ? "—" : v.toFixed(2));
+const fmtDollars = (v) => (v == null ? "—" : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 }));
 const shortX = (s) => s.replace(/^Week /, "").replace(/^Preseason$/, "Pre").replace(/^Postseason /, "P");
 
 function niceTicks(lo, hi, count = 5) {
@@ -72,7 +73,8 @@ function lineChart(fig) {
   const spec = JSON.parse(fig.querySelector("script[type='application/json']").textContent);
   const body = fig.querySelector(".chart-body");
   const signedValues = spec.signed !== false;
-  const f = signedValues ? fmt : fmtPlain;
+  const dollars = spec.format === "dollars";
+  const f = dollars ? fmtDollars : signedValues ? fmt : fmtPlain;
   const n = spec.x.length;
   let active = null;
 
@@ -111,7 +113,7 @@ function lineChart(fig) {
     ticks.forEach((t) => {
       el("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: t === 0 && signedValues ? "zero" : "gridline" }, svg);
       const lbl = el("text", { x: m.l - 6, y: y(t) + 4, "text-anchor": "end", class: "tick" }, svg);
-      lbl.textContent = signedValues ? fmt(t).replace(".0", "") : String(t);
+      lbl.textContent = dollars ? fmtDollars(t) : signedValues ? fmt(t).replace(".0", "") : String(t);
     });
     const every = Math.max(1, Math.ceil(n / Math.floor((W - m.l - m.r) / 44)));
     const lastGrid = Math.floor((n - 1) / every) * every;

@@ -75,7 +75,7 @@ def money_chart(weeks: list[dict], bankroll: float) -> dict | None:
     """Bankroll from the start through each week with settled bets."""
     if not weeks:
         return None
-    return {"signed": False, "x": ["Start"] + [w["label"] for w in weeks],
+    return {"signed": False, "format": "dollars", "x": ["Start"] + [w["label"] for w in weeks],
             "series": [{"name": "Bankroll ($)", "values": [round(bankroll, 2)] + [round(w["balance"], 2) for w in weeks]}]}
 
 
