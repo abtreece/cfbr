@@ -73,6 +73,33 @@ def prep(config: ConfigOpt = None) -> None:
 
 
 @app.command()
+def ratings(
+    season: Annotated[int, typer.Option()],
+    week: Annotated[int, typer.Option(help="Ratings available before this week kicks off")],
+    top: Annotated[int, typer.Option()] = 25,
+    config: ConfigOpt = None,
+) -> None:
+    """Print the ratings table for a (season, week)."""
+    import time
+
+    import polars as pl
+
+    from cfbr.data import Dataset
+    from cfbr.ingest.fetch import current_season
+    from cfbr.model.engine import Engine
+
+    cfg = load_config(config)
+    eng = Engine(Dataset.load(cfg), cfg, last_completed=current_season() - 1)
+    eng.calibration(season)
+    t0 = time.perf_counter()
+    tbl = eng.ratings(season, week)
+    log.info("week fit %.2fs", time.perf_counter() - t0)
+    with pl.Config(tbl_rows=top + 5, float_precision=2):
+        typer.echo(tbl.select("team", "rating", "offense", "defense", "prior_share").head(top))
+        typer.echo(tbl.filter(pl.col("team").str.starts_with("FCS")).select("team", "rating"))
+
+
+@app.command()
 def quota(config: ConfigOpt = None) -> None:
     """Show this month's API call usage (local ledger and CFBD /info)."""
     from cfbr.ingest.client import CFBDClient

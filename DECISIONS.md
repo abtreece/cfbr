@@ -22,3 +22,10 @@ One line each: decision — reason — phase.
 - Plays where both offense and defense are non-FBS are dropped (no FBS information; would only shape the pooled FCS entity against itself) — P2
 - 2020 has ~79k scrimmage plays (COVID-shortened season), below the ~120k sanity line; all other seasons 119k–124k. Kept as-is — P2
 - Score at the snap skips administrative and kickoff rows (Timeout, End *, Kickoff*, Penalty, Uncategorized, placeholder), whose CFBD scores are often swapped or stale; using every row made scores go down in 54% of 2023 games, using reliable rows only leaves ~0.2% of rows with a score decrease (genuinely corrupt data, accepted) — P2
+- Efficiency ridge solved via the normal equations (2·teams + 2 columns; dense solve), intercept and home term effectively unpenalized — exact and ~0.3s per fit on a full season — P3
+- O and D are re-centered to mean zero over that season's FBS teams after each fit (intercept absorbs the shift), so 0 = average FBS unit; higher D = better defense, so team net = O + D — P3
+- Margin calibration uses one net rating per team for PPA and for success rate (margin = b0·home + b1·Δnet_ppa + b2·Δnet_sr, no intercept, home = 0 at neutral sites), fit by OLS on as-of ratings of games in the training seasons from the hybrid scheme — spec allows this simplification — P3
+- Massey baseline: ridge (alpha 10) on margins capped at ±28, same-season games kicked off before the as-of time, no prior — P3
+- Ratings "for week w" are those available before week w's first kickoff — P3
+- Synthetic recovery test uses a realistic team spread (SD 0.15 PPA/play) and full 13-game schedule; with SD 0.12 and 12 games the best any estimator could manage is r ≈ 0.94, so the 0.95 target tests noise, not the model — P3
+- Prior share reported as the ridge shrinkage fraction alpha/(alpha + plays), averaged over offense and defense — P3
