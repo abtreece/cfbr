@@ -88,6 +88,27 @@ def player_rows(players: pl.DataFrame) -> list[dict]:
     return sorted(rows, key=lambda r: (r["pos_order"], r["jersey"] if r["jersey"] is not None else 999, r["name"] or ""))
 
 
+REASON_ORDER = {"drafted": 0, "transfer": 1, "portal_transfer": 2, "portal_no_school": 3, "unknown": 4}
+
+
+def departure_rows(departures: pl.DataFrame) -> list[dict]:
+    """Departures, most production first, with display fields for why they left.
+    Files built before draft/portal data existed have no ``reason``: fall back to
+    "transfer" when on another roster, else "unknown"."""
+    rows = []
+    for r in departures.sort("prev_plays", "prev_tackles", descending=True, nulls_last=True).iter_rows(named=True):
+        reason = r.get("reason") or ("transfer" if r.get("to_team") else "unknown")
+        cls = r.get("prev_class_year")
+        draft = None
+        if reason == "drafted":
+            parts = [f"Rd {r['draft_round']}" if r.get("draft_round") else None,
+                     f"#{r['draft_overall']} overall" if r.get("draft_overall") else None, r.get("draft_nfl_team")]
+            draft = " · ".join(p for p in parts if p)
+        rows.append(r | {"reason": reason, "reason_order": REASON_ORDER.get(reason, 9), "draft_label": draft,
+                         "prev_class_label": CLASS.get(cls, "—") if cls is not None else "—"})
+    return rows
+
+
 def team_roster(roster: Roster, team: str) -> tuple[pl.DataFrame, pl.DataFrame, dict | None]:
     p = roster.players.filter(pl.col("team") == team)
     d = roster.departures.filter(pl.col("team") == team)
@@ -105,6 +126,7 @@ def roster_card(roster: Roster | None, team: str) -> dict | None:
     counts = dict(p.group_by("status").len().iter_rows())
     return {"size": p.height, "returners": counts.get("returner", 0), "transfers_in": counts.get("transfer_in", 0),
             "no_stats": counts.get("new", 0), "departures": d.height, "transfers_out": d["to_team"].is_not_null().sum(),
+            "drafted": int((d["reason"] == "drafted").sum()) if "reason" in d.columns else None,
             "ret_offense": feature_value("off_ret_share", s.get("off_ret_share")) if s else "—",
             "qb_back": feature_value("qb_returns", s.get("qb_returns")) if s else "—",
             "as_of": s.get("roster_as_of") if s else None}
@@ -164,7 +186,8 @@ def make_router(store: Store, render: Callable[..., HTMLResponse]) -> APIRouter:
         positions = sorted({r["position"] for r in rows if r["position"]},
                            key=lambda x: (POSITION_ORDER.index(x) if x in POSITION_ORDER else 99, x))
         return render(request, "roster.html", season=season, team=team, rows=rows, positions=positions,
-                      departures=d.sort("prev_plays", "prev_tackles", descending=True, nulls_last=True).to_dicts(),
+                      departures=departure_rows(d), has_reasons="reason" in d.columns,
+                      portal_data="in_portal" in d.columns and d["in_portal"].is_not_null().any(),
                       tiles=summary_tiles(s) if s else [], as_of=s.get("roster_as_of") if s else None,
                       in_qb=incoming_qb(s),
                       card=roster_card(store.roster(season), team), fbs_teams=fbs,

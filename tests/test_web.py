@@ -762,6 +762,35 @@ def test_roster_page(roster_client):
     assert "Incoming transfer QB" in html and "from Hawai&#39;i · 75 pass att. · +0.12 PPA/att." in html
 
 
+def test_roster_page_departure_reasons(web_cfg):
+    season_dir = _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
+    _write_roster(season_dir)
+    pl.DataFrame({
+        "season": [SEASON] * 5, "team": ["Texas A&M"] * 5, "player_id": ["8", "9", "10", "11", "12"],
+        "name": ["Gone Pro", "Left Town", "Big Tackle", "Portal Guy", "Old Man"],
+        "position": ["RB", "LB", "OL", "WR", "S"], "prev_class_year": [3, 2, 4, 2, 4],
+        "to_team": [None, "Ohio State", None, None, None],
+        "reason": ["drafted", "transfer", "drafted", "portal_transfer", "unknown"],
+        "draft_round": [1, None, 4, None, None], "draft_overall": [12, None, 120, None, None],
+        "draft_nfl_team": ["Chicago", None, "Dallas", None, None],
+        "in_portal": [False, True, False, True, False], "portal_destination": [None, "Ohio State", None, "Montana", None],
+        "prev_plays": [190, None, None, 20, None], "prev_ppa_total": [22.0, None, None, 1.0, None],
+        "prev_tackles": [None, 61.0, None, None, 30.0], "prev_havoc": [None, 7.5, None, None, 1.0],
+    }, schema_overrides={"season": pl.Int32, "prev_class_year": pl.Int32, "draft_round": pl.Int32,
+                         "draft_overall": pl.Int32, "prev_plays": pl.Int64}).write_parquet(
+        season_dir / "roster_departures.parquet")
+    client = TestClient(create_app(web_cfg))
+    html = " ".join(client.get("/roster/2026/Texas%20A%26M").text.split())
+    assert "Drafted</span> <span class=\"muted\">Rd 1 · #12 overall · Chicago" in html
+    assert "Big Tackle" in html and "Rd 4 · #120 overall · Dallas" in html
+    assert "Montana <span class=\"muted\">(portal)</span>" in html
+    assert "not on a roster · senior last season" in html
+    assert '<option value="portal_transfer">' in html
+    assert "2 drafted · 1 now on another roster" in html
+    team_html = " ".join(client.get("/team/2026/Texas%20A%26M").text.split())
+    assert "2 drafted · 1 to other rosters" in team_html
+
+
 def test_team_page_shows_roster_card(roster_client):
     html = " ".join(roster_client.get("/team/2026/Texas%20A%26M").text.split())
     assert '<a href="/roster/2026/Texas%20A%26M">Full roster' in html

@@ -202,6 +202,36 @@ def build_roster(raw: Path) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=ROSTER_SCHEMA)
 
 
+DRAFT_SCHEMA = {"season": pl.Int32, "player_id": pl.Utf8, "name": pl.Utf8, "college_team": pl.Utf8,
+                "position": pl.Utf8, "nfl_team": pl.Utf8, "round": pl.Int32, "pick": pl.Int32, "overall": pl.Int32}
+
+
+def build_draft_picks(raw: Path) -> pl.DataFrame:
+    """NFL draft picks; ``season`` is the draft year (the college season the player
+    did not return for). ``player_id`` is the CFBD college athlete id."""
+    rows = [{"season": y, "player_id": str(r["collegeAthleteId"]) if r.get("collegeAthleteId") is not None else None,
+             "name": r.get("name"), "college_team": r.get("collegeTeam"), "position": r.get("position"),
+             "nfl_team": r.get("nflTeam"), "round": r.get("round"), "pick": r.get("pick"), "overall": r.get("overall")}
+            for y, p in _season_files(raw, "draft_picks") for r in _read(p)]
+    return pl.DataFrame(rows, schema=DRAFT_SCHEMA)
+
+
+PORTAL_SCHEMA = {"season": pl.Int32, "name": pl.Utf8, "position": pl.Utf8, "origin": pl.Utf8,
+                 "destination": pl.Utf8, "transfer_date": pl.Datetime("us", "UTC"), "eligibility": pl.Utf8}
+
+
+def build_portal(raw: Path) -> pl.DataFrame:
+    """Transfer portal entries for the season the player would play in. No player
+    id: CFBD's portal records carry only name, position and schools."""
+    rows = [{"season": y, "name": " ".join(x for x in (r.get("firstName"), r.get("lastName")) if x) or None,
+             "position": r.get("position"), "origin": r.get("origin"), "destination": r.get("destination"),
+             "transfer_date": r.get("transferDate"), "eligibility": r.get("eligibility")}
+            for y, p in _season_files(raw, "player_portal") for r in _read(p)]
+    df = pl.DataFrame(rows, schema={**PORTAL_SCHEMA, "transfer_date": pl.Utf8})
+    return df.with_columns(transfer_date=pl.col("transfer_date").str.to_datetime(time_zone="UTC", strict=False)
+                           .cast(pl.Datetime("us", "UTC")))
+
+
 COUNT_STATS = {("passing", "ATT"): "pass_att", ("rushing", "CAR"): "rush_car", ("receiving", "REC"): "rec"}
 
 
@@ -402,7 +432,7 @@ def build_store(raw: Path, db_path: Path) -> dict[str, int]:
             ("teams_season", build_teams), ("games", build_games), ("lines", build_lines),
             ("returning_production", build_returning), ("talent", build_talent), ("recruiting", build_recruiting),
             ("calendar", build_calendar), ("polls", build_polls), ("roster", build_roster),
-            ("roster_latest", build_roster_latest),
+            ("roster_latest", build_roster_latest), ("draft_picks", build_draft_picks), ("portal", build_portal),
             ("player_ppa", build_player_ppa), ("player_defense", build_player_defense),
             ("game_players", build_game_players),
         ]:

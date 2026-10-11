@@ -20,7 +20,7 @@
 {% if card %}
 <div class="tiles">
   {{ tile("Players", card.size, card.returners ~ " returners · " ~ card.transfers_in ~ " transfers in · " ~ card.no_stats ~ " no prior stats") }}
-  {{ tile("Departures", card.departures, card.transfers_out ~ " now on another roster") }}
+  {{ tile("Departures", card.departures, (card.drafted ~ " drafted · " if card.drafted is not none else "") ~ card.transfers_out ~ " now on another roster") }}
   {% for t in tiles %}{% if t.key in ("off_ret_share", "qb_returns", "def_ret_tackles", "qb_in_ppa") %}{{ tile(t.label, t.value) }}{% endif %}{% endfor %}
   {% if in_qb %}{{ tile("Incoming transfer QB", in_qb.name, in_qb.detail) }}{% endif %}
 </div>
@@ -96,16 +96,39 @@
 
 <h2>Departures</h2>
 {% if departures %}
+{% if has_reasons %}
+<form class="filters" onsubmit="return false;">
+  <label>Why
+    <select data-row-filter="departures" data-attr="reason">
+      <option value="">All</option>
+      <option value="drafted">Drafted</option>
+      <option value="transfer">On another FBS roster</option>
+      {% if portal_data %}<option value="portal_transfer">Portal, other school</option>
+      <option value="portal_no_school">Portal, no school listed</option>{% endif %}
+      <option value="unknown">No record</option>
+    </select>
+  </label>
+</form>
+{% endif %}
 <div class="table-wrap">
-<table class="data sortable">
-  <thead><tr><th data-sort="text">Name</th><th data-sort="text">Pos</th><th data-sort="text">Now at</th>
+<table class="data sortable" id="departures">
+  <thead><tr><th data-sort="text">Name</th><th data-sort="text">Pos</th>
+    <th data-sort="num" data-first="asc" class="num opt" title="Class last season">Class</th>
+    <th data-sort="num" data-first="asc">Why / now at</th>
     <th data-sort="num" class="num">Plays</th><th data-sort="num" class="num opt">PPA total</th>
     <th data-sort="num" class="num opt-xs">Tkl</th><th data-sort="num" class="num opt">Havoc</th></tr></thead>
   <tbody>
   {% for r in departures %}
-    <tr>
-      <td class="team strong">{{ r.name }}</td><td>{{ r.position or "—" }}</td>
-      <td class="team">{% if r.to_team %}{{ team_link(r.to_team, season, fbs_teams) }}{% else %}<span class="muted">not on a roster</span>{% endif %}</td>
+    <tr data-reason="{{ r.reason }}">
+      <td class="team strong">{{ r.name or "—" }}</td><td>{{ r.position or "—" }}</td>
+      <td class="num opt" data-v="{{ r.prev_class_year or 9 }}">{{ r.prev_class_label }}</td>
+      <td class="team" data-v="{{ r.reason_order * 1000 + (r.draft_overall or 0) }}">
+        {%- if r.reason == "drafted" %}<span class="strong">Drafted</span> <span class="muted">{{ r.draft_label }}</span>
+        {%- elif r.reason == "transfer" %}{{ team_link(r.to_team, season, fbs_teams) }}
+        {%- elif r.reason == "portal_transfer" %}{{ team_link(r.portal_destination, season, fbs_teams) }} <span class="muted">(portal)</span>
+        {%- elif r.reason == "portal_no_school" %}<span class="muted">in portal, no school listed</span>
+        {%- else %}<span class="muted">not on a roster{% if (r.prev_class_year or 0) >= 4 %} · senior last season{% endif %}</span>{% endif -%}
+      </td>
       <td class="num" data-v="{{ r.prev_plays or 0 }}">{{ r.prev_plays|count }}</td>
       <td class="num opt" data-v="{{ r.prev_ppa_total if r.prev_ppa_total is not none else -999 }}">{{ r.prev_ppa_total|signed(0) }}</td>
       <td class="num opt-xs" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
@@ -115,7 +138,11 @@
   </tbody>
 </table>
 </div>
-<p class="note">Players on last season's roster who are not on this one. "Not on a roster" covers graduation, the draft, leaving football, and players CFBD's roster misses.</p>
+<p class="note">Players from last season who are not on this roster: anyone with recorded stats, plus drafted players without stats (mostly offensive linemen).
+  {% if has_reasons %}"Drafted" is the NFL draft held before this season.
+  {% if portal_data %}Portal entries are matched by name and school, so a few may be missed or mismatched.{% endif %}
+  "Not on a roster" with no draft or portal record usually means eligibility ran out, but also covers leaving football and players CFBD's roster misses.
+  {% else %}"Not on a roster" covers graduation, the draft, leaving football, and players CFBD's roster misses.{% endif %}</p>
 {% else %}
 <p class="muted">No departures recorded.</p>
 {% endif %}

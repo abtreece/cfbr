@@ -110,11 +110,29 @@ def fetch_player_data(client: CFBDClient, year: int, live: bool, live_week: int 
     (``roster/{year}/wNN.json``, one call per week) for display.
     """
     client.get("/roster", {"year": year}, year, "season")
+    fetch_departure_data(client, year)
     if live and live_week is not None:
         client.get("/roster", {"year": year}, year, f"w{live_week:02d}")
     if not live:
         for ep in PLAYER_SEASON_ENDPOINTS:
             client.get(ep, {"year": year}, year, "season")
+
+
+PORTAL_FIRST_SEASON = 2021  # CFBD's transfer-portal data starts with the 2021 cycle
+
+
+def fetch_departure_data(client: CFBDClient, year: int) -> None:
+    """Why players left before season ``year``: that spring's NFL draft and the
+    transfer portal entries for ``year``. Display only (roster departures).
+
+    Fetched once per season (key ``season``). Both are complete by August, when
+    ``year`` becomes the in-progress season, so the cached file never goes stale.
+    """
+    if year <= client.cfg.ingest.first_season:
+        return  # no previous season in the store, so no departures to explain
+    client.get("/draft/picks", {"year": year}, year, "season")
+    if year >= PORTAL_FIRST_SEASON:
+        client.get("/player/portal", {"year": year}, year, "season")
 
 
 def completed_play_weeks(games: list) -> list[tuple[str, int]]:

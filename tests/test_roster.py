@@ -175,3 +175,59 @@ def test_career_history_and_qb_experience():
     assert t["roster_careers"].columns[4:] == [k for k in CAREER_LABELS if k != "career_season"]
     q = t["roster_players"].filter(pl.col("player_id") == "qbB").row(0, named=True)
     assert q["career_seasons"] == 2 and q["career_pass_att"] == 530.0 and q["career_qb_starts"] == 1.0
+
+
+def test_departure_reasons_from_draft_and_portal():
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from cfbr.report.roster_web import DEPARTURE_REASONS, roster_tables
+
+    roster, ppa, d, status = _data()
+    prev = pl.DataFrame({"season": [2025] * 4, "player_id": ["qbA", "cbA", "olA", "wrA"], "team": ["A"] * 4,
+                         "position": ["QB", "CB", "OL", "WR"], "class_year": [3, 4, 4, 2]})
+    roster = pl.concat([roster, prev], how="diagonal_relaxed").with_columns(
+        name=pl.col("player_id").replace({"cbA": "Cee Bee Jr.", "wrA": "Dub Arr"}),
+        jersey=pl.lit(None, pl.Int32), height=pl.lit(None, pl.Int32), weight=pl.lit(None, pl.Int32),
+        home_city=pl.lit(None, pl.Utf8), home_state=pl.lit(None, pl.Utf8))
+    draft = pl.DataFrame({"season": [2026, 2026, 2025], "player_id": ["qbA", "olA", "lbA"],
+                          "college_team": ["A", "A", "A"], "nfl_team": ["Las Vegas", "Chicago", "Dallas"],
+                          "round": [1, 3, 1], "overall": [5, 80, 2]})
+    t0 = datetime(2026, 1, 5, tzinfo=UTC)
+    portal = pl.DataFrame({"season": [2026] * 3, "name": ["Cee Bee", "Dub Arr", "Nobody Here"],
+                           "origin": ["A", "A", "A"], "destination": ["Montana", "B", None],
+                           "transfer_date": [t0] * 3})
+    ds = SimpleNamespace(roster=roster, player_ppa=ppa, player_defense=d, team_status=status, draft_picks=draft,
+                         portal=portal, fbs_teams=lambda s: ["A", "B"])
+    dep = {r["player_id"]: r for r in roster_tables(ds, 2026)["roster_departures"].iter_rows(named=True)}
+    assert dep["qbA"]["reason"] == "drafted" and dep["qbA"]["draft_overall"] == 5
+    assert dep["qbA"]["draft_nfl_team"] == "Las Vegas" and dep["qbA"]["prev_class_year"] == 3
+    assert dep["olA"]["reason"] == "drafted" and dep["olA"]["team"] == "A"   # no stats, still listed
+    assert dep["olA"]["prev_plays"] is None
+    assert "lbA" not in dep                                                 # returner; 2025 draft is irrelevant
+    assert dep["cbA"]["reason"] == "portal_transfer" and dep["cbA"]["portal_destination"] == "Montana"  # "Jr." ignored
+    assert dep["wrA"]["reason"] == "transfer" and dep["wrA"]["in_portal"] is True   # roster beats portal
+    assert dep["qbB"]["in_portal"] is False                                 # B had no portal entries
+    assert {r["reason"] for r in dep.values()} <= set(DEPARTURE_REASONS)
+
+
+def test_build_draft_and_portal_tables(tmp_path):
+    import json
+
+    from cfbr.ingest.store import build_draft_picks, build_portal
+
+    (tmp_path / "draft_picks" / "2026").mkdir(parents=True)
+    (tmp_path / "draft_picks" / "2026" / "season.json").write_text(json.dumps([
+        {"collegeAthleteId": 4837248, "collegeTeam": "Indiana", "nflTeam": "Las Vegas", "round": 1, "pick": 1,
+         "overall": 1, "name": "Fernando Mendoza", "position": "Quarterback"},
+        {"collegeAthleteId": None, "collegeTeam": "Nowhere", "nflTeam": "X", "round": 7, "pick": 1, "overall": 220,
+         "name": "No Id", "position": "Punter"}]))
+    (tmp_path / "player_portal" / "2026").mkdir(parents=True)
+    (tmp_path / "player_portal" / "2026" / "season.json").write_text(json.dumps([
+        {"season": 2026, "firstName": "Tray", "lastName": "Taylor", "position": "WR", "origin": "Troy",
+         "destination": None, "transferDate": "2026-01-17T05:39:00.000Z", "eligibility": "Immediate"}]))
+    dp = build_draft_picks(tmp_path)
+    assert dp["player_id"].to_list() == ["4837248", None] and dp["season"].to_list() == [2026, 2026]
+    po = build_portal(tmp_path).row(0, named=True)
+    assert po["name"] == "Tray Taylor" and po["destination"] is None and po["transfer_date"].day == 17
+    assert build_draft_picks(tmp_path / "empty").height == 0 and build_portal(tmp_path / "empty").height == 0

@@ -17,9 +17,16 @@ Columns (null = unknown):
                      prev_pass_plays, prev_pass_ppa_total, prev_pass_ppa_avg, prev_tackles,
                      prev_havoc (TFL + passes defended + interceptions) -- all "prev_" values
                      are last season's, at whatever school the player was on
-  roster_departures  season, team (the team they left), player_id, name, position, to_team
-                     (this season's roster they appear on, else null), prev_plays,
-                     prev_ppa_total, prev_tackles, prev_havoc
+  roster_departures  season, team (the team they left), player_id, name, position,
+                     prev_class_year (last season's, 1-5), to_team (this season's roster
+                     they appear on, else null), reason (DEPARTURE_REASONS), draft_round,
+                     draft_overall (NFL draft held before this season; null if not
+                     drafted), draft_nfl_team, in_portal (entered the transfer portal
+                     for this season; null before 2021, when CFBD's portal data
+                     starts), portal_destination (school listed in the portal, which
+                     may be non-FBS), prev_plays, prev_ppa_total, prev_tackles,
+                     prev_havoc. Players with no stats last season appear only if
+                     drafted. Portal records are linked by name + school (no id).
   roster_careers     one row per player per season of history, for players on this season's
                      roster: season (display season), team (current team), player_id,
                      career_season, career_team, source ("season stats" for completed
@@ -105,6 +112,15 @@ CAREER_LABELS: dict[str, tuple[str, str]] = {
     "ints": ("INT", "Interceptions"),
 }
 
+# roster_departures.reason, first match wins in this order.
+DEPARTURE_REASONS: dict[str, str] = {
+    "drafted": "Selected in the NFL draft held before this season",
+    "transfer": "On another FBS roster this season",
+    "portal_transfer": "Entered the transfer portal with a new school listed, but is not on an FBS roster here (often a non-FBS school)",
+    "portal_no_school": "Entered the transfer portal; no new school listed",
+    "unknown": "No record: graduation, undrafted, left football, or missing from CFBD's rosters",
+}
+
 PLAYER_COLS = ["player_id", "name", "jersey", "position", "class_year", "height", "weight", "home_city", "home_state"]
 
 
@@ -117,6 +133,59 @@ def _prev_production(ds: Dataset, season: int) -> pl.DataFrame:
         prev_havoc=pl.col("tfl") + pl.col("pd") + pl.col("ints"))
     both = off.join(de, on="player_id", how="full", coalesce=True)
     return both.with_columns(prev_team=pl.coalesce("prev_team", "prev_team_d")).drop("prev_team_d")
+
+
+def _name_key(col: str) -> pl.Expr:
+    """Loose name match key: lowercase letters only, suffixes (Jr., III, ...) dropped."""
+    return (pl.col(col).str.to_lowercase().str.replace_all(r"\b(jr|sr|ii|iii|iv|v)\b", "")
+            .str.replace_all(r"[^a-z]", ""))
+
+
+def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame) -> pl.DataFrame:
+    """Last season's players not on their team's roster now, with why they left
+    when CFBD records it: the NFL draft (linked by player id) or the transfer portal
+    (linked by name + school, as portal records carry no id)."""
+    prev_ros = (ds.roster.filter(pl.col("season") == season - 1).unique("player_id", keep="first")
+                .select("player_id", "name", "position", prev_class_year="class_year", roster_team="team"))
+    draft = getattr(ds, "draft_picks", None)
+    draft = (draft.filter((pl.col("season") == season) & pl.col("player_id").is_not_null())
+             .unique("player_id", keep="first")
+             .select("player_id", draft_college_team="college_team", draft_round="round", draft_overall="overall",
+                     draft_nfl_team="nfl_team")
+             if draft is not None else pl.DataFrame(schema={"player_id": pl.Utf8, "draft_college_team": pl.Utf8,
+                                                           "draft_round": pl.Int32, "draft_overall": pl.Int32,
+                                                           "draft_nfl_team": pl.Utf8}))
+    # Drafted players with no stats last season (mostly offensive linemen) are
+    # departures too; place them on last season's roster team.
+    no_stats = (draft.join(prev.select("player_id"), on="player_id", how="anti")
+                .join(prev_ros.select("player_id", "roster_team"), on="player_id", how="left")
+                .select("player_id", prev_team=pl.coalesce("roster_team", "draft_college_team")))
+    base = pl.concat([prev, no_stats], how="diagonal_relaxed")
+    out = (base.join(ros.select("player_id", to_team="team"), on="player_id", how="left")
+           .filter(pl.col("to_team").is_null() | (pl.col("to_team") != pl.col("prev_team")))
+           .join(prev_ros.drop("roster_team"), on="player_id", how="left")
+           .join(draft.drop("draft_college_team"), on="player_id", how="left")
+           .with_columns(drafted=pl.col("draft_overall").is_not_null(), _key=_name_key("name")))
+    portal = getattr(ds, "portal", None)
+    if portal is not None and portal.filter(pl.col("season") == season).height:
+        entries = (portal.filter(pl.col("season") == season)
+                   .with_columns(_key=_name_key("name"))
+                   .sort("transfer_date", nulls_last=False)
+                   .group_by("_key", "origin", maintain_order=True).last()  # latest entry if listed twice
+                   .select("_key", prev_team="origin", portal_destination="destination", in_portal=pl.lit(True)))
+        out = out.join(entries, on=["_key", "prev_team"], how="left").with_columns(
+            in_portal=pl.col("in_portal").fill_null(False))
+    else:
+        out = out.with_columns(in_portal=pl.lit(None, pl.Boolean), portal_destination=pl.lit(None, pl.Utf8))
+    reason = (pl.when(pl.col("drafted")).then(pl.lit("drafted"))
+              .when(pl.col("to_team").is_not_null()).then(pl.lit("transfer"))
+              .when(pl.col("portal_destination").is_not_null()).then(pl.lit("portal_transfer"))
+              .when(pl.col("in_portal")).then(pl.lit("portal_no_school"))
+              .otherwise(pl.lit("unknown")))
+    return out.select(pl.lit(season, pl.Int32).alias("season"), pl.col("prev_team").alias("team"), "player_id",
+                      "name", "position", "prev_class_year", "to_team", reason.alias("reason"), "draft_round",
+                      "draft_overall", "draft_nfl_team", "in_portal", "portal_destination", "prev_plays",
+                      "prev_ppa_total", "prev_tackles", "prev_havoc")
 
 
 def _display_roster(ds: Dataset, season: int) -> pl.DataFrame:
@@ -161,14 +230,7 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
                        "prev_tackles", "prev_havoc")
                .filter(pl.col("team").is_in(fbs)).sort("team", "position", "name"))
 
-    prev_names = (ds.roster.filter(pl.col("season") == season - 1).unique("player_id", keep="first")
-                  .select("player_id", "name", "position"))
-    departures = (prev.join(ros.select("player_id", to_team="team"), on="player_id", how="left")
-                  .filter(pl.col("to_team").is_null() | (pl.col("to_team") != pl.col("prev_team")))
-                  .join(prev_names, on="player_id", how="left")
-                  .select(pl.lit(season, pl.Int32).alias("season"), pl.col("prev_team").alias("team"), "player_id",
-                          "name", "position", "to_team", "prev_plays", "prev_ppa_total", "prev_tackles", "prev_havoc")
-                  .filter(pl.col("team").is_in(fbs)).sort("team", "name"))
+    departures = _departures(ds, season, prev, ros).filter(pl.col("team").is_in(fbs)).sort("team", "name")
 
     # Summary from the displayed snapshot (same as the player list). Previous
     # seasons' rosters come from the fixed table.
