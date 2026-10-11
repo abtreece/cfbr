@@ -56,18 +56,13 @@ PLAYER_COLS = ["player_id", "name", "jersey", "position", "class_year", "height"
 
 def _prev_production(ds: Dataset, season: int) -> pl.DataFrame:
     off = ds.player_ppa.filter(pl.col("season") == season - 1).select(
-        "player_id", prev_team="team", prev_plays="plays", prev_ppa_total="total_ppa",
-        prev_pass_plays="pass_plays", prev_pass_ppa_total="pass_ppa")
+        "player_id", prev_team="team", prev_plays="plays", prev_ppa_total="total_ppa", prev_ppa_avg="avg_ppa",
+        prev_pass_plays="pass_plays", prev_pass_ppa_total="pass_ppa", prev_pass_ppa_avg="avg_pass_ppa")
     de = ds.player_defense.filter(pl.col("season") == season - 1).select(
         "player_id", prev_team_d="team", prev_tackles="tackles",
         prev_havoc=pl.col("tfl") + pl.col("pd") + pl.col("ints"))
     both = off.join(de, on="player_id", how="full", coalesce=True)
-    avg = lambda tot, n: pl.when(pl.col(n) > 0).then(pl.col(tot) / pl.col(n))  # noqa: E731
-    return both.with_columns(
-        prev_team=pl.coalesce("prev_team", "prev_team_d"),
-        prev_ppa_avg=avg("prev_ppa_total", "prev_plays"),
-        prev_pass_ppa_avg=avg("prev_pass_ppa_total", "prev_pass_plays"),
-    ).drop("prev_team_d")
+    return both.with_columns(prev_team=pl.coalesce("prev_team", "prev_team_d")).drop("prev_team_d")
 
 
 def roster_as_of(cfg: Config, season: int) -> datetime | None:

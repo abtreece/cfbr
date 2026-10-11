@@ -12,7 +12,7 @@ def _data(with_defense=True):
         "team": ["A", "A", "A", "B", "F"], "position": ["QB", "RB", "WR", "QB", "RB"],
         "total_ppa": [80.0, 20.0, 10.0, 60.0, 15.0], "plays": [400.0, 150.0, 50.0, 350.0, 100.0],
         "pass_ppa": [75.0, None, None, 58.0, None], "pass_plays": [380.0, None, None, 330.0, None],
-    })
+    }).with_columns(avg_ppa=pl.col("total_ppa") / pl.col("plays"), avg_pass_ppa=pl.col("pass_ppa") / pl.col("pass_plays"))
     roster = pl.DataFrame({
         "season": [2026] * 4, "player_id": ["rbA", "wrA", "qbB", "rbFCS"],
         "team": ["A", "B", "A", "A"], "position": ["RB", "WR", "QB", "RB"], "class_year": [3, 4, 4, 2],
