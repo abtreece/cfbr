@@ -40,7 +40,7 @@ One line each: decision — reason — phase.
 - Prior-only week-1 MAE (tuning seasons, default config): 2015 15.22, 2016 15.33, 2017 14.76, 2018 15.84, 2019 13.32, 2020 20.03, 2021 16.44 — P4 DoD
 - Postseason is split into 7-day prediction slots from the first bowl kickoff (p1, p2, ...), each with its own as-of time, instead of one CFBD postseason "week" — CFP rounds can use earlier bowl results; still strictly point-in-time — P5
 - Evaluated games: completed games with at least one FBS team (FBS–FCS included); the line benchmark and ATS are computed on the subset with a closing line — P5
-- Closing spread = median across providers of CFBD `spread` (home perspective; Vegas predicted home margin = −spread) — P5
+- Closing spread = median of CFBD `spread` across real sportsbooks when any posted a line, else CFBD's `consensus` aggregate, else teamrankings; numberfire (a projection model, not a market) is never used (home perspective; market home margin = −spread). Fixed 2026-10-11: it was previously the median across all providers, mixing numberfire into 2014–2022. Effect: tuning-season line MAE 12.496 → 12.544 (model gap +0.854 → +0.807); holdout unchanged (12.026 → 12.027) — P5
 - ATS: model picks the side its predicted margin favors relative to the line; pushes and exact model-line ties are excluded; 95% Wilson interval — P5
 - Accepted, unavoidable leakage: CFBD's PPA comes from an expected-points model CFBD fit on its full history. We can't refit it point-in-time; the effect is believed small — P5
 - Week-1 predictions use only the prior (no same-season plays before the first kickoff) — P5
@@ -61,3 +61,4 @@ One line each: decision — reason — phase.
 - Live-season lines are re-fetched on every weekly run (not cached by week) and each fetch is kept as a timestamped snapshot in `data/raw/lines/{season}/snapshots/`; the `lines` table still holds one row per game-provider (latest), so closing spreads in rank/backtest/web are unchanged — Bets
 - The paper-bet step in `weekly` is isolated: on failure it logs, the web refresh still runs, and `weekly` exits with code 6 — Bets
 - Paper bets are graded twice: at the consensus line and at the best number across every sportsbook in the snapshot (no book excluded by jurisdiction; offshore books such as Bovada included). CFBD non-books (numberfire projections, teamrankings/consensus aggregates) never price a bet. Each bet stores every book's line at capture — Bets
+- Offshore books (configurable `bets.offshore_books`, default Bovada, BetOnline, MyBookie, BetUS, Bookmaker, 5Dimes, SportsBetting, Heritage) are market data only: they count toward consensus lines and benchmarks but never price a paper bet. A game with only offshore lines still gets a consensus-line bet but no best-line grade — Bets

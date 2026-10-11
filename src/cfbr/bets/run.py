@@ -24,7 +24,7 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     predictions.csv (the next week's games) against the newest line snapshot."""
     out_dir = cfg.paths.out_dir / str(season)
     ledger_path = out_dir / "bets.csv"
-    ledger = fill_books(read_ledger(ledger_path), cfg.paths.raw_dir, season)
+    ledger = fill_books(read_ledger(ledger_path), cfg.paths.raw_dir, season, cfg.bets.offshore_books)
 
     games = ds.games.filter(pl.col("season") == season)
     closing = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
@@ -48,8 +48,13 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
         ledger, added = add_bets(ledger, new)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    ledger.sort("kickoff_ts", "game_id").write_csv(ledger_path)
-    (out_dir / "bets.md").write_text(summary_markdown(ledger, cfg.bets, season))
+    # Temp file + rename so readers (e.g. the web app) never see a partial file.
+    tmp = ledger_path.with_suffix(".csv.tmp")
+    ledger.sort("kickoff_ts", "game_id").write_csv(tmp)
+    tmp.replace(ledger_path)
+    md_tmp = out_dir / "bets.md.tmp"
+    md_tmp.write_text(summary_markdown(ledger, cfg.bets, season))
+    md_tmp.replace(out_dir / "bets.md")
     m = summarize(ledger, cfg.bets)
     log.info("paper bets: %d new, %d open, %d settled (%d-%d-%d), units %+.2f, avg CLV %s",
              added, m["open"], m["settled"], m["won"], m["lost"], m["push"], m["units"],
@@ -57,7 +62,7 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     return ledger_path
 
 
-def fill_books(ledger: pl.DataFrame, raw_dir: Path, season: int) -> pl.DataFrame:
+def fill_books(ledger: pl.DataFrame, raw_dir: Path, season: int, offshore: list[str]) -> pl.DataFrame:
     """Fill the per-book line column for bets recorded before it existed, from
     the same snapshot each bet was placed against (matched by placed_at)."""
     todo = ledger.filter(pl.col("books").is_null())
@@ -68,7 +73,7 @@ def fill_books(ledger: pl.DataFrame, raw_dir: Path, season: int) -> pl.DataFrame
         ts = datetime.fromisoformat(placed)
         f = raw_dir / "lines" / str(season) / "snapshots" / f"{ts:%Y%m%dT%H%M%SZ}.json"
         if f.exists():
-            m = market(snapshot_frame(json.loads(f.read_text()))).select("game_id", "books")
+            m = market(snapshot_frame(json.loads(f.read_text())), offshore).select("game_id", "books")
             fills.append(m.with_columns(placed_at=pl.lit(placed)))
     if not fills:
         return ledger

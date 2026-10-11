@@ -59,3 +59,5 @@ odds = -110
 stake = 1.0
 # Settled bets needed before the summary draws conclusions.
 min_sample = 500
+# Offshore books count as market data (consensus line) but are never used to price a bet.
+offshore_books = ["Bovada", "BetOnline", "MyBookie", "BetUS", "Bookmaker", "5Dimes", "SportsBetting", "Heritage"]

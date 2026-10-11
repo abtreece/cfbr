@@ -135,3 +135,26 @@ def test_legacy_ledger_without_new_columns_loads(tmp_path):
     add_bets(read_ledger(path), new)[0].select(legacy).write_csv(path)
     back = read_ledger(path)
     assert back.columns == list(LEDGER_SCHEMA) and back["books"].is_null().all()
+
+
+def test_offshore_books_feed_consensus_but_never_price_a_bet():
+    snap = snapshot_frame([
+        {"id": 1, "lines": [{"provider": "DraftKings", "spread": -3.0}, {"provider": "Bovada", "spread": -1.0}]},
+        {"id": 2, "lines": [{"provider": "Bovada", "spread": 2.0}]},
+    ])
+    m = {r["game_id"]: r for r in market(snap, CFG.offshore_books).iter_rows(named=True)}
+    assert m[1]["line"] == -2.0                                      # Bovada counts toward the consensus...
+    assert m[1]["best_home"] == -3.0 and m[1]["best_home_provider"] == "DraftKings"  # ...but never prices
+    assert m[1]["books"] == "Bovada -1 (offshore); DraftKings -3"
+    assert m[2]["best_home"] is None and m[2]["best_away"] is None   # offshore-only game: no best line
+
+    preds = _preds().with_columns(pred_margin=pl.Series([8.0, 10.0, 0.0, 0.0, 0.0]))
+    new = candidate_bets(preds, snap, PLACED, CFG).with_columns(season=pl.lit(2026, pl.Int32),
+                                                                week=pl.lit(7, pl.Int32))
+    ledger, _ = add_bets(read_ledger(Path("/nonexistent")), new)
+    games = pl.DataFrame({"game_id": [1, 2], "completed": [True, True], "home_points": [30, 30],
+                          "away_points": [20, 20]})
+    out = {r["game_id"]: r for r in settle(ledger, games, pl.DataFrame({"game_id": [1, 2],
+                                                                         "closing_line": [-3.0, 2.0]})).iter_rows(named=True)}
+    assert out[2]["status"] == "won" and out[2]["best_status"] is None and out[2]["best_clv"] is None
+    assert out[1]["best_status"] == "won"

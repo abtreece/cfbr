@@ -78,6 +78,10 @@ class Bets(BaseModel):
     stake: float = 1.0
     # Minimum settled bets before the summary draws any conclusion.
     min_sample: int = 500
+    # Offshore books: their lines feed the consensus (market data) but a bet is
+    # never priced at one, so they never supply the best-line number.
+    offshore_books: list[str] = ["Bovada", "BetOnline", "MyBookie", "BetUS", "Bookmaker", "5Dimes",
+                                 "SportsBetting", "Heritage"]
 
 
 class Config(BaseModel):

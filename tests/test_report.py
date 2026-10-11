@@ -68,3 +68,18 @@ def test_rankings_markdown_flags_stale_polls():
     assert "week 7 not released yet" in note and "Coaches: not released" in note
     md = to_markdown(out, "t", note=note)
     assert "outside the model's top 25" in md and "| 26 | Army |" in md
+
+
+def test_market_spread_prefers_books_and_never_uses_numberfire():
+    from cfbr.backtest.metrics import consensus_spread
+
+    lines = pl.DataFrame({
+        "game_id": [1, 1, 1, 1, 2, 2, 2, 3, 3],
+        "provider": ["DraftKings", "Bovada", "numberfire", "consensus", "consensus", "teamrankings", "numberfire",
+                     "numberfire", "teamrankings"],
+        "spread": [-3.0, -4.0, -20.0, -3.0, -7.0, -6.0, 5.0, 1.0, -2.5],
+    })
+    out = {r["game_id"]: r for r in consensus_spread(lines).iter_rows(named=True)}
+    assert (out[1]["spread"], out[1]["source"], out[1]["n_providers"]) == (-3.5, "books", 2)
+    assert (out[2]["spread"], out[2]["source"]) == (-7.0, "consensus")
+    assert (out[3]["spread"], out[3]["source"]) == (-2.5, "teamrankings")

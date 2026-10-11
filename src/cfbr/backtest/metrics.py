@@ -29,12 +29,35 @@ def wilson_ci(wins: int, n: int, z: float = 1.959964) -> tuple[float, float]:
     return (center - half, center + half)
 
 
-def consensus_spread(lines: pl.DataFrame, method: str = "median") -> pl.DataFrame:
-    """Home-perspective closing spread per game (negative = home favored)."""
+# CFBD "providers" that are not sportsbooks. numberfire is a projection model,
+# not a market price, and is never used. teamrankings and "consensus" aggregate
+# sportsbook lines; they are used only when no sportsbook line exists for a game.
+NON_BOOKS = {"consensus", "teamrankings", "numberfire"}
+SOURCE_TIERS = [("books", None), ("consensus", "consensus"), ("teamrankings", "teamrankings")]
+
+
+def consensus_spread(lines: pl.DataFrame, method: str = "median", col: str = "spread") -> pl.DataFrame:
+    """Home-perspective market spread per game (negative = home favored).
+
+    Median across real sportsbooks when any posted one; otherwise CFBD's
+    ``consensus`` aggregate; otherwise teamrankings. numberfire is never used.
+    ``source`` says which tier priced each game.
+    """
     if method != "median":
         raise ValueError(f"unsupported spread_consensus {method!r}")
-    return (lines.filter(pl.col("spread").is_not_null())
-            .group_by("game_id").agg(spread=pl.col("spread").median(), n_providers=pl.len()))
+    prov = pl.col("provider").str.to_lowercase()
+    l = lines.filter(pl.col(col).is_not_null()).with_columns(
+        tier=pl.when(~prov.is_in(list(NON_BOOKS))).then(0)
+        .when(prov == "consensus").then(1)
+        .when(prov == "teamrankings").then(2)
+        .otherwise(None)
+    ).filter(pl.col("tier").is_not_null())
+    best = l.group_by("game_id").agg(tier=pl.col("tier").min())
+    names = {i: name for i, (name, _) in enumerate(SOURCE_TIERS)}
+    return (l.join(best, on=["game_id", "tier"])
+            .group_by("game_id").agg(pl.col(col).median().alias(col), n_providers=pl.len(), tier=pl.col("tier").first())
+            .with_columns(source=pl.col("tier").replace_strict(names, return_dtype=pl.Utf8))
+            .drop("tier"))
 
 
 def summarize(df: pl.DataFrame) -> dict:

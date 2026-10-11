@@ -69,7 +69,7 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 1. grades open bets whose games are final, and records the closing line and closing-line value (CLV),
 2. records a new 1-unit bet at −110 for every upcoming game where the model and the consensus line (median across books in the newest line snapshot) differ by 3 or more points. A bet is recorded once, before kickoff, and never changed.
 
-Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record, ROI, CLV, open bets). Each bet is graded twice: at the consensus line, and at the best number across every sportsbook CFBD lists, with no book excluded. Settings are in `[bets]` in `config/default.toml`. Run it by hand with `cfbr bets --season 2026 --week 6`. The summary draws no conclusion before 500 settled bets. Treat positive average CLV as the first sign of a real edge; win rate alone is mostly noise at small samples.
+Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record, ROI, CLV, open bets). Each bet is graded twice: at the consensus line, and at the best number across every non-offshore sportsbook CFBD lists. No book is excluded by state; offshore books (e.g. Bovada) count toward the consensus line but never price a bet. Settings are in `[bets]` in `config/default.toml`. Run it by hand with `cfbr bets --season 2026 --week 6`. The summary draws no conclusion before 500 settled bets. Treat positive average CLV as the first sign of a real edge; win rate alone is mostly noise at small samples.
 
 ## Point-in-time guarantee
 
