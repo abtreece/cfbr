@@ -1,0 +1,109 @@
+"""Fetch CFBD datasets into the raw cache.
+
+Cache layout: data/raw/{endpoint}/{year}/{key}.json
+
+Completed seasons use fixed keys (``season``, ``both``, ``regular_w05``) so a
+re-run is served entirely from cache. For the in-progress season, the
+season-level files that change week to week (games, lines) are keyed by the
+ingest week (``both_w07``) so a re-run of the same week also makes zero calls.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import UTC, datetime
+
+from cfbr.ingest.client import CFBDClient
+
+log = logging.getLogger(__name__)
+
+# endpoint -> required-year-only, fetched once per season
+SEASON_ENDPOINTS = ["/teams/fbs", "/calendar", "/player/returning", "/talent", "/recruiting/teams"]
+
+
+def current_season(now: datetime | None = None) -> int:
+    now = now or datetime.now(UTC)
+    return now.year if now.month >= 8 else now.year - 1
+
+
+def fetch_season_level(client: CFBDClient, year: int, live_week: int | None = None) -> None:
+    for ep in SEASON_ENDPOINTS:
+        client.get(ep, {"year": year}, year, "season")
+    key = "both" if live_week is None else f"both_w{live_week:02d}"
+    client.get("/games", {"year": year, "seasonType": "both"}, year, key)
+    client.get("/lines", {"year": year, "seasonType": "both"}, year, key)
+
+
+def completed_play_weeks(games: list) -> list[tuple[str, int]]:
+    """(seasonType, week) pairs in which every game involving an FBS team is
+    completed. Fetching plays only for finished weeks keeps a mid-week run
+    from caching a partial week forever."""
+    status: dict[tuple[str, int], bool] = {}
+    for g in games:
+        if g["seasonType"] not in ("regular", "postseason"):
+            continue
+        if "fbs" not in (g.get("homeClassification"), g.get("awayClassification")):
+            continue
+        key = (g["seasonType"], int(g["week"]))
+        status[key] = status.get(key, True) and bool(g.get("completed"))
+    return sorted((k for k, done in status.items() if done), key=lambda k: (k[0] != "regular", k[1]))
+
+
+def _season_games(client: CFBDClient, year: int) -> list:
+    games = latest_cached(client, "/games", year)
+    return games or []
+
+
+def fetch_plays(client: CFBDClient, year: int, season_type: str, week: int) -> None:
+    client.get(
+        "/plays",
+        {"year": year, "week": week, "seasonType": season_type},
+        year,
+        f"{season_type}_w{week:02d}",
+    )
+
+
+def backfill(client: CFBDClient, first: int, last: int, recruiting_lookback: int) -> None:
+    """Full historical pull. Small season-level endpoints first, then plays.
+
+    Resumable: everything already cached is skipped, and QuotaExceeded stops
+    the run cleanly with partial progress kept on disk. For the in-progress
+    season, use ``weekly`` instead (backfill only pulls its finished weeks
+    from whatever games snapshot is cached).
+    """
+    for y in range(first - recruiting_lookback, first):
+        client.get("/recruiting/teams", {"year": y}, y, "season")
+    live = current_season()
+    for year in range(first, last + 1):
+        if year < live:
+            fetch_season_level(client, year)
+    for year in range(first, last + 1):
+        for st, wk in completed_play_weeks(_season_games(client, year)):
+            fetch_plays(client, year, st, wk)
+
+
+def weekly(client: CFBDClient, year: int, week: int) -> None:
+    """Incremental ingest through regular-season ``week`` of an in-progress
+    season: refresh games/lines (keyed by week), then any finished weeks' plays
+    not yet cached. About 3 calls per week on a cold cache."""
+    fetch_season_level(client, year, live_week=week)
+    for st, wk in completed_play_weeks(_season_games(client, year)):
+        if st == "regular" and wk > week:
+            continue
+        fetch_plays(client, year, st, wk)
+    unfinished = {wk for wk in range(1, week + 1)} - {
+        wk for st, wk in completed_play_weeks(_season_games(client, year)) if st == "regular"}
+    if unfinished:
+        log.warning("season %d weeks %s not finished; plays not fetched yet", year, sorted(unfinished))
+
+
+def latest_cached(client: CFBDClient, endpoint: str, year: int) -> list | None:
+    """Most complete cached season-level games/lines file for a year."""
+    d = client.cache_path(client.raw_dir, endpoint, year, "x").parent
+    if not d.exists():
+        return None
+    if (d / "both.json").exists():
+        return json.loads((d / "both.json").read_text())
+    weekly_files = sorted(d.glob("both_w*.json"))
+    return json.loads(weekly_files[-1].read_text()) if weekly_files else None

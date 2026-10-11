@@ -1,0 +1,50 @@
+# All tunables live here. Copy and edit for experiments; tuned values go in config/tuned.toml.
+
+[paths]
+raw_dir = "data/raw"
+db_path = "data/cfb.duckdb"
+results_dir = "results"
+out_dir = "out"
+
+[ingest]
+base_url = "https://apinext.collegefootballdata.com"
+first_season = 2014
+# Extra recruiting years before first_season so the 4-year average exists for 2014.
+recruiting_lookback = 3
+monthly_quota = 1000
+# Refuse to start a command if fewer than this many calls would remain.
+quota_reserve = 50
+
+[prep.garbage_time]
+enabled = true
+q2 = 38
+q3 = 28
+q4 = 22
+
+[prep]
+# "single" = one pooled FCS entity; "conference" = one entity per FCS conference.
+fcs_pooling = "single"
+
+[model]
+alpha_ppa = 300.0
+alpha_sr = 300.0
+# 0 disables within-season recency weighting.
+half_life_weeks = 0.0
+# 0 disables the k/(k+games) prior weight; alpha alone controls prior strength.
+prior_k = 0.0
+
+[baseline]
+margin_cap = 28
+alpha = 10.0
+
+[prior]
+# hybrid: LOSO inside tuning seasons, expanding window for holdout/live seasons.
+fit_scheme = "hybrid"
+
+[seasons]
+tuning = [2015, 2021]
+holdout = [2022, 2025]
+
+[backtest]
+# Closing spread benchmark: median across providers of `spread`.
+spread_consensus = "median"
