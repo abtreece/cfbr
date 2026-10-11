@@ -139,13 +139,13 @@
   model's own probabilities overstate its edge against the market.</p>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th>Tier</th><th class="num">Bets</th><th class="num opt">Open</th><th class="num">W–L–P</th><th class="num">Win %</th>
+  <thead><tr><th>Tier</th><th class="num">Bets</th><th class="num opt">Open</th><th class="num opt">W–L–P</th><th class="num">Win %</th>
     <th class="num">$</th><th class="num opt">ROI</th><th class="num">Backtest<span class="ci"> [95% CI]</span></th></tr></thead>
   <tbody>
   {% for t in tiers %}
     <tr>
       <td class="team">{{ t.label }}</td><td class="num">{{ t.bets }}</td><td class="num opt">{{ t.open }}</td>
-      <td class="num">{{ t.won }}–{{ t.lost }}–{{ t.push }}</td>
+      <td class="num opt">{{ t.won }}–{{ t.lost }}–{{ t.push }}</td>
       <td class="num">{{ t.win_rate|pct if t.won + t.lost else "—" }}</td>
       <td class="num strong">{{ t.dollars|money }}</td><td class="num opt">{{ t.roi|pct }}</td>
       <td class="num">{% if t.backtest %}{{ t.backtest.rate|pct }}<span class="ci"> [{{ t.backtest.ci95[0]|pct }}, {{ t.backtest.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
@@ -159,7 +159,7 @@
 <h2>Settled bets</h2>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="opt">Final</th><th class="opt">Tier</th><th>Result</th><th class="num">Won / lost</th>
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="opt">Final</th><th class="opt">Tier</th><th class="opt">Result</th><th class="num">Won / lost</th>
     <th class="num opt">Close</th><th class="num opt">CLV</th></tr></thead>
   <tbody>
   {% for b in settled %}
@@ -169,8 +169,8 @@
       <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
       <td class="opt">{{ b.away_points }}–{{ b.home_points }}</td>
       <td class="opt">{{ b.tier }}</td>
-      <td>{% if b.status == "won" %}<span class="up">✓ won</span>{% elif b.status == "lost" %}<span class="down">✗ lost</span>{% else %}<span class="muted">push</span>{% endif %}</td>
-      <td class="num strong">{{ b.dollars|money }}</td>
+      <td class="opt">{% if b.status == "won" %}<span class="up">✓ won</span>{% elif b.status == "lost" %}<span class="down">✗ lost</span>{% else %}<span class="muted">push</span>{% endif %}</td>
+      <td class="num strong"><span class="{{ {'won': 'up', 'lost': 'down'}.get(b.status, 'muted') }}"><span class="m-only">{{ {'won': '✓ ', 'lost': '✗ '}.get(b.status, 'push ') }}</span>{{ b.dollars|money }}</span></td>
       <td class="num opt">{{ b.close|spread }}</td>
       <td class="num opt">{{ b.clv|signed(1) if b.clv is not none else "—" }}</td>
     </tr>

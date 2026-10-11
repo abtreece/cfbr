@@ -418,6 +418,8 @@ def test_bets_page(bets_client):
     assert "No conclusion yet." in html and "3 of the 500 settled bets" in html
     assert "1–1–1" in html  # won-lost-push
     assert "All bets, best line" in html
+    # On phones the Result column is hidden; the amount carries the result as a mark, not by color alone.
+    assert '<span class="m-only">✓ </span>' in html and '<span class="m-only">✗ </span>' in html
     # The best-line book's own price shows when the feed has one, and only then.
     assert "−3 (−105) <span class=\"muted\">TestBook</span>" in html
     assert "−4.5 <span class=\"muted\">TestBook</span>" in html
