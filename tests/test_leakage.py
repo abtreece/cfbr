@@ -1,0 +1,122 @@
+"""Point-in-time correctness: nothing from week w or later may reach a week-w prediction."""
+
+import dataclasses
+import random
+from datetime import timedelta
+
+import polars as pl
+import pytest
+from polars.testing import assert_frame_equal
+
+from cfbr.data import training_slice
+from cfbr.model.engine import Engine
+from cfbr.model.schemes import training_seasons
+
+ALL = range(2015, 2026)
+
+
+# -- cross-season fit schemes -----------------------------------------------------
+
+@pytest.mark.parametrize("target", range(2022, 2027))
+def test_holdout_and_live_seasons_train_only_on_the_past(cfg, target):
+    assert all(s < target for s in training_seasons(target, cfg, ALL))
+
+
+@pytest.mark.parametrize("target", range(2015, 2022))
+def test_tuning_seasons_leave_one_out_within_tuning_window(cfg, target):
+    seasons = training_seasons(target, cfg, ALL)
+    assert target not in seasons
+    assert all(2015 <= s <= 2021 for s in seasons)
+
+
+# -- within-season as-of slicing --------------------------------------------------
+
+def test_training_rows_precede_as_of(cfg, dataset):
+    eng = Engine(dataset, cfg, last_completed=2025)
+    slots = eng.slots.filter(pl.col("season").is_between(2015, 2025))
+    rng = random.Random(0)
+    for r in rng.sample(list(slots.iter_rows(named=True)), 40):
+        plays = training_slice(eng.plays, r["season"], r["as_of"])
+        if plays.height:
+            assert plays["kickoff_ts"].max() < r["as_of"]
+            assert plays["season"].unique().to_list() == [r["season"]]
+        games = training_slice(eng.games, r["season"], r["as_of"])
+        if games.height:
+            assert games["kickoff_ts"].max() < r["as_of"]
+
+
+def test_as_of_is_earliest_kickoff_of_slot(cfg, dataset):
+    eng = Engine(dataset, cfg, last_completed=2025)
+    g = eng.games.filter(pl.col("season") == 2019)
+    for r in eng.season_slots(2019).iter_rows(named=True):
+        assert g.filter(pl.col("slot") == r["slot"])["kickoff_ts"].min() == r["as_of"]
+        # No game in this slot kicks off before its as-of time.
+        assert (g.filter(pl.col("slot") == r["slot"])["kickoff_ts"] >= r["as_of"]).all()
+
+
+# -- canary: a fake future game must not move earlier ratings -----------------------
+
+CANARY_SEASON = 2023
+CANARY_SLOT = "r10"
+
+
+def _with_canary(ds, eng):
+    as_of = eng.slot_as_of(CANARY_SEASON, CANARY_SLOT)
+    kickoff = as_of + timedelta(days=2)
+    home, away = "Vanderbilt", "Alabama"
+    game_id = 999_999_999
+    n = 90
+    plays = pl.DataFrame({
+        "season": [CANARY_SEASON] * n, "week": [10] * n, "season_type": ["regular"] * n,
+        "game_id": [game_id] * n, "play_id": [f"{game_id}{i:04d}" for i in range(n)],
+        "kickoff_ts": [kickoff] * n,
+        "offense_team": [home] * n, "defense_team": [away] * n,
+        "offense_fcs": [False] * n, "defense_fcs": [False] * n,
+        "offense_conference": ["SEC"] * n, "defense_conference": ["SEC"] * n,
+        "home_team": [home] * n, "neutral_site": [False] * n,
+        "period": [1] * n, "down": [1] * n, "distance": [10] * n, "yards_gained": [80] * n,
+        "margin_at_snap": [0] * n, "play_type": ["Rushing Touchdown"] * n,
+        "ppa": [12.0] * n, "success": [True] * n,
+    }).cast(ds.scrimmage.schema)
+    game = ds.games.filter(pl.col("season") == CANARY_SEASON).head(1).with_columns(
+        game_id=pl.lit(game_id, pl.Int64), kickoff_ts=pl.lit(kickoff).cast(ds.games.schema["kickoff_ts"]),
+        week=pl.lit(10, pl.Int32), slot=pl.lit(CANARY_SLOT), slot_order=pl.lit(10, ds.games.schema["slot_order"]),
+        home_team=pl.lit(home), away_team=pl.lit(away), home_points=pl.lit(150, ds.games.schema["home_points"]),
+        away_points=pl.lit(0, ds.games.schema["away_points"]), home_fcs=pl.lit(False), away_fcs=pl.lit(False),
+        neutral_site=pl.lit(False), completed=pl.lit(True),
+    )
+    return dataclasses.replace(ds, scrimmage=pl.concat([ds.scrimmage, plays]), games=pl.concat([ds.games, game]))
+
+
+def test_canary_future_game_does_not_change_earlier_ratings(cfg, dataset):
+    clean = Engine(dataset, cfg, last_completed=2025)
+    dirty = Engine(_with_canary(dataset, clean), cfg, last_completed=2025)
+
+    # The slot's as-of time is unchanged by the canary (it kicks off later).
+    assert_frame_equal(clean.season_slots(CANARY_SEASON), dirty.season_slots(CANARY_SEASON))
+    assert_frame_equal(clean.priors(CANARY_SEASON), dirty.priors(CANARY_SEASON))
+
+    order = clean.season_slots(CANARY_SEASON).select("slot", "slot_order")
+    cutoff = order.filter(pl.col("slot") == CANARY_SLOT)["slot_order"].item()
+    before = order.filter(pl.col("slot_order") <= cutoff)["slot"].to_list()
+    after = order.filter(pl.col("slot_order") > cutoff)["slot"].to_list()
+
+    for slot in before:
+        as_of = clean.slot_as_of(CANARY_SEASON, slot)
+        assert_frame_equal(clean.snapshot(CANARY_SEASON, as_of), dirty.snapshot(CANARY_SEASON, as_of))
+
+    # Sanity: the canary is strong enough to move later ratings.
+    as_of = clean.slot_as_of(CANARY_SEASON, after[0])
+    c = clean.snapshot(CANARY_SEASON, as_of).filter(pl.col("team") == "Vanderbilt")["o_ppa"].item()
+    d = dirty.snapshot(CANARY_SEASON, as_of).filter(pl.col("team") == "Vanderbilt")["o_ppa"].item()
+    assert d > c + 0.05
+
+    # Massey baseline: same guarantee.
+    mc = clean.massey_predictions(CANARY_SEASON)
+    md = dirty.massey_predictions(CANARY_SEASON).filter(pl.col("game_id") != 999_999_999)
+    early = clean.games.filter((pl.col("season") == CANARY_SEASON) & pl.col("slot").is_in(before))["game_id"].to_list()
+    assert_frame_equal(mc.filter(pl.col("game_id").is_in(early)).sort("game_id"),
+                       md.filter(pl.col("game_id").is_in(early)).sort("game_id"))
+    late = clean.games.filter((pl.col("season") == CANARY_SEASON) & pl.col("slot").is_in(after))["game_id"].to_list()
+    assert not mc.filter(pl.col("game_id").is_in(late)).sort("game_id").equals(
+        md.filter(pl.col("game_id").is_in(late)).sort("game_id"))

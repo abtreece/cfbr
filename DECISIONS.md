@@ -38,3 +38,9 @@ One line each: decision — reason — phase.
 - Pooled FCS entities carry over last season's final rating for the same entity, else the mean of last season's pooled entities — P4
 - `prior_k` (k/(k+games) prior weight) not implemented: in the residual-from-prior ridge, alpha already sets prior strength, so k would be a redundant second knob — P4
 - Prior-only week-1 MAE (tuning seasons, default config): 2015 15.22, 2016 15.33, 2017 14.76, 2018 15.84, 2019 13.32, 2020 20.03, 2021 16.44 — P4 DoD
+- Postseason is split into 7-day prediction slots from the first bowl kickoff (p1, p2, ...), each with its own as-of time, instead of one CFBD postseason "week" — CFP rounds can use earlier bowl results; still strictly point-in-time — P5
+- Evaluated games: completed games with at least one FBS team (FBS–FCS included); the line benchmark and ATS are computed on the subset with a closing line — P5
+- Closing spread = median across providers of CFBD `spread` (home perspective; Vegas predicted home margin = −spread) — P5
+- ATS: model picks the side its predicted margin favors relative to the line; pushes and exact model-line ties are excluded; 95% Wilson interval — P5
+- Accepted, unavoidable leakage: CFBD's PPA comes from an expected-points model CFBD fit on its full history. We can't refit it point-in-time; the effect is believed small — P5
+- Week-1 predictions use only the prior (no same-season plays before the first kickoff) — P5

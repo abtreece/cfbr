@@ -100,6 +100,35 @@ def ratings(
 
 
 @app.command()
+def backtest(
+    seasons: Annotated[str, typer.Option(help="e.g. 2015-2021 or 2015,2017")] = "2015-2021",
+    config: ConfigOpt = None,
+    tag: Annotated[str, typer.Option(help="Suffix for the run id")] = "",
+) -> None:
+    """Walk-forward backtest; writes results/{run_id}/."""
+    from cfbr.backtest.harness import parse_seasons, run_backtest, write_results
+
+    cfg = load_config(config)
+    season_list = parse_seasons(seasons)
+    preds, metrics = run_backtest(cfg, season_list)
+    out = write_results(cfg, season_list, preds, metrics, tag)
+    o = metrics["overall"]
+    typer.echo(f"results: {out}")
+    typer.echo(
+        f"games {o['n_games']}  MAE {o['mae']:.2f}  RMSE {o['rmse']:.2f}  Massey MAE {o['massey_mae']:.2f}  "
+        f"line MAE {o.get('line_mae', float('nan')):.2f} (model on same games {o.get('model_mae_lined', float('nan')):.2f})"
+    )
+    typer.echo(
+        f"SU acc {o['su_accuracy']:.3f}  log loss {o['log_loss']:.3f}  Brier {o['brier']:.3f}  "
+        f"ATS {o.get('ats_wins')}/{o.get('ats_n')} = {o.get('ats_win_rate', float('nan')):.3f} "
+        f"[{o.get('ats_ci95_low', float('nan')):.3f}, {o.get('ats_ci95_high', float('nan')):.3f}]"
+    )
+    for b, m in metrics["by_bucket"].items():
+        typer.echo(f"  {b:7s} n={m['n_games']:5d}  MAE {m['mae']:.2f}  line {m.get('line_mae', float('nan')):.2f}  "
+                   f"Massey {m['massey_mae']:.2f}")
+
+
+@app.command()
 def quota(config: ConfigOpt = None) -> None:
     """Show this month's API call usage (local ledger and CFBD /info)."""
     from cfbr.ingest.client import CFBDClient
