@@ -28,7 +28,7 @@
   <summary>How these were built</summary>
   <ul>
     <li>Same rules as the live bets: bet the model's side when it differs from the opening consensus by at least {{ rules.threshold|num }} points,
-      {{ rules.odds }} odds, {{ rules.stake|num }} unit to win, one unit = {{ rules.unit_value|money(false) }}. Break-even win rate {{ breakeven|pct }}.</li>
+      {{ rules.odds }} odds, {{ rules.stake|num }} unit to win, starting from a {{ rules.bankroll|money(false) }} bankroll with every bet a flat {{ rules.unit_value|money(false) }} unit ({{ (rules.unit_value / rules.bankroll)|pct(0) }} of the starting bankroll, not compounding). Break-even win rate {{ breakeven|pct }}.</li>
     <li>Opening lines come from CFBD: DraftKings, plus offshore Bovada in the consensus. Other US books have no free line history,
       so the best line is DraftKings' opening number.</li>
     <li>Two models: the published model (v1 prior), and the roster-prior shadow model, which isn't published. The roster prior was judged on these same weeks,
@@ -61,25 +61,25 @@
 <div class="tiles">
   {% set s = m.summary %}
   {{ tile("Record", s.won ~ "–" ~ s.lost ~ "–" ~ s.push, "won–lost–push") }}
-  {{ tile("Net", s.dollars|money, s.units|signed(2) ~ " units · ROI " ~ s.roi|pct) }}
+  {{ tile("Bankroll", s.balance|money(false), s.dollars|money ~ " from " ~ rules.bankroll|money(false) ~ " · ROI " ~ s.roi|pct) }}
   {{ tile("Avg CLV", (s.avg_clv|signed(2) ~ " pts") if s.n_clv else "—", ("beat the close " ~ s.beat_close|pct(0) ~ " of " ~ s.n_clv) if s.n_clv else "") }}
 </div>
 {% if m.chart %}
-{{ line_chart("retro-chart-" ~ m.model, m.chart, "Running total by week", "dollars") }}
+{{ line_chart("retro-chart-" ~ m.model, m.chart, "Bankroll by week", "dollars") }}
 {% endif %}
 
 <h3>Week by week</h3>
 <div class="table-wrap">
 <table class="data">
   <thead><tr><th>Week</th><th class="num opt">Bets</th><th class="num">W–L–P</th><th class="num opt">Units</th>
-    <th class="num">Won / lost</th><th class="num">Running total</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th></tr></thead>
+    <th class="num">Won / lost</th><th class="num">Bankroll</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th></tr></thead>
   <tbody>
   {% for w in m.weeks %}
     <tr>
       <td class="team">{{ w.label }}</td><td class="num opt">{{ w.settled }}</td><td class="num">{{ w.won }}–{{ w.lost }}–{{ w.push }}</td>
       <td class="num opt">{{ w.units|signed(2) }}</td>
       <td class="num strong"><span class="{{ 'up' if w.dollars > 0 else 'down' if w.dollars < 0 else 'muted' }}">{{ w.dollars|money }}</span></td>
-      <td class="num">{{ w.cum_dollars|money }}</td><td class="num opt">{{ w.roi|pct }}</td>
+      <td class="num"{% if w.over_bankroll %} title="Stakes this week ({{ w.risked_dollars|money(false) }}) exceeded the bankroll going in ({{ w.start_balance|money(false) }})"{% endif %}>{{ w.balance|money(false) }}{% if w.over_bankroll %} ⚠{% endif %}</td><td class="num opt">{{ w.roi|pct }}</td>
       <td class="num opt">{{ w.avg_clv|signed(2) if w.n_clv else "—" }}</td>
     </tr>
   {% endfor %}

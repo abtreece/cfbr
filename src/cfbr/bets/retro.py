@@ -83,8 +83,9 @@ def retro_markdown(led: pl.DataFrame, cfg: Bets, season: int, through_week: int)
         f"# {season} retroactive paper bets (weeks 1–{through_week})", "",
         "**Not live bets.** These replay the live rules on games already played: each week's point-in-time "
         "prediction (fit only on games before that week) against the **opening** line, "
-        f"bet when they differ by ≥ {cfg.threshold:g} points, {cfg.odds} odds, one unit = "
-        f"{money(cfg.unit_value, signed=False)}. Lines come from CFBD (DraftKings, plus offshore Bovada in the "
+        f"bet when they differ by ≥ {cfg.threshold:g} points, {cfg.odds} odds, starting bankroll "
+        f"{money(cfg.bankroll, signed=False)}, every bet a flat {money(cfg.unit_value, signed=False)} unit "
+        f"({100 * cfg.unit_value / cfg.bankroll:g}% of the starting bankroll, not compounding). Lines come from CFBD (DraftKings, plus offshore Bovada in the "
         "consensus); other US books have no history on the free tier. Graded at the opening consensus; CLV is "
         "against the closing consensus. They never count toward the live ledger's 500-bet minimum.", "",
         "The roster model was judged on these same weeks (DECISIONS: roster prior result), so its numbers here "
@@ -103,10 +104,11 @@ def retro_markdown(led: pl.DataFrame, cfg: Bets, season: int, through_week: int)
     for model, label in MODELS.items():
         d = led.filter(pl.col("model") == model)
         lines += [f"## {label}: week by week", "",
-                  "| week | bets | W-L-P | units | $ | running $ | ROI | avg CLV (pts) |",
-                  "|---|---|---|---|---|---|---|---|"]
+                  "| week | bets | W-L-P | units | staked | $ | bankroll | ROI | avg CLV (pts) |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         lines += [f"| {w['label']} | {w['settled']} | {w['won']}-{w['lost']}-{w['push']} | {_fmt(w['units'], signed=True)} | "
-                  f"{money(w['dollars'])} | {money(w['cum_dollars'])} | {_fmt(w['roi'], pct=True)} | "
+                  f"{money(w['risked_dollars'], signed=False)}{' ⚠' if w['over_bankroll'] else ''} | {money(w['dollars'])} | "
+                  f"{money(w['balance'], signed=False)} | {_fmt(w['roi'], pct=True)} | "
                   f"{_fmt(w['avg_clv'], signed=True)} |" for w in weekly(d, cfg)]
         lines += ["", f"### {label}: by edge tier", "",
                   "| tier | bets | W-L-P | win % | $ | ROI | avg CLV (pts) | backtest cover |",

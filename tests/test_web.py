@@ -428,9 +428,11 @@ def test_bets_page(bets_client):
     # Lines are shown from the bet team's side: an away bet at home +4 is "−4".
     assert "Texas A&amp;M −3.5" in html and "&lt;b&gt;Evil&lt;/b&gt; −4" in html
     assert "<b>Evil</b>" not in html
-    # Week 6 went 1-1-1 at $100 units: +$100 - $110 = -$10, and the open bets put $220 at risk.
-    assert "Week by week" in html and "Week 6" in html and "−$10" in html and "$220 at risk" in html
-    assert "By edge tier" in html and "Small edge (3–6 pts)" in html and "$110 / $100" in html
+    # Week 6 went 1-1-1 at $10 units: +$10 - $11 = -$1, leaving $999 of the $1,000 bankroll;
+    # the open bets put $22 at risk.
+    assert "Week by week" in html and "Week 6" in html and "−$1" in html and "$22 at risk" in html
+    assert "$999" in html and "$1,000 bankroll" in html
+    assert "By edge tier" in html and "Small edge (3–6 pts)" in html and "$11 / $10" in html
 
 
 def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
@@ -443,8 +445,9 @@ def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
     assert body["rules"]["threshold"] == web_cfg.bets.threshold
     assert body["summary_best_line"]["settled"] == 0  # synthetic ledger predates best-line grading
     assert len(body["bets"]) == 5
-    assert body["summary"]["dollars"] == pytest.approx(m["units"] * 100)
-    assert [w["label"] for w in body["weekly"]] == ["Week 6"] and body["weekly"][0]["cum_dollars"] == pytest.approx(-10)
+    assert body["summary"]["dollars"] == pytest.approx(m["units"] * 10)
+    assert [w["label"] for w in body["weekly"]] == ["Week 6"] and body["weekly"][0]["cum_dollars"] == pytest.approx(-1)
+    assert body["weekly"][0]["balance"] == pytest.approx(999) and body["summary"]["balance"] == pytest.approx(999)
     assert [t["name"] for t in body["tiers"]] == ["Small", "Medium", "Large"]
     assert {b["tier"] for b in body["bets"]} <= {"Small", "Medium", "Large"}
 
@@ -463,8 +466,8 @@ def test_retro_bets_page_and_api(web_cfg):
     html = " ".join(r.text.split())
     assert "Retroactive, not live." in html and "<strong>opening</strong> line" in html and "point-in-time" in html
     assert "Published model (v1 prior)" in html and "Roster-prior shadow model" in html
-    # Each model: week 1 went 1-1 (+$100 - $110), week 2 won: running total +$90.
-    assert "Week 1" in html and "−$10" in html and "+$90" in html and "Retro U −7" in html
+    # Each model: week 1 went 1-1 (+$10 - $11), week 2 won: bankroll $1,000 -> $999 -> $1,009.
+    assert "Week 1" in html and "−$1" in html and "$1,009" in html and "Retro U −7" in html
     assert "3 in common, 3 on the same side" in html
     body = c.get("/api/bets/retro").json()
     assert body["retroactive"] is True and [m["model"] for m in body["models"]] == ["v1", "roster"]
@@ -500,8 +503,8 @@ def test_bet_rows_team_perspective(web_cfg):
     # Away team laid 3 and closed at -2: the bet got a worse number than the close.
     assert a[4]["close"] == -2.0 and a[4]["clv"] == -1.0
     # $100 units: an open bet risks $110 to win $100; a lost bet is down $110.
-    assert (a[2]["risk_dollars"], a[2]["win_dollars"], a[2]["dollars"]) == pytest.approx((110.0, 100.0, None))
-    assert a[4]["dollars"] == pytest.approx(-110.0) and a[4]["tier"] == "Medium"  # |edge| = 7
+    assert (a[2]["risk_dollars"], a[2]["win_dollars"], a[2]["dollars"]) == pytest.approx((11.0, 10.0, None))
+    assert a[4]["dollars"] == pytest.approx(-11.0) and a[4]["tier"] == "Medium"  # |edge| = 7
 
 
 def test_bets_gate_blocks_only_the_betting_section(web_cfg):

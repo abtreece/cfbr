@@ -270,6 +270,7 @@ def summarize(ledger: pl.DataFrame, cfg: Bets, basis: str = "consensus") -> dict
         "units": units, "risked": risked, "roi": units / risked if risked else math.nan,
         # Dollar figures are units x unit_value; reporting only.
         "dollars": units * cfg.unit_value, "risked_dollars": risked * cfg.unit_value,
+        "balance": cfg.bankroll + units * cfg.unit_value,
         "open_risk_dollars": at_risk * cfg.unit_value,
         "avg_clv": float(c[cv].mean()) if c.height else math.nan,
         "beat_close": float((c[cv] > 0).mean()) if c.height else math.nan,
@@ -278,14 +279,19 @@ def summarize(ledger: pl.DataFrame, cfg: Bets, basis: str = "consensus") -> dict
 
 
 def weekly(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
-    """Win/loss by week for weeks with settled bets, with running totals."""
+    """Win/loss by week for weeks with settled bets, with running totals and the
+    bankroll before and after each week. ``over_bankroll`` flags a week whose
+    stakes (all placed before any of them settled) exceeded the bankroll going in."""
     out, cum_u = [], 0.0
     for label, g in by_week(ledger):
         m = summarize(g, cfg)
         if m["settled"] == 0:
             continue
+        start = cfg.bankroll + cum_u * cfg.unit_value
         cum_u += m["units"]
-        out.append({"label": label, **m, "cum_units": cum_u, "cum_dollars": cum_u * cfg.unit_value})
+        out.append({"label": label, **m, "cum_units": cum_u, "cum_dollars": cum_u * cfg.unit_value,
+                    "start_balance": start, "balance": cfg.bankroll + cum_u * cfg.unit_value,
+                    "over_bankroll": m["risked_dollars"] > start})
     return out
 
 
@@ -307,7 +313,7 @@ def by_tier(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
 def money(x: float | None, signed: bool = True) -> str:
     if x is None or (isinstance(x, float) and math.isnan(x)):
         return "–"
-    s = f"${abs(x):,.0f}"
+    s = f"${abs(x):,.0f}" if round(x, 2) == round(x) else f"${abs(x):,.2f}"
     if not signed:
         return s
     return ("+" if x > 0 else "-" if x < 0 else "") + s
@@ -346,8 +352,10 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
         "Hypothetical flat bets only; nothing is wagered. Rules: bet the model's side when it differs from the "
         f"consensus line by ≥ {cfg.threshold:g} points, at the line captured when flagged, {cfg.odds} odds, "
         f"{cfg.stake:g} unit to win. Break-even win rate: {_fmt(m['breakeven'], pct=True)}. "
-        f"One unit = {money(cfg.unit_value, signed=False)}, so each bet risks {money(risked * cfg.unit_value, signed=False)} "
-        f"to win {money(to_win * cfg.unit_value, signed=False)}.", "",
+        f"Starting bankroll {money(cfg.bankroll, signed=False)}; every bet is a flat {money(cfg.unit_value, signed=False)} unit "
+        f"({100 * cfg.unit_value / cfg.bankroll:g}% of the starting bankroll, not compounding), "
+        f"so each bet risks {money(risked * cfg.unit_value, signed=False)} to win {money(to_win * cfg.unit_value, signed=False)}. "
+        f"Bankroll now: {money(m['balance'], signed=False)}.", "",
         verdict, "",
         "Two records: **at consensus** (median line across books, measures whether the model beats the market) "
         "and **best line** (the best number across non-offshore books at that book's own price when known, what "
@@ -362,10 +370,11 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
     wk = weekly(ledger, cfg)
     if wk:
         lines += ["## Week by week", "",
-                  "| week | settled | W-L-P | units | $ | running $ | ROI | avg CLV (pts) |",
-                  "|---|---|---|---|---|---|---|---|"]
+                  "| week | settled | W-L-P | units | staked | $ | bankroll | ROI | avg CLV (pts) |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         lines += [f"| {w['label']} | {w['settled']} | {w['won']}-{w['lost']}-{w['push']} | {_fmt(w['units'], signed=True)} | "
-                  f"{money(w['dollars'])} | {money(w['cum_dollars'])} | {_fmt(w['roi'], pct=True)} | "
+                  f"{money(w['risked_dollars'], signed=False)}{' ⚠' if w['over_bankroll'] else ''} | {money(w['dollars'])} | "
+                  f"{money(w['balance'], signed=False)} | {_fmt(w['roi'], pct=True)} | "
                   f"{_fmt(w['avg_clv'], signed=True)} |" for w in wk]
         lines.append("")
     lines += ["## By edge tier", "",

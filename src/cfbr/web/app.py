@@ -48,7 +48,7 @@ def signed(x, digits: int = 1) -> str:
 def money(x, signed: bool = True) -> str:
     if _missing(x):
         return "—"
-    s = f"${abs(x):,.0f}"
+    s = f"${abs(x):,.0f}" if round(x, 2) == round(x) else f"${abs(x):,.2f}"
     return (("+" if x > 0 else "−" if x < 0 else "") + s) if signed else s
 
 

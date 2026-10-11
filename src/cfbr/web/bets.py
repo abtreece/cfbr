@@ -71,12 +71,12 @@ def breakdown(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
     return out[:1] + [{"label": "All bets, best line", **summarize(ledger, cfg.bets, "best")}] + out[1:]
 
 
-def money_chart(weeks: list[dict]) -> dict | None:
-    """Running dollar total after each week with settled bets (needs at least two weeks)."""
-    if len(weeks) < 2:
+def money_chart(weeks: list[dict], bankroll: float) -> dict | None:
+    """Bankroll from the start through each week with settled bets."""
+    if not weeks:
         return None
-    return {"signed": True, "x": [w["label"] for w in weeks], "n": [w["settled"] for w in weeks],
-            "series": [{"name": "Running total ($)", "values": [round(w["cum_dollars"], 2) for w in weeks]}]}
+    return {"signed": False, "x": ["Start"] + [w["label"] for w in weeks],
+            "series": [{"name": "Bankroll ($)", "values": [round(bankroll, 2)] + [round(w["balance"], 2) for w in weeks]}]}
 
 
 def clean_summary(m: dict) -> dict:
@@ -111,7 +111,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "breakdown": breakdown(ledger, cfg), "weeks": weeks, "tiers": by_tier(ledger, cfg.bets),
                     "open_bets": [r for r in rows if r["status"] == "open"],
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
-                    "chart": money_chart(weeks), "fbs_teams": fbs}
+                    "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
         ctx["has_retro"] = season in store.retro_seasons()
         resp = render(request, "bets.html", **ctx)
         resp.headers.update(NO_STORE)
@@ -193,7 +193,7 @@ def retro_models(led: pl.DataFrame, cfg: Config) -> list[dict]:
         weeks = weekly(d, cfg.bets)
         out.append({"model": model, "label": label[:1].upper() + label[1:], "summary": summarize(d, cfg.bets),
                     "best": summarize(d, cfg.bets, "best"), "weeks": weeks, "tiers": by_tier(d, cfg.bets),
-                    "chart": money_chart(weeks), "rows": list(reversed(bet_rows(d, cfg)))})
+                    "chart": money_chart(weeks, cfg.bets.bankroll), "rows": list(reversed(bet_rows(d, cfg)))})
     return out
 
 

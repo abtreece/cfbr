@@ -187,10 +187,12 @@ def test_tiers_from_edge_size():
 def test_dollars_scale_units_by_unit_value():
     d = _ledger([_settled(1, 7, 4, "won"), _settled(2, 7, 4, "lost"), _settled(3, 7, 4, "open")])
     m = summarize(d, CFG)
-    assert m["dollars"] == pytest.approx(-10.0) and m["risked_dollars"] == pytest.approx(220.0)
-    assert m["open_risk_dollars"] == pytest.approx(110.0)
+    # $10 units (flat 1% of the $1,000 starting bankroll): +$10 - $11.
+    assert m["dollars"] == pytest.approx(-1.0) and m["risked_dollars"] == pytest.approx(22.0)
+    assert m["open_risk_dollars"] == pytest.approx(11.0) and m["balance"] == pytest.approx(999.0)
     assert summarize(d, Bets(unit_value=25.0))["dollars"] == pytest.approx(-2.5)
-    assert money(-10.0) == "-$10" and money(1234.4) == "+$1,234" and money(0.0) == "$0"
+    assert money(-10.0) == "-$10" and money(1234.0) == "+$1,234" and money(0.0) == "$0"
+    assert money(10.5) == "+$10.50" and money(-1.0000000001) == "-$1"  # cents only when not whole
 
 
 def test_weekly_record_runs_in_calendar_order_with_postseason_last():
@@ -202,10 +204,16 @@ def test_weekly_record_runs_in_calendar_order_with_postseason_last():
     wk = weekly(d, CFG)
     assert [w["label"] for w in wk] == ["Week 1", "Week 7", "Week 8", "Postseason"]
     assert [(w["won"], w["lost"], w["push"]) for w in wk] == [(0, 0, 1), (2, 0, 0), (0, 1, 0), (1, 0, 0)]
-    assert [w["dollars"] for w in wk] == pytest.approx([0.0, 200.0, -110.0, 100.0])
-    assert [w["cum_dollars"] for w in wk] == pytest.approx([0.0, 200.0, 90.0, 190.0])
+    assert [w["dollars"] for w in wk] == pytest.approx([0.0, 20.0, -11.0, 10.0])
+    assert [w["cum_dollars"] for w in wk] == pytest.approx([0.0, 20.0, 9.0, 19.0])
+    assert [w["start_balance"] for w in wk] == pytest.approx([1000.0, 1000.0, 1020.0, 1009.0])
+    assert [w["balance"] for w in wk] == pytest.approx([1000.0, 1020.0, 1009.0, 1019.0])
+    assert not any(w["over_bankroll"] for w in wk)
     md = summary_markdown(d, CFG, 2026)
-    assert "## Week by week" in md and "| Postseason | 1 | 1-0-0 |" in md and "+$190" in md
+    assert "## Week by week" in md and "| Postseason | 1 | 1-0-0 |" in md and "$1,019" in md
+    # A week whose stakes ($22 in week 7) exceed the bankroll going in is flagged.
+    small = weekly(d, Bets(bankroll=21.0))
+    assert [w["over_bankroll"] for w in small] == [False, True, False, False]
     assert "## By edge tier" in md
 
 

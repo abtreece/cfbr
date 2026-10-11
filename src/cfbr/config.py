@@ -85,8 +85,10 @@ class Bets(BaseModel):
     # never priced at one, so they never supply the best-line number.
     offshore_books: list[str] = ["Bovada", "BetOnline", "LowVig", "MyBookie", "BetUS", "Bookmaker", "5Dimes",
                                  "SportsBetting", "Heritage"]
-    # Dollar value of one unit, for reporting only (a 1-unit bet at -110 risks $110 to win $100).
-    unit_value: float = 100.0
+    # Dollar reporting only: a starting bankroll and the dollar value of one unit
+    # (1% of the bankroll, so a 1-unit bet at -110 risks $11 to win $10).
+    bankroll: float = 1000.0
+    unit_value: float = 10.0
     # Reporting tiers by edge size: name -> minimum |edge| in points. Every bet is
     # still a flat stake; the tier only groups bets by how far the model is from the market.
     tiers: dict[str, float] = {"Small": 3.0, "Medium": 6.0, "Large": 10.0}
