@@ -99,3 +99,45 @@ def test_roster_web_tables_status_departures_and_labels():
     empty = SimpleNamespace(roster=roster.head(0), player_ppa=ppa, player_defense=d, team_status=status,
                             fbs_teams=lambda s: [])
     assert roster_tables(empty, 2026) == {}
+    # Incoming-QB display fields: qbB (330 attempts at B) is A's incoming transfer QB.
+    a = t["roster_summary"].filter(pl.col("team") == "A").row(0, named=True)
+    assert a["in_qb_name"] == "qbB" and a["in_qb_from"] == "B" and a["in_qb_pass_att"] == 330
+
+
+def test_roster_web_prefers_latest_snapshot_but_model_keeps_fixed_one():
+    from types import SimpleNamespace
+
+    from cfbr.report.roster_web import roster_tables
+
+    roster, ppa, d, status = _data()
+    roster = roster.with_columns(name=pl.col("player_id"), jersey=pl.lit(None, pl.Int32), height=pl.lit(None, pl.Int32),
+                                 weight=pl.lit(None, pl.Int32), home_city=pl.lit(None, pl.Utf8),
+                                 home_state=pl.lit(None, pl.Utf8))
+    # Weekly snapshot: rbA has left A since the fixed snapshot.
+    latest = roster.filter(pl.col("player_id") != "rbA").with_columns(as_of=pl.lit(None, pl.Datetime("us", "UTC")))
+    ds = SimpleNamespace(roster=roster, roster_latest=latest, player_ppa=ppa, player_defense=d, team_status=status,
+                         fbs_teams=lambda s: ["A", "B"])
+    t = roster_tables(ds, 2026)
+    assert "rbA" not in set(t["roster_players"]["player_id"])
+    assert "rbA" in set(t["roster_departures"]["player_id"])
+    # The model's input (fixed snapshot) is untouched.
+    assert "rbA" in set(ds.roster["player_id"])
+
+
+def test_build_roster_latest_picks_newest_weekly_file(tmp_path):
+    import json
+    import os
+
+    from cfbr.ingest.store import build_roster, build_roster_latest
+
+    d = tmp_path / "roster" / "2026"
+    d.mkdir(parents=True)
+    rec = lambda pid: {"id": pid, "firstName": "A", "lastName": pid, "team": "T", "year": 2, "position": "QB"}  # noqa: E731
+    (d / "season.json").write_text(json.dumps([rec("1")]))
+    (d / "w06.json").write_text(json.dumps([rec("1"), rec("2")]))
+    (d / "w07.json").write_text(json.dumps([rec("1"), rec("2"), rec("3")]))
+    os.utime(d / "w07.json", (1_800_000_000, 1_800_000_000))
+    assert build_roster(tmp_path)["player_id"].to_list() == ["1"]           # model: fixed first snapshot
+    latest = build_roster_latest(tmp_path)
+    assert sorted(latest["player_id"].to_list()) == ["1", "2", "3"]         # display: newest weekly
+    assert latest["as_of"][0].timestamp() == 1_800_000_000

@@ -20,8 +20,13 @@ Columns (null = unknown):
   roster_departures  season, team (the team they left), player_id, name, position, to_team
                      (this season's roster they appear on, else null), prev_plays,
                      prev_ppa_total, prev_tackles, prev_havoc
-  roster_summary     season, team, roster_as_of (UTC time the roster was fetched), and the
-                     features in ROSTER_SUMMARY_LABELS
+  roster_summary     season, team, roster_as_of (UTC time the roster snapshot was fetched),
+                     the features in ROSTER_SUMMARY_LABELS, and the incoming-QB display fields
+                     in ROSTER_SUMMARY_EXTRA_LABELS
+
+The web view uses the newest roster snapshot (refreshed weekly in-season). The
+model's roster prior uses the season's first, fixed snapshot instead, so the
+summary features here can differ slightly from the model's inputs.
 """
 
 from __future__ import annotations
@@ -43,13 +48,23 @@ ROSTER_SUMMARY_LABELS: dict[str, tuple[str, str]] = {
     "off_in_fcs": ("Transfer offense in (non-FBS)", "Total PPA last season by incoming transfers from non-FBS programs"),
     "off_out": ("Offense lost", "Total PPA last season by players from this team who are not on this roster"),
     "qb_returns": ("Starting QB back", "1 if last season's starting QB (most pass plays) is on this roster, else 0"),
-    "qb_in_ppa": ("Transfer QB", "Passing PPA total last season of the best incoming transfer QB (100+ pass plays); 0 if none"),
+    "qb_in_ppa": ("Proven transfer QB", "Passing PPA total last season of the best incoming transfer QB with 100+ pass attempts; 0 if none (see 'Incoming transfer QB' for any passing history)"),
     "def_ret_tackles": ("Returning tackles", "Share (0–1) of last season's tackles made by players back on this roster"),
     "def_ret_havoc": ("Returning havoc", "Share (0–1) of last season's TFL + passes defended + interceptions by returning players"),
     "def_in_tackles": ("Transfer tackles in", "Count of tackles last season by incoming transfers"),
     "def_in_havoc": ("Transfer havoc in", "Count of TFL + passes defended + interceptions last season by incoming transfers"),
 }
 assert set(ROSTER_SUMMARY_LABELS) == set(ROSTER_FEATURES)
+
+# Display-only fields: the incoming transfer QB with the most pass attempts last
+# season (any number), null if none. Not used by the model.
+ROSTER_SUMMARY_EXTRA_LABELS: dict[str, tuple[str, str]] = {
+    "in_qb_name": ("Incoming transfer QB", "Incoming transfer QB with the most pass attempts last season (any number)"),
+    "in_qb_from": ("From", "School he played for last season"),
+    "in_qb_pass_att": ("Pass attempts", "His pass attempts last season (count)"),
+    "in_qb_pass_ppa_avg": ("PPA per pass", "His passing PPA per attempt last season"),
+    "in_qb_pass_ppa_total": ("Passing PPA", "His total passing PPA last season"),
+}
 
 PLAYER_COLS = ["player_id", "name", "jersey", "position", "class_year", "height", "weight", "home_city", "home_state"]
 
@@ -65,7 +80,22 @@ def _prev_production(ds: Dataset, season: int) -> pl.DataFrame:
     return both.with_columns(prev_team=pl.coalesce("prev_team", "prev_team_d")).drop("prev_team_d")
 
 
-def roster_as_of(cfg: Config, season: int) -> datetime | None:
+def _display_roster(ds: Dataset, season: int) -> pl.DataFrame:
+    """Newest roster snapshot for the season, falling back to the fixed one."""
+    latest = getattr(ds, "roster_latest", None)
+    if latest is not None and all(c in latest.columns for c in PLAYER_COLS):
+        r = latest.filter(pl.col("season") == season)
+        if r.height:
+            return r
+    return ds.roster.filter(pl.col("season") == season)
+
+
+def roster_as_of(cfg: Config, season: int, ds: Dataset | None = None) -> datetime | None:
+    latest = getattr(ds, "roster_latest", None) if ds is not None else None
+    if latest is not None and "as_of" in latest.columns:
+        r = latest.filter(pl.col("season") == season)
+        if r.height:
+            return r["as_of"][0]
     p = cfg.paths.raw_dir / "roster" / str(season) / "season.json"
     return datetime.fromtimestamp(p.stat().st_mtime, UTC) if p.exists() else None
 
@@ -75,7 +105,7 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
         return {}
     if any(c not in ds.roster.columns for c in PLAYER_COLS):
         return {}  # store built before the roster table gained names etc.; rebuild with `cfbr ingest`
-    ros = ds.roster.filter(pl.col("season") == season)
+    ros = _display_roster(ds, season)
     if ros.height == 0:
         return {}
     teams = ds.fbs_teams(season)
@@ -101,17 +131,25 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
                           "name", "position", "to_team", "prev_plays", "prev_ppa_total", "prev_tackles", "prev_havoc")
                   .filter(pl.col("team").is_in(fbs)).sort("team", "name"))
 
-    summary = roster_features(season, teams, ds.roster, ds.player_ppa, ds.player_defense, ds.team_status)
-    summary = summary.with_columns(season=pl.lit(season, pl.Int32),
-                                   roster_as_of=pl.lit(as_of, pl.Datetime("us", "UTC")))
-    summary = summary.select("season", "team", "roster_as_of", *ROSTER_FEATURES).sort("team")
+    # Summary from the displayed snapshot (same as the player list). Previous
+    # seasons' rosters come from the fixed table.
+    display_roster = pl.concat([ds.roster.filter(pl.col("season") != season), ros.select(ds.roster.columns)])
+    summary = roster_features(season, teams, display_roster, ds.player_ppa, ds.player_defense, ds.team_status)
+    in_qb = (players.filter((pl.col("status") == "transfer_in") & (pl.col("position") == "QB")
+                            & (pl.col("prev_pass_plays") > 0))
+             .sort("prev_pass_plays", descending=True).group_by("team", maintain_order=True).first()
+             .select("team", in_qb_name="name", in_qb_from="from_team", in_qb_pass_att="prev_pass_plays",
+                     in_qb_pass_ppa_avg="prev_pass_ppa_avg", in_qb_pass_ppa_total="prev_pass_ppa_total"))
+    summary = (summary.join(in_qb, on="team", how="left")
+               .with_columns(season=pl.lit(season, pl.Int32), roster_as_of=pl.lit(as_of, pl.Datetime("us", "UTC")))
+               .select("season", "team", "roster_as_of", *ROSTER_FEATURES, *ROSTER_SUMMARY_EXTRA_LABELS).sort("team"))
     return {"roster_players": players, "roster_departures": departures, "roster_summary": summary}
 
 
 def write_roster_web(cfg: Config, ds: Dataset, season: int, out_dir: Path | None = None) -> dict[str, Path]:
     """Write the three roster parquet files to out/web/{season}/ (temp file +
     rename). Returns {} and writes nothing when the season has no roster."""
-    tables = roster_tables(ds, season, roster_as_of(cfg, season))
+    tables = roster_tables(ds, season, roster_as_of(cfg, season, ds))
     if not tables:
         return {}
     out = out_dir or (cfg.paths.out_dir / "web" / str(season))

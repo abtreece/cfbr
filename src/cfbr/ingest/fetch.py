@@ -101,9 +101,17 @@ def has_poll(weeks: list, poll: str, week: int) -> bool:
 PLAYER_SEASON_ENDPOINTS = ["/ppa/players/season", "/stats/player/season"]
 
 
-def fetch_player_data(client: CFBDClient, year: int, live: bool) -> None:
-    """Roster for ``year``; player production only for completed seasons."""
+def fetch_player_data(client: CFBDClient, year: int, live: bool, live_week: int | None = None) -> None:
+    """Roster for ``year``; player production only for completed seasons.
+
+    ``roster/{year}/season.json`` is the first snapshot and never changes: the
+    model (roster prior) uses it, so roster updates can't move a prior mid-season.
+    In a live season, ``live_week`` also stores a weekly snapshot
+    (``roster/{year}/wNN.json``, one call per week) for display.
+    """
     client.get("/roster", {"year": year}, year, "season")
+    if live and live_week is not None:
+        client.get("/roster", {"year": year}, year, f"w{live_week:02d}")
     if not live:
         for ep in PLAYER_SEASON_ENDPOINTS:
             client.get(ep, {"year": year}, year, "season")
@@ -179,7 +187,7 @@ def weekly(client: CFBDClient, year: int, week: int) -> None:
     polls, plays); a re-run costs 1 (lines are always re-fetched for the bet
     tracker) plus 1 while that week's polls are pending."""
     fetch_season_level(client, year, live_week=week)
-    fetch_player_data(client, year, live=True)  # cached after the first call
+    fetch_player_data(client, year, live=True, live_week=week)
     for st, wk in completed_play_weeks(_season_games(client, year)):
         if st == "regular" and wk > week:
             continue

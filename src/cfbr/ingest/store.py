@@ -162,17 +162,44 @@ def build_polls(raw: Path) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=POLL_SCHEMA)
 
 
-def build_roster(raw: Path) -> pl.DataFrame:
-    rows = [{"season": y, "player_id": str(r["id"]), "team": r.get("team"), "position": r.get("position"),
+ROSTER_SCHEMA = {"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8, "position": pl.Utf8,
+                 "class_year": pl.Int32, "name": pl.Utf8, "jersey": pl.Int32, "height": pl.Int32, "weight": pl.Int32,
+                 "home_city": pl.Utf8, "home_state": pl.Utf8}
+
+
+def _roster_rows(year: int, records: list) -> list[dict]:
+    return [{"season": year, "player_id": str(r["id"]), "team": r.get("team"), "position": r.get("position"),
              "class_year": r.get("year") if isinstance(r.get("year"), int) and r.get("year") <= 6 else None,
              "name": " ".join(x for x in (r.get("firstName"), r.get("lastName")) if x) or None,
              "jersey": r.get("jersey"), "height": r.get("height"), "weight": r.get("weight"),
              "home_city": r.get("homeCity") or None, "home_state": r.get("homeState") or None}
-            for y, p in _season_files(raw, "roster") for r in _read(p) if r.get("id") is not None]
-    return pl.DataFrame(rows, schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8,
-                                      "position": pl.Utf8, "class_year": pl.Int32, "name": pl.Utf8,
-                                      "jersey": pl.Int32, "height": pl.Int32, "weight": pl.Int32,
-                                      "home_city": pl.Utf8, "home_state": pl.Utf8})
+            for r in records if r.get("id") is not None]
+
+
+def build_roster_latest(raw: Path) -> pl.DataFrame:
+    """Newest roster snapshot per season (weekly wNN.json if any, else season.json),
+    with ``as_of`` = when that file was fetched. For display only; the model uses
+    ``roster`` (the first, fixed snapshot)."""
+    from datetime import UTC, datetime
+
+    frames = []
+    d = raw / "roster"
+    for yd in sorted(p for p in d.iterdir() if p.is_dir()) if d.exists() else []:
+        weekly = sorted(yd.glob("w*.json"))
+        f = weekly[-1] if weekly else (yd / "season.json")
+        if not f.exists():
+            continue
+        df = pl.DataFrame(_roster_rows(int(yd.name), _read(f)), schema=ROSTER_SCHEMA)
+        frames.append(df.with_columns(as_of=pl.lit(datetime.fromtimestamp(f.stat().st_mtime, UTC))))
+    if not frames:
+        return pl.DataFrame(schema={**ROSTER_SCHEMA, "as_of": pl.Datetime("us", "UTC")})
+    return pl.concat(frames)
+
+
+def build_roster(raw: Path) -> pl.DataFrame:
+    """First (fixed) roster snapshot per season; what the model uses."""
+    rows = [row for y, p in _season_files(raw, "roster") for row in _roster_rows(y, _read(p))]
+    return pl.DataFrame(rows, schema=ROSTER_SCHEMA)
 
 
 COUNT_STATS = {("passing", "ATT"): "pass_att", ("rushing", "CAR"): "rush_car", ("receiving", "REC"): "rec"}
@@ -373,6 +400,7 @@ def build_store(raw: Path, db_path: Path) -> dict[str, int]:
             ("teams_season", build_teams), ("games", build_games), ("lines", build_lines),
             ("returning_production", build_returning), ("talent", build_talent), ("recruiting", build_recruiting),
             ("calendar", build_calendar), ("polls", build_polls), ("roster", build_roster),
+            ("roster_latest", build_roster_latest),
             ("player_ppa", build_player_ppa), ("player_defense", build_player_defense),
             ("game_players", build_game_players),
         ]:
