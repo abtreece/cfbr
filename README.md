@@ -53,9 +53,11 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 ## Cron (Sunday mornings, Central time)
 
 ```cron
-# System clock is UTC and Ubuntu's cron ignores CRON_TZ: fire at 14:00 and 15:00 UTC,
-# and only the run where Chicago local time is 09h proceeds (correct across DST).
+# System clock is UTC and Ubuntu's cron ignores CRON_TZ: each run fires at both possible
+# UTC hours, and only the one matching the Chicago local hour proceeds (correct across DST).
+# 9 AM: early rankings + predictions. 3 PM: re-run to pick up the AP/Coaches polls.
 0 14,15 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "09" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
+0 20,21 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "15" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 ```
 
 `weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet.
