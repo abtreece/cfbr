@@ -34,8 +34,9 @@ The CFBD free tier allows 1,000 calls a month. A full backfill for 2014–presen
 ## Cron (Sunday mornings, Central time)
 
 ```cron
-CRON_TZ=America/Chicago
-0 9 * * 0  cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
+# System clock is UTC and Ubuntu's cron ignores CRON_TZ: fire at 14:00 and 15:00 UTC,
+# and only the run where Chicago local time is 09h proceeds (correct across DST).
+0 14,15 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "09" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 ```
 
 `weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet.
