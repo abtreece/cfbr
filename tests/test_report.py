@@ -33,3 +33,38 @@ def test_ats_excludes_pushes_and_ties():
     # game 1: model 8 > 3, actual 10 > 3 -> win; game 2: model 2 > 0, actual -3 -> loss;
     # game 3: pick == line -> excluded; game 4: push -> excluded
     assert m["ats_n"] == 2 and m["ats_wins"] == 1
+
+
+def _polls(rows):
+    return pl.DataFrame(rows, schema={"season": pl.Int32, "season_type": pl.Utf8, "week": pl.Int32, "poll": pl.Utf8,
+                                      "rank": pl.Int32, "team": pl.Utf8}, orient="row")
+
+
+def test_poll_ranks_use_poll_released_after_the_week():
+    from cfbr.report.rank import poll_ranks
+
+    polls = _polls([
+        (2026, "regular", 6, "AP Top 25", 1, "Alabama"),
+        (2026, "regular", 7, "AP Top 25", 1, "Notre Dame"),
+        (2026, "regular", 7, "AP Top 25", 2, "Alabama"),
+        (2026, "regular", 8, "AP Top 25", 1, "Georgia"),  # future poll: never used for week 6
+        (2026, "regular", 6, "Coaches Poll", 3, "Alabama"),
+    ])
+    ranks, used = poll_ranks(polls, 2026, 6)
+    assert used == {"ap_rank": 7, "coaches_rank": 6, "cfp_rank": None}  # coaches falls back to latest
+    d = dict(zip(ranks["team"], ranks["ap_rank"]))
+    assert d["Notre Dame"] == 1 and d["Alabama"] == 2 and d.get("Georgia") is None
+
+
+def test_rankings_markdown_flags_stale_polls():
+    from cfbr.report.rank import add_polls, poll_note, to_markdown
+
+    rankings = pl.DataFrame({"rank": [1, 26], "team": ["Alabama", "Army"], "record": ["5-1", "6-0"],
+                             "rating": [28.5, 5.0]})
+    polls = _polls([(2026, "regular", 6, "AP Top 25", 1, "Alabama"), (2026, "regular", 6, "AP Top 25", 20, "Army")])
+    out, used = add_polls(rankings, polls, 2026, 6)
+    assert out.columns[-3:] == ["ap_rank", "coaches_rank", "cfp_rank"]
+    note = poll_note(used, 6)
+    assert "week 7 not released yet" in note and "Coaches: not released" in note
+    md = to_markdown(out, "t", note=note)
+    assert "outside the model's top 25" in md and "| 26 | Army |" in md

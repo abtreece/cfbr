@@ -19,7 +19,7 @@ The CFBD free tier allows 1,000 calls a month. A full backfill for 2014–presen
 | Command | What it does |
 |---|---|
 | `cfbr ingest --backfill` | Pull all seasons from 2014 through the current one into the cache and rebuild `data/cfb.duckdb` |
-| `cfbr ingest --season 2026 --week 7` | Incremental weekly ingest (about 3 calls) |
+| `cfbr ingest --season 2026 --week 7` | Incremental weekly ingest (about 4 calls: games, lines, polls, plays; +1 per re-run while that week's polls are pending) |
 | `cfbr prep` | Build `scrimmage_plays` / `model_plays` |
 | `cfbr ratings --season 2025 --week 8` | Print ratings available before that week's first kickoff |
 | `cfbr backtest --seasons 2015-2021` | Walk-forward backtest; writes `results/{run_id}/` |

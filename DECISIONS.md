@@ -55,3 +55,5 @@ One line each: decision — reason — phase.
 - A game still not completed 4 days after kickoff is treated as cancelled, so it doesn't keep its week off the site forever — Web
 - Accuracy-by-week compares model, closing line and Massey on the same games (those with a closing line) and pools postseason windows into one point, since some windows hold only a game or two — Web
 - The server binds 127.0.0.1 by default; `--host 0.0.0.0` exposes it on the LAN without authentication. Times are shown in US Central — Web
+- Polls (AP, Coaches, CFP committee) come from `/rankings?seasonType=both`, one call per season; stored in the `polls` table. Live season is keyed by ingest week like games/lines, and refetched on each run until that week's AP poll appears (polls come out Sunday afternoon) — P7
+- Rankings show poll week N+1 next to "after week N" ratings: CFBD labels the poll released after week N's games as week N+1 (verified: the 2024 AP week-3 poll reflects Texas's week-2 win). If it isn't out yet, the latest earlier poll is shown and rankings.md says which week was used. `ap_rank`, `coaches_rank`, `cfp_rank` are appended after the spec's columns — P7

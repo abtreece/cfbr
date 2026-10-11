@@ -138,6 +138,30 @@ def build_recruiting(raw: Path) -> pl.DataFrame:
                                       "points": pl.Float64})
 
 
+POLL_SCHEMA = {
+    "season": pl.Int32, "season_type": pl.Utf8, "week": pl.Int32, "poll": pl.Utf8, "rank": pl.Int32,
+    "team": pl.Utf8, "conference": pl.Utf8, "first_place_votes": pl.Int32, "points": pl.Int32,
+}
+
+
+def build_polls(raw: Path) -> pl.DataFrame:
+    rows = []
+    for year in _years(raw, "rankings"):
+        p = _games_file(raw, "rankings", year)
+        if p is None:
+            continue
+        for w in _read(p):
+            for poll in w.get("polls") or []:
+                for r in poll.get("ranks") or []:
+                    rows.append({
+                        "season": w["season"], "season_type": w["seasonType"], "week": int(w["week"]),
+                        "poll": poll["poll"], "rank": r.get("rank"), "team": r.get("school"),
+                        "conference": r.get("conference"), "first_place_votes": r.get("firstPlaceVotes"),
+                        "points": r.get("points"),
+                    })
+    return pl.DataFrame(rows, schema=POLL_SCHEMA)
+
+
 def build_calendar(raw: Path) -> pl.DataFrame:
     rows = [{"season": y, "week": w["week"], "season_type": w["seasonType"], "start_date": w.get("startDate"),
              "end_date": w.get("endDate"), "first_game_start": w.get("firstGameStart"),
@@ -206,7 +230,7 @@ def build_store(raw: Path, db_path: Path) -> dict[str, int]:
         for name, builder in [
             ("teams_season", build_teams), ("games", build_games), ("lines", build_lines),
             ("returning_production", build_returning), ("talent", build_talent), ("recruiting", build_recruiting),
-            ("calendar", build_calendar),
+            ("calendar", build_calendar), ("polls", build_polls),
         ]:
             df = builder(raw)
             con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM df")

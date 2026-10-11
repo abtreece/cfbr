@@ -33,6 +33,37 @@ def fetch_season_level(client: CFBDClient, year: int, live_week: int | None = No
     key = "both" if live_week is None else f"both_w{live_week:02d}"
     client.get("/games", {"year": year, "seasonType": "both"}, year, key)
     client.get("/lines", {"year": year, "seasonType": "both"}, year, key)
+    fetch_rankings(client, year, live_week)
+
+
+def fetch_rankings(client: CFBDClient, year: int, live_week: int | None = None) -> None:
+    """All of a season's polls (AP, Coaches, CFP committee) in one call.
+
+    Poll weeks run one ahead of game weeks: the poll released after week N's
+    games is labeled week N+1. Polls come out Sunday afternoon (CFP: Tuesday
+    night), so in a live season a cached file missing the week N+1 AP poll is
+    re-fetched on the next run (one call per run until it appears).
+    """
+    if live_week is None:
+        client.get("/rankings", {"year": year, "seasonType": "both"}, year, "both")
+        return
+    key = f"both_w{live_week:02d}"
+    params = {"year": year, "seasonType": "both"}
+    data = client.get("/rankings", params, year, key)
+    if not has_poll(data, "AP Top 25", live_week + 1) and not client.refresh:
+        client.refresh = True
+        try:
+            data = client.get("/rankings", params, year, key)
+        finally:
+            client.refresh = False
+        if not has_poll(data, "AP Top 25", live_week + 1):
+            log.warning("week %d AP poll not released yet; rankings will show the latest available poll",
+                        live_week + 1)
+
+
+def has_poll(weeks: list, poll: str, week: int) -> bool:
+    return any(w["seasonType"] == "regular" and int(w["week"]) == week and any(p["poll"] == poll for p in w["polls"])
+               for w in weeks)
 
 
 def completed_play_weeks(games: list) -> list[tuple[str, int]]:
@@ -86,7 +117,8 @@ def backfill(client: CFBDClient, first: int, last: int, recruiting_lookback: int
 def weekly(client: CFBDClient, year: int, week: int) -> None:
     """Incremental ingest through regular-season ``week`` of an in-progress
     season: refresh games/lines (keyed by week), then any finished weeks' plays
-    not yet cached. About 3 calls per week on a cold cache."""
+    not yet cached. About 4 calls per week on a cold cache (games, lines,
+    polls, plays), plus one per re-run while that week's polls are pending."""
     fetch_season_level(client, year, live_week=week)
     for st, wk in completed_play_weeks(_season_games(client, year)):
         if st == "regular" and wk > week:

@@ -65,6 +65,56 @@ def build_rankings(eng: Engine, season: int, week: int) -> tuple[pl.DataFrame, o
     return out, as_of
 
 
+POLLS = {"ap_rank": "AP Top 25", "coaches_rank": "Coaches Poll", "cfp_rank": "Playoff Committee Rankings"}
+
+
+def poll_ranks(polls: pl.DataFrame, season: int, week: int) -> tuple[pl.DataFrame, dict[str, int | None]]:
+    """Each poll's ranks to show beside the 'after week N' ratings.
+
+    Poll weeks run one ahead of game weeks (the poll released after week N's
+    games is labeled N+1), so the target is poll week N+1. If it isn't out yet,
+    the latest earlier regular-season poll is used; the returned dict gives the
+    poll week actually used (None if that poll has no ranking yet this season).
+    """
+    target = week + 1
+    reg = polls.filter((pl.col("season") == season) & (pl.col("season_type") == "regular")
+                       & (pl.col("week") <= target))
+    out = pl.DataFrame(schema={"team": pl.Utf8})
+    used: dict[str, int | None] = {}
+    for col, name in POLLS.items():
+        p = reg.filter(pl.col("poll") == name)
+        if p.height == 0:
+            used[col] = None
+            continue
+        wk = p["week"].max()
+        used[col] = wk
+        ranks = p.filter(pl.col("week") == wk).select("team", pl.col("rank").alias(col))
+        out = out.join(ranks, on="team", how="full", coalesce=True)
+    return out, used
+
+
+def poll_note(used: dict[str, int | None], week: int) -> str:
+    labels = {"ap_rank": "AP", "coaches_rank": "Coaches", "cfp_rank": "CFP"}
+    parts = []
+    for col, wk in used.items():
+        if wk is None:
+            parts.append(f"{labels[col]}: not released yet this season")
+        elif wk == week + 1:
+            parts.append(f"{labels[col]}: week {wk} poll (after week {week} games)")
+        else:
+            parts.append(f"{labels[col]}: week {wk} poll — **week {week + 1} not released yet**")
+    return "Polls shown: " + "; ".join(parts) + "."
+
+
+def add_polls(rankings: pl.DataFrame, polls: pl.DataFrame, season: int, week: int):
+    ranks, used = poll_ranks(polls, season, week)
+    out = rankings.join(ranks, on="team", how="left")
+    for col in POLLS:
+        if col not in out.columns:
+            out = out.with_columns(pl.lit(None, pl.Int32).alias(col))
+    return out, used
+
+
 def build_predictions(eng: Engine, season: int, week: int, as_of) -> pl.DataFrame:
     """Next week's games, predicted from ratings as of ``as_of``."""
     g = eng.games.filter((pl.col("season") == season) & (pl.col("slot") == f"r{week + 1:02d}"))
@@ -84,7 +134,7 @@ def build_predictions(eng: Engine, season: int, week: int, as_of) -> pl.DataFram
             .sort("kickoff_ts"))
 
 
-def to_markdown(df: pl.DataFrame, title: str, top: int = 25) -> str:
+def to_markdown(df: pl.DataFrame, title: str, top: int = 25, note: str = "") -> str:
     def table(d: pl.DataFrame) -> list[str]:
         cols = d.columns
         lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
@@ -93,8 +143,19 @@ def to_markdown(df: pl.DataFrame, title: str, top: int = 25) -> str:
                                                                 else str(v)) for c, v in zip(cols, row)) + " |")
         return lines
 
-    return "\n".join([f"# {title}", "", "## Top 25", "", *table(df.head(top)), "", "## All FBS teams", "",
-                      *table(df), ""])
+    sections = [f"# {title}", ""]
+    if note:
+        sections += [note, ""]
+    sections += ["## Top 25", "", *table(df.head(top)), ""]
+    if "ap_rank" in df.columns:
+        poll_cols = [c for c in POLLS if df[c].is_not_null().any()]
+        if poll_cols:
+            outside = df.filter((pl.col("rank") > top) & pl.any_horizontal(pl.col(c).is_not_null() for c in poll_cols))
+            if outside.height:
+                sections += ["## Poll-ranked teams outside the model's top 25", "",
+                             *table(outside.select("rank", "team", "record", "rating", *poll_cols)), ""]
+    sections += ["## All FBS teams", "", *table(df), ""]
+    return "\n".join(sections)
 
 
 def season_accuracy(eng: Engine, season: int, week: int) -> dict:
@@ -124,10 +185,14 @@ def run_rank(cfg: Config, season: int, week: int, last_completed: int, ds: Datas
     ds = ds or Dataset.load(cfg)
     eng = Engine(ds, cfg, last_completed=last_completed)
     rankings, as_of = build_rankings(eng, season, week)
+    rankings, used = add_polls(rankings, ds.polls, season, week)
+    note = poll_note(used, week)
+    log.info("%s", note.replace("**", ""))
     out = cfg.paths.out_dir / str(season) / f"w{week:02d}"
     out.mkdir(parents=True, exist_ok=True)
     rankings.write_csv(out / "rankings.csv")
-    (out / "rankings.md").write_text(to_markdown(rankings, f"{season} ratings after week {week} (as of {as_of:%Y-%m-%d})"))
+    (out / "rankings.md").write_text(
+        to_markdown(rankings, f"{season} ratings after week {week} (as of {as_of:%Y-%m-%d})", note=note))
     build_predictions(eng, season, week, as_of).write_csv(out / "predictions.csv")
     log.info("wrote %s", out)
     return out

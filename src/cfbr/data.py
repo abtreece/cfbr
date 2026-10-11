@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 import duckdb
 import polars as pl
 
 from cfbr.config import Config
+from cfbr.ingest.store import POLL_SCHEMA
 from cfbr.prep.plays import FCS, apply_filters
 
 POSTSEASON_BUCKET_DAYS = 7
@@ -55,6 +57,7 @@ class Dataset:
     talent: pl.DataFrame
     recruiting: pl.DataFrame
     lines: pl.DataFrame
+    polls: pl.DataFrame = field(default_factory=lambda: pl.DataFrame(schema=POLL_SCHEMA))
 
     @classmethod
     def load(cls, cfg: Config) -> "Dataset":
@@ -67,10 +70,13 @@ class Dataset:
             talent = con.execute("SELECT * FROM talent").pl()
             recruiting = con.execute("SELECT * FROM recruiting").pl()
             lines = con.execute("SELECT * FROM lines").pl()
+            has_polls = con.execute(
+                "SELECT count(*) FROM information_schema.tables WHERE table_name = 'polls'").fetchone()[0]
+            polls = con.execute("SELECT * FROM polls").pl() if has_polls else pl.DataFrame(schema=POLL_SCHEMA)
         finally:
             con.close()
         games = games.filter(~(pl.col("home_fcs") & pl.col("away_fcs")))
-        return cls(scrimmage, assign_slots(games), team_status, returning, talent, recruiting, lines)
+        return cls(scrimmage, assign_slots(games), team_status, returning, talent, recruiting, lines, polls)
 
     def model_plays(self, cfg: Config) -> pl.DataFrame:
         return apply_filters(self.scrimmage, cfg)
