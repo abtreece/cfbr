@@ -1,0 +1,19 @@
+# systemd *user* service for the cfbr web app (no root needed).
+# Install:  mkdir -p ~/.config/systemd/user && ln -sf ~/cfb-ratings/deploy/cfbr-web.service ~/.config/systemd/user/
+#           systemctl --user daemon-reload && systemctl --user enable --now cfbr-web
+# Boot:     loginctl enable-linger $USER   (start user services at boot, without a login)
+# Logs:     data/web.log in the repo, and `journalctl --user -u cfbr-web`
+[Unit]
+Description=CFB Ratings web app (cfbr web serve)
+
+[Service]
+WorkingDirectory=%h/cfb-ratings
+# Reads only precomputed files (out/web, results, out/{season}); `cfbr weekly` refreshes them.
+ExecStart=%h/cfb-ratings/.venv/bin/cfbr web serve --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/cfb-ratings/data/web.log
+StandardError=append:%h/cfb-ratings/data/web.log
+
+[Install]
+WantedBy=default.target

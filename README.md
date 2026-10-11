@@ -51,6 +51,17 @@ uv run cfbr web serve          # http://127.0.0.1:8000 (add --host 0.0.0.0 --por
 
 **Premium content.** The betting section and all model output for a season still in progress (ratings, ranks, predicted margins, win probabilities, for every game) are premium; anything less leaks the picks (see DECISIONS.md). Free viewers get past seasons, the live season's schedule, scores, closing lines and polls, and aggregate accuracy. Everyone is premium today. To charge for it, implement `is_premium()` in `src/cfbr/web/access.py`. Every route already depends on it, and live-season data is masked in one place (`public_view` in `src/cfbr/web/app.py`) before any page or API code sees it.
 
+To run it as a service that starts at boot and restarts if it crashes (systemd user service, no root needed):
+
+```bash
+mkdir -p ~/.config/systemd/user && ln -sf ~/cfb-ratings/deploy/cfbr-web.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now cfbr-web
+loginctl enable-linger "$USER"          # start user services at boot without a login
+systemctl --user restart cfbr-web       # after pulling new web code (new data needs no restart)
+```
+
+It listens on 0.0.0.0:8000 and logs to `data/web.log` (also `journalctl --user -u cfbr-web`).
+
 The server never fits a model. It reads `out/web/{season}/` and picks up new files from `cfbr weekly` without a restart. The ratings shown "after week N" are exactly what `cfbr rank` writes to `out/{season}/wNN/`.
 
 ## Cron (Sunday mornings, Central time)
