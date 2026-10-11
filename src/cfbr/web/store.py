@@ -61,6 +61,7 @@ class Store:
         self._bets: dict[int, tuple[float, pl.DataFrame]] = {}
         self._retro: dict[int, tuple[float, pl.DataFrame]] = {}
         self._rosters: dict[int, tuple[float, Roster | None]] = {}
+        self._sims: dict[tuple[int, int], tuple[float, tuple[pl.DataFrame, str]]] = {}
 
     def seasons(self) -> list[int]:
         if not self.web_root.is_dir():
@@ -166,6 +167,43 @@ class Store:
                            careers=pl.read_parquet(careers) if careers.exists() else None)
             self._rosters[season] = (mtime, r)
             return r
+
+    def sim_weeks(self, season: int) -> list[int]:
+        """Weeks with a season simulation (``out/{season}/wNN/season_sim.csv``, written by weekly)."""
+        d = self.out_dir / str(season)
+        if not d.is_dir():
+            return []
+        return sorted(int(p.parent.name[1:]) for p in d.glob("w[0-9][0-9]/season_sim.csv"))
+
+    def season_sim(self, season: int, week: int) -> tuple[pl.DataFrame, str] | None:
+        """(table, notes markdown) for a week's simulation, reloaded when the CSV changes.
+        The notes are the .md's text above its table, so the page says exactly what the
+        simulation's own write-up says."""
+        path = self.out_dir / str(season) / f"w{week:02d}" / "season_sim.csv"
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            return None
+        key = (season, week)
+        with self._lock:
+            hit = self._sims.get(key)
+            if hit and hit[0] == mtime:
+                return hit[1]
+            try:
+                df = pl.read_csv(path)
+            except Exception:  # noqa: BLE001 - mid-write; serve the previous copy if any
+                return hit[1] if hit else None
+            md = path.with_suffix(".md")
+            notes = []
+            if md.exists():
+                for line in md.read_text().splitlines():
+                    if line.startswith("|"):
+                        break
+                    if line.strip() and not line.startswith("#"):
+                        notes.append(line.strip())
+            value = (df, "\n".join(notes))
+            self._sims[key] = (mtime, value)
+            return value
 
     def accuracy_log(self, season: int) -> pl.DataFrame | None:
         """Season-to-date lines appended by ``cfbr weekly``."""

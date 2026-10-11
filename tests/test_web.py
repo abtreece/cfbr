@@ -811,6 +811,86 @@ def test_build_survives_roster_failure(engine, tmp_path, monkeypatch):
     assert meta["roster"] is False and (out / "ratings.parquet").exists()
 
 
+# -- season-simulation odds: premium while live, free once the season is over --------------
+
+def _write_sim(cfg, season=SEASON, week=1):
+    d = cfg.paths.out_dir / str(season) / f"w{week:02d}"
+    d.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({
+        "team": ["Texas A&M", "Ohio State", "Hawai'i"], "conference": ["SEC", "Big Ten", "Mountain West"],
+        "rating": [21.0, 6.0, 16.0], "wins_now": [1, 0, 1], "losses_now": [0, 1, 0], "exp_wins": [10.4, 7.1, 8.8],
+        "wins_p10": [9, 5, 7], "wins_p90": [12, 9, 10], "p_undefeated": [0.31, 0.0, 0.004],
+        "p_bowl_eligible": [0.9991, 0.62, 0.9], "p_title_game": [0.6, 0.1, 0.5], "p_conf_title": [0.4321, 0.05, 0.3],
+        "p_playoff": [0.8765, 0.02, 0.0], "p_bye": [0.4, 0.0, 0.0], "p_champion": [0.1234, 0.0, 0.0],
+    }).write_csv(d / "season_sim.csv")
+    (d / "season_sim.md").write_text(
+        "# sim\n\n100,000 simulated seasons. Probabilities, not predictions.\n\n"
+        "**Approximations:** pairings use win % <then> strength.\n\n| team | x |\n|---|---|\n| A | 1 |\n")
+
+
+@pytest.fixture
+def odds_client(web_cfg):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
+    _write_sim(web_cfg)
+    return TestClient(create_app(web_cfg))
+
+
+def test_prob_formatting():
+    from cfbr.web.odds import prob
+
+    assert [prob(x) for x in (0.0, 0.004, 0.5, 0.9991, 1.0, None)] == ["0%", "<1%", "50%", ">99%", "100%", "—"]
+
+
+def test_odds_page_for_premium_viewers(odds_client):
+    r = odds_client.get("/odds")
+    assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
+    html = " ".join(r.text.split())
+    assert "2026 season odds <span class=\"muted\">after week 1</span>" in html
+    assert "Probabilities, not predictions." in html
+    # Notes come from the .md (escaped, with **bold**), and stop before its table.
+    assert "<strong>Approximations:</strong> pairings use win % &lt;then&gt; strength." in html and "| team |" not in html
+    assert ">88%<" in html and ">12%<" in html and ">&lt;1%<" in html and ">&gt;99%<" in html
+    assert "10.4 <span class=\"muted\">[9–12]</span>" in html
+    # Conference title cards.
+    assert "Mountain West" in html and ">43%<" in html
+    sec = " ".join(odds_client.get("/odds?conf=SEC").text.split())
+    assert 'id="odds"' in sec and sec.count('<td class="team"><a href="/team/2026/') >= 1 and "Big Ten</td>" not in sec
+
+
+def test_odds_are_premium_while_live(web_cfg):
+    from cfbr.web.access import premium_viewer
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
+    _write_sim(web_cfg)
+    app = create_app(web_cfg)
+    app.dependency_overrides[premium_viewer] = lambda: False
+    c = TestClient(app)
+    html = c.get("/odds").text
+    assert "for subscribers while the season is in progress" in html and "88%" not in html and "Texas A&amp;M" not in html
+    assert c.get("/api/odds").status_code == 402
+
+
+def test_finished_season_odds_are_free(web_cfg):
+    from cfbr.web.access import premium_viewer
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), live=False, polls=True)
+    _write_sim(web_cfg)
+    app = create_app(web_cfg)
+    app.dependency_overrides[premium_viewer] = lambda: False
+    c = TestClient(app)
+    assert ">88%<" in c.get("/odds").text
+    body = c.get("/api/odds").json()
+    assert body["week"] == 1 and len(body["teams"]) == 3 and "Probabilities, not predictions." in body["notes"]
+
+
+def test_odds_404_for_missing_week(odds_client):
+    assert odds_client.get("/odds?week=5").status_code == 404
+
+
+def test_odds_404_without_simulations(client):
+    assert client.get("/odds").status_code == 404  # no simulations written at all
+
+
 def test_player_page_with_career(web_cfg):
     d = _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
     _write_careers(d)

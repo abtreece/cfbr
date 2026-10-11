@@ -24,6 +24,8 @@ from cfbr.web.access import premium_viewer
 from cfbr.web.bets import NO_STORE, price_str, spread_str
 from cfbr.web.bets import make_router as bets_router
 from cfbr.web.build import FINAL, STALE_GAME, web_dir
+from cfbr.web.odds import make_router as odds_router
+from cfbr.web.odds import prob
 from cfbr.web.roster import count_str, roster_card
 from cfbr.web.roster import make_router as roster_router
 from cfbr.web.store import Season, Store
@@ -279,7 +281,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
                     "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
-    env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL}
+    env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL, "prob": prob}
 
     def get_season(season: int | None) -> Season:
         season = season or store.latest()
@@ -462,5 +464,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     app.include_router(bets_router(cfg, store, render))
     # Rosters: public facts, free for everyone (see cfbr.web.roster).
     app.include_router(roster_router(store, render))
+    # Season-simulation odds: premium while the season is live (see cfbr.web.odds).
+    app.include_router(odds_router(store, render))
 
     return app

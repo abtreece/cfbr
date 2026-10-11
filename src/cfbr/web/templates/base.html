@@ -16,6 +16,7 @@
       {% set path = request.url.path %}
       <a href="/rankings" {% if path.startswith('/rankings') or path.startswith('/team') %}aria-current="page"{% endif %}>Rankings</a>
       <a href="/games" {% if path.startswith('/games') %}aria-current="page"{% endif %}>Games</a>
+      <a href="/odds" {% if path.startswith('/odds') %}aria-current="page"{% endif %}>Odds</a>
       <a href="/accuracy" {% if path.startswith('/accuracy') %}aria-current="page"{% endif %}>Accuracy</a>
       <a href="/bets" {% if path.startswith('/bets') %}aria-current="page"{% endif %}>Bets</a>
     </nav>

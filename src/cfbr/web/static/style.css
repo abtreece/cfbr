@@ -169,6 +169,7 @@ figure.chart figcaption .muted { font-weight: 400; }
   table.data .opt { display: none; }
   .m-only { display: inline; }
   table.data td.wrap { min-width: 96px; }
+  table.data th { white-space: normal; }
   table.data .ci { display: none; }
   table.data th, table.data td { padding: 6px 6px; }
   table.data td.team { white-space: normal; }
@@ -190,3 +191,10 @@ details.rules li { margin: 3px 0; }
 @media (max-width: 370px) {
   table.data .opt-xs { display: none; }
 }
+
+/* Season odds: simulation notes and per-conference title cards. */
+.sim-notes p { margin: 0 0 8px; }
+.conf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.conf-card table.mini { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.conf-card table.mini td { padding: 2px 0; }
+.conf-card table.mini td.num { text-align: right; font-variant-numeric: tabular-nums; }
