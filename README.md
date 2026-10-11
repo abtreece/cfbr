@@ -1,0 +1,53 @@
+# cfb-ratings
+
+A predictive college football rating system. A team's **rating** is its expected point margin against an average FBS team on a neutral field. Ratings come from opponent-adjusted play efficiency (EPA/PPA and success rate) fit with ridge regression, shrunk toward a preseason prior, and calibrated to points. They are backtested walk-forward against Vegas closing lines.
+
+See `cfb-ratings-spec.md` for the build spec, `DECISIONS.md` for every judgment call, and `results/tuning_report.md` for tuned accuracy.
+
+## Setup
+
+```bash
+uv sync
+echo "CFBD_API_KEY=..." > .keys      # or export CFBD_API_KEY; .keys is gitignored
+chmod 600 .keys
+```
+
+The CFBD free tier allows 1,000 calls a month. A full backfill for 2014–present takes about 300 calls. Every API call is logged to `data/raw/_calls.jsonl`, and `cfbr quota` shows usage. Raw responses are cached under `data/raw/`, so re-runs make no calls (use `--refresh` to re-fetch).
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `cfbr ingest --backfill` | Pull all seasons from 2014 through the current one into the cache and rebuild `data/cfb.duckdb` |
+| `cfbr ingest --season 2026 --week 7` | Incremental weekly ingest (about 3 calls) |
+| `cfbr prep` | Build `scrimmage_plays` / `model_plays` |
+| `cfbr ratings --season 2025 --week 8` | Print ratings available before that week's first kickoff |
+| `cfbr backtest --seasons 2015-2021` | Walk-forward backtest; writes `results/{run_id}/` |
+| `cfbr tune` | Optuna search on the tuning seasons; freezes `config/tuned.toml` |
+| `cfbr holdout` | Evaluate the frozen config on the holdout seasons (run once) |
+| `cfbr rank --season 2026 --week 6` | Write `out/2026/w06/` rankings and next-week predictions |
+| `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line |
+| `cfbr quota` | Show API usage this month |
+
+`rank` and `weekly` use `config/tuned.toml` when it exists. Pass `--config` to override.
+
+## Cron (Sunday mornings, Central time)
+
+```cron
+CRON_TZ=America/Chicago
+0 9 * * 0  cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
+```
+
+`weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet.
+
+## Point-in-time guarantee
+
+Every prediction for a game in slot *w* (regular-season week, or a 7-day postseason window) uses only plays and games that kicked off before that slot's first kickoff. Cross-season models (the preseason prior and the points calibration) use leave-one-season-out within the tuning seasons, and only earlier seasons for the holdout and live seasons. `tests/test_leakage.py` checks this with an explicit max-kickoff assertion and a canary future game.
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+Tests that need real data skip automatically when `data/cfb.duckdb` is absent.

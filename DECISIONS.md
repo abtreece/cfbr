@@ -44,3 +44,7 @@ One line each: decision — reason — phase.
 - ATS: model picks the side its predicted margin favors relative to the line; pushes and exact model-line ties are excluded; 95% Wilson interval — P5
 - Accepted, unavoidable leakage: CFBD's PPA comes from an expected-points model CFBD fit on its full history. We can't refit it point-in-time; the effect is believed small — P5
 - Week-1 predictions use only the prior (no same-season plays before the first kickoff) — P5
+- Tuning: 256 Optuna TPE trials (multivariate, seed 0) run in batches of 30 parallel processes, objective = overall MAE 2015–2021; the Massey cap/alpha were grid-searched separately (only the baseline uses them) — P6
+- Frozen config: garbage-time filter disabled (tuning MAE 13.382 off vs 13.443 on with the spec thresholds) — data preferred keeping all plays once recency weighting is on — P6
+- `prior_k` stays in the config schema (always 0, unused) so the frozen `config/tuned.toml` stays loadable — P6
+- Holdout 2022–2025 evaluated once after freezing: MAE 13.00 vs closing line 12.03 (gap +0.97); Massey 14.99 — P6

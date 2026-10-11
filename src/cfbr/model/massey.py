@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
+import scipy.sparse as sp
 
 
 @dataclass
@@ -27,22 +28,26 @@ def fit_massey(
     """``games`` needs home, away (pooled entity names), margin, neutral_site."""
     n = len(teams)
     idx = {t: i for i, t in enumerate(teams)}
+    m = games.height
     A = np.zeros((n + 1, n + 1))
     b = np.zeros(n + 1)
-    for hm, aw, margin, neutral in games.select("home", "away", "margin", "neutral_site").iter_rows():
-        x = np.zeros(n + 1)
-        x[idx[hm]] += 1.0
-        x[idx[aw]] -= 1.0
-        x[n] = 0.0 if neutral else 1.0
-        y = float(np.clip(margin, -cap, cap))
-        A += np.outer(x, x)
-        b += x * y
+    if m:
+        hi = games["home"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+        ai = games["away"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+        home = (~games["neutral_site"]).cast(pl.Float64).to_numpy()
+        y = np.clip(games["margin"].to_numpy(), -cap, cap)
+        rows = np.repeat(np.arange(m), 3)
+        cols = np.column_stack([hi, ai, np.full(m, n)]).ravel()
+        vals = np.column_stack([np.ones(m), -np.ones(m), home]).ravel()
+        X = sp.csr_matrix((vals, (rows, cols)), shape=(m, n + 1))
+        A = (X.T @ X).toarray()
+        b = X.T @ y
     A[np.arange(n), np.arange(n)] += alpha
     A[n, n] += 1e-6
     coef = np.linalg.solve(A, b)
     r = coef[:n]
     if center_on:
-        mask = np.array([t in set(center_on) for t in teams])
+        mask = np.isin(np.array(teams, dtype=object), center_on)
         if mask.any():
             r = r - r[mask].mean()
     return MasseyFit(teams, r, float(coef[n]))

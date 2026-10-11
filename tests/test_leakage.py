@@ -45,6 +45,24 @@ def test_training_rows_precede_as_of(cfg, dataset):
             assert games["kickoff_ts"].max() < r["as_of"]
 
 
+def test_engine_prefix_fit_matches_explicit_slice(cfg, dataset):
+    """The engine's fast prefix slicing must equal fitting on training_slice rows."""
+    from cfbr.model.ridge import fit_efficiency
+
+    eng = Engine(dataset, cfg, last_completed=2025)
+    season = 2018
+    for slot in ("r01", "r05", "r12", "p1"):
+        as_of = eng.slot_as_of(season, slot)
+        snap = eng.snapshot(season, as_of)
+        plays = training_slice(eng.plays, season, as_of)
+        assert eng.arrays(season).n_before(as_of) == plays.height
+        pr = pl.DataFrame({"team": eng.entities(season)}).join(eng.priors(season), on="team", how="left").fill_null(0.0)
+        ref = fit_efficiency(plays, "ppa", cfg.model.alpha_ppa, eng.entities(season),
+                             pr["o_ppa"].to_numpy(), pr["d_ppa"].to_numpy(), center_on=eng.fbs(season))
+        assert abs(snap["o_ppa"].to_numpy() - ref.o).max() < 1e-9
+        assert abs(snap["d_ppa"].to_numpy() - ref.d).max() < 1e-9
+
+
 def test_as_of_is_earliest_kickoff_of_slot(cfg, dataset):
     eng = Engine(dataset, cfg, last_completed=2025)
     g = eng.games.filter(pl.col("season") == 2019)

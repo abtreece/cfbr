@@ -58,19 +58,37 @@ def fit_efficiency(
     ``center_on`` re-centers O and D to mean zero over those teams (FBS), with
     the intercept absorbing the shift, so 0 means an average FBS unit.
     """
-    n = len(teams)
     idx = {t: i for i, t in enumerate(teams)}
+    off = plays["offense"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+    de = plays["defense"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+    h = home_indicator(plays["offense"], plays["defense"], plays["home_team"], plays["neutral_site"])
+    y = plays[target].cast(pl.Float64).to_numpy()
+    center = np.isin(np.array(teams, dtype=object), center_on) if center_on else None
+    return fit_efficiency_arrays(off, de, h, y, teams, alpha, prior_o, prior_d, weights, center)
+
+
+def fit_efficiency_arrays(
+    off: np.ndarray,
+    de: np.ndarray,
+    h: np.ndarray,
+    y: np.ndarray,
+    teams: list[str],
+    alpha: float,
+    prior_o: np.ndarray | None = None,
+    prior_d: np.ndarray | None = None,
+    weights: np.ndarray | None = None,
+    center: np.ndarray | None = None,
+) -> EffFit:
+    """Array form of :func:`fit_efficiency`: ``off``/``de`` are team indices,
+    ``h`` the home indicator, ``center`` a boolean mask of FBS teams."""
+    n = len(teams)
     p_o = np.zeros(n) if prior_o is None else np.asarray(prior_o, dtype=float)
     p_d = np.zeros(n) if prior_d is None else np.asarray(prior_d, dtype=float)
 
-    m = plays.height
+    m = len(y)
     if m:
-        off = np.fromiter((idx[t] for t in plays["offense"].to_list()), dtype=np.int64, count=m)
-        de = np.fromiter((idx[t] for t in plays["defense"].to_list()), dtype=np.int64, count=m)
-        h = home_indicator(plays["offense"], plays["defense"], plays["home_team"], plays["neutral_site"])
-        y = plays[target].cast(pl.Float64).to_numpy() - (p_o[off] - p_d[de])
+        y = y - (p_o[off] - p_d[de])
         w = np.ones(m) if weights is None else np.asarray(weights, dtype=float)
-
         rows = np.repeat(np.arange(m), 4)
         cols = np.column_stack([off, n + de, np.full(m, 2 * n), np.full(m, 2 * n + 1)]).ravel()
         vals = np.column_stack([np.ones(m), -np.ones(m), h, np.ones(m)]).ravel()
@@ -93,17 +111,16 @@ def fit_efficiency(
     o = p_o + coef[:n]
     d = p_d + coef[n:2 * n]
     home, intercept = float(coef[2 * n]), float(coef[2 * n + 1])
-    if center_on:
-        mask = np.array([t in set(center_on) for t in teams])
-        if mask.any():
-            mo, md = o[mask].mean(), d[mask].mean()
-            o, d = o - mo, d - md
-            intercept += mo - md
+    if center is not None and center.any():
+        mo, md = o[center].mean(), d[center].mean()
+        o, d = o - mo, d - md
+        intercept += mo - md
     return EffFit(teams, o, d, home, intercept, n_off, n_def)
 
 
-def recency_weights(kickoff_ts: pl.Series, as_of, half_life_weeks: float) -> np.ndarray | None:
+def recency_weights(kickoff_ns: np.ndarray, as_of_ns: int, half_life_weeks: float) -> np.ndarray | None:
+    """Exponential decay by age at the as-of time; ``None`` when disabled."""
     if not half_life_weeks or half_life_weeks <= 0:
         return None
-    age_weeks = (as_of - kickoff_ts).dt.total_seconds().to_numpy() / (7 * 86400)
+    age_weeks = (as_of_ns - kickoff_ns) / (7 * 86400 * 1e9)
     return np.power(0.5, age_weeks / half_life_weeks)

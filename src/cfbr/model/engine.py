@@ -11,6 +11,8 @@ For a config, computes (all lazily, cached per instance):
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+
 import numpy as np
 import polars as pl
 from scipy.stats import norm
@@ -21,12 +23,36 @@ from cfbr.model.calibrate import Calibration, fit_calibration, predict_margin
 from cfbr.model.massey import fit_massey
 from cfbr.model.prior import (COMPONENTS, fit_prior_models, pooled_priors, predict_priors,
                               season_features)
-from cfbr.model.ridge import fit_efficiency, recency_weights
+from cfbr.model.ridge import fit_efficiency_arrays, home_indicator, recency_weights
 from cfbr.model.schemes import training_seasons
 
 log = logging.getLogger(__name__)
 
 RATING_COLS = ["o_ppa", "d_ppa", "o_sr", "d_sr"]
+
+
+@dataclass
+class SeasonArrays:
+    """A season's model plays encoded for fast point-in-time fits, sorted by
+    kickoff so 'plays before t' is a prefix found by binary search."""
+    teams: list[str]
+    center: np.ndarray       # FBS mask over teams
+    kickoff_ns: np.ndarray   # sorted ascending
+    off: np.ndarray
+    de: np.ndarray
+    home: np.ndarray
+    ppa: np.ndarray
+    success: np.ndarray
+
+    def n_before(self, as_of) -> int:
+        """Number of plays with kickoff strictly before ``as_of`` (the leakage guard)."""
+        if as_of is None:
+            return len(self.kickoff_ns)
+        return int(np.searchsorted(self.kickoff_ns, _ns(as_of), side="left"))
+
+
+def _ns(ts) -> int:
+    return int(pl.Series([ts]).dt.cast_time_unit("ns").dt.epoch("ns")[0])
 
 
 class Engine:
@@ -44,34 +70,61 @@ class Engine:
         self._snaps: dict[int, dict[str, pl.DataFrame]] = {}
         self._cal: dict[int, Calibration] = {}
         self._season_plays: dict[int, pl.DataFrame] = {}
+        self._arrays: dict[int, SeasonArrays] = {}
+        self._games_snap: dict[int, pl.DataFrame] = {}
+        self._fbs: dict[int, list[str]] = {}
 
     # -- entities -----------------------------------------------------------
     def season_plays(self, season: int) -> pl.DataFrame:
         if season not in self._season_plays:
-            self._season_plays[season] = self.plays.filter(pl.col("season") == season)
+            self._season_plays[season] = self.plays.filter(pl.col("season") == season).sort("kickoff_ts")
         return self._season_plays[season]
 
     def fbs(self, season: int) -> list[str]:
-        return self.ds.fbs_teams(season)
+        if season not in self._fbs:
+            self._fbs[season] = self.ds.fbs_teams(season)
+        return self._fbs[season]
 
     def entities(self, season: int) -> list[str]:
-        p = self.season_plays(season)
-        g = self.games.filter(pl.col("season") == season)
-        ents = set(self.fbs(season)) | set(p["offense"]) | set(p["defense"]) | set(g["home"]) | set(g["away"])
-        return sorted(e for e in ents if e is not None)
+        return self.arrays(season).teams
+
+    def arrays(self, season: int) -> SeasonArrays:
+        if season not in self._arrays:
+            p = self.season_plays(season)
+            g = self.games.filter(pl.col("season") == season)
+            ents = set(self.fbs(season)) | set(p["offense"]) | set(p["defense"]) | set(g["home"]) | set(g["away"])
+            teams = sorted(e for e in ents if e is not None)
+            idx = {t: i for i, t in enumerate(teams)}
+            self._arrays[season] = SeasonArrays(
+                teams=teams,
+                center=np.isin(np.array(teams, dtype=object), self.fbs(season)),
+                kickoff_ns=p["kickoff_ts"].dt.cast_time_unit("ns").dt.epoch("ns").to_numpy(),
+                off=p["offense"].replace_strict(idx, return_dtype=pl.Int64).to_numpy(),
+                de=p["defense"].replace_strict(idx, return_dtype=pl.Int64).to_numpy(),
+                home=home_indicator(p["offense"], p["defense"], p["home_team"], p["neutral_site"]),
+                ppa=p["ppa"].to_numpy().astype(float),
+                success=p["success"].cast(pl.Float64).to_numpy(),
+            )
+        return self._arrays[season]
 
     # -- fits ---------------------------------------------------------------
-    def _fit(self, plays: pl.DataFrame, season: int, prior: pl.DataFrame | None, as_of=None) -> pl.DataFrame:
-        teams = self.entities(season)
+    def _fit(self, season: int, prior: pl.DataFrame | None, as_of=None) -> pl.DataFrame:
+        """Fit both components on season plays with kickoff < as_of (all plays when None)."""
+        a = self.arrays(season)
+        k = a.n_before(as_of)
+        teams = a.teams
         if prior is not None:
             pr = pl.DataFrame({"team": teams}).join(prior, on="team", how="left").fill_null(0.0)
             p = {c: pr[c].to_numpy() for c in RATING_COLS}
         else:
             p = {c: None for c in RATING_COLS}
-        w = recency_weights(plays["kickoff_ts"], as_of, self.cfg.model.half_life_weeks) if as_of is not None else None
-        fbs = self.fbs(season)
-        f_ppa = fit_efficiency(plays, "ppa", self.cfg.model.alpha_ppa, teams, p["o_ppa"], p["d_ppa"], w, fbs)
-        f_sr = fit_efficiency(plays, "success", self.cfg.model.alpha_sr, teams, p["o_sr"], p["d_sr"], w, fbs)
+        w = None
+        if as_of is not None:
+            w = recency_weights(a.kickoff_ns[:k], _ns(as_of), self.cfg.model.half_life_weeks)
+        off, de, h = a.off[:k], a.de[:k], a.home[:k]
+        m = self.cfg.model
+        f_ppa = fit_efficiency_arrays(off, de, h, a.ppa[:k], teams, m.alpha_ppa, p["o_ppa"], p["d_ppa"], w, a.center)
+        f_sr = fit_efficiency_arrays(off, de, h, a.success[:k], teams, m.alpha_sr, p["o_sr"], p["d_sr"], w, a.center)
         return pl.DataFrame({
             "team": teams, "o_ppa": f_ppa.o, "d_ppa": f_ppa.d, "o_sr": f_sr.o, "d_sr": f_sr.d,
             "n_off": f_ppa.n_off, "n_def": f_ppa.n_def,
@@ -80,7 +133,7 @@ class Engine:
     def final(self, season: int) -> pl.DataFrame:
         """No-prior full-season ratings, used as prior features and targets."""
         if season not in self._final:
-            self._final[season] = self._fit(self.season_plays(season), season, prior=None)
+            self._final[season] = self._fit(season, prior=None)
         return self._final[season]
 
     def prior_available(self) -> list[int]:
@@ -108,8 +161,7 @@ class Engine:
         return out
 
     def snapshot(self, season: int, as_of) -> pl.DataFrame:
-        plays = training_slice(self.season_plays(season), season, as_of)
-        return self._fit(plays, season, self.priors(season), as_of)
+        return self._fit(season, self.priors(season), as_of)
 
     def season_slots(self, season: int) -> pl.DataFrame:
         return self.slots.filter(pl.col("season") == season)
@@ -129,6 +181,11 @@ class Engine:
                 .with_columns([pl.col(f"{c}_{s}").fill_null(0.0) for c in RATING_COLS for s in "ha"]))
 
     def season_games_with_snapshots(self, season: int) -> pl.DataFrame:
+        if season not in self._games_snap:
+            self._games_snap[season] = self._season_games_with_snapshots(season)
+        return self._games_snap[season]
+
+    def _season_games_with_snapshots(self, season: int) -> pl.DataFrame:
         snaps = self.snapshots(season)
         g = self.games.filter(pl.col("season") == season)
         a = self.cfg.model.alpha_ppa
