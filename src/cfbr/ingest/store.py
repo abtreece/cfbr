@@ -217,6 +217,59 @@ def build_player_defense(raw: Path) -> pl.DataFrame:
     return wide.select("season", "player_id", "team", *cols).fill_null(0.0)
 
 
+GAME_PLAYER_STATS = {
+    ("passing", "C/ATT"): None,  # parsed into pass_cmp / pass_att
+    ("rushing", "CAR"): "rush_att", ("receiving", "REC"): "rec", ("defensive", "TOT"): "tackles",
+    ("defensive", "TFL"): "tfl", ("defensive", "PD"): "pd", ("interceptions", "INT"): "ints",
+}
+GAME_PLAYER_SCHEMA = {
+    "season": pl.Int32, "season_type": pl.Utf8, "week": pl.Int32, "game_id": pl.Int64, "team": pl.Utf8,
+    "player_id": pl.Utf8, "name": pl.Utf8, "pass_cmp": pl.Float64, "pass_att": pl.Float64, "rush_att": pl.Float64,
+    "rec": pl.Float64, "tackles": pl.Float64, "tfl": pl.Float64, "pd": pl.Float64, "ints": pl.Float64,
+}
+
+
+def _num(v) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def build_game_players(raw: Path) -> pl.DataFrame:
+    """One row per player per game with any box-score stat (= appeared in the game)."""
+    rows: dict[tuple, dict] = {}
+    d = raw / "games_players"
+    if not d.exists():
+        return pl.DataFrame(schema=GAME_PLAYER_SCHEMA)
+    for p in sorted(d.glob("*/*.json")):
+        year = int(p.parent.name)
+        st, _, wk = p.stem.rpartition("_w")
+        for g in _read(p):
+            for t in g.get("teams") or []:
+                for cat in t.get("categories") or []:
+                    for ty in cat.get("types") or []:
+                        key_stat = (cat.get("name"), ty.get("name"))
+                        if key_stat not in GAME_PLAYER_STATS:
+                            continue
+                        for a in ty.get("athletes") or []:
+                            if a.get("id") is None or str(a["id"]).startswith("-"):
+                                continue  # team totals use negative ids
+                            k = (g["id"], t["team"], str(a["id"]))
+                            r = rows.setdefault(k, {
+                                "season": year, "season_type": st, "week": int(wk), "game_id": g["id"],
+                                "team": t["team"], "player_id": str(a["id"]), "name": a.get("name"),
+                                **{c: 0.0 for c in ("pass_cmp", "pass_att", "rush_att", "rec", "tackles", "tfl", "pd", "ints")},
+                            })
+                            if key_stat == ("passing", "C/ATT"):
+                                cmp_, _, att = str(a.get("stat", "")).partition("/")
+                                r["pass_cmp"] += _num(cmp_)
+                                r["pass_att"] += _num(att)
+                            else:
+                                r[GAME_PLAYER_STATS[key_stat]] += _num(a.get("stat"))
+    return pl.DataFrame(list(rows.values()), schema=GAME_PLAYER_SCHEMA)
+
+
 def build_calendar(raw: Path) -> pl.DataFrame:
     rows = [{"season": y, "week": w["week"], "season_type": w["seasonType"], "start_date": w.get("startDate"),
              "end_date": w.get("endDate"), "first_game_start": w.get("firstGameStart"),
@@ -287,6 +340,7 @@ def build_store(raw: Path, db_path: Path) -> dict[str, int]:
             ("returning_production", build_returning), ("talent", build_talent), ("recruiting", build_recruiting),
             ("calendar", build_calendar), ("polls", build_polls), ("roster", build_roster),
             ("player_ppa", build_player_ppa), ("player_defense", build_player_defense),
+            ("game_players", build_game_players),
         ]:
             df = builder(raw)
             con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM df")

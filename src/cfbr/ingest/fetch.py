@@ -138,6 +138,16 @@ def fetch_plays(client: CFBDClient, year: int, season_type: str, week: int) -> N
     )
 
 
+def fetch_game_players(client: CFBDClient, year: int, season_type: str, week: int) -> None:
+    """Per-game player box scores (who played; QB pass attempts), one call per week."""
+    client.get(
+        "/games/players",
+        {"year": year, "week": week, "seasonType": season_type},
+        year,
+        f"{season_type}_w{week:02d}",
+    )
+
+
 def backfill(client: CFBDClient, first: int, last: int, recruiting_lookback: int) -> None:
     """Full historical pull. Small season-level endpoints first, then plays.
 
@@ -157,6 +167,9 @@ def backfill(client: CFBDClient, first: int, last: int, recruiting_lookback: int
     for year in range(first, last + 1):
         for st, wk in completed_play_weeks(_season_games(client, year)):
             fetch_plays(client, year, st, wk)
+    for year in range(first, last + 1):
+        for st, wk in completed_play_weeks(_season_games(client, year)):
+            fetch_game_players(client, year, st, wk)
 
 
 def weekly(client: CFBDClient, year: int, week: int) -> None:
@@ -171,6 +184,7 @@ def weekly(client: CFBDClient, year: int, week: int) -> None:
         if st == "regular" and wk > week:
             continue
         fetch_plays(client, year, st, wk)
+        fetch_game_players(client, year, st, wk)
     unfinished = {wk for wk in range(1, week + 1)} - {
         wk for st, wk in completed_play_weeks(_season_games(client, year)) if st == "regular"}
     if unfinished:
