@@ -256,6 +256,18 @@ def weekly(config: ConfigOpt = None) -> None:
         client.close()
     log.info("ingest API calls: %d; this month: %d of %d", client.calls, client.calls_this_month(),
              cfg.ingest.monthly_quota)
+    # Odds API snapshot for the paper bets, taken right after the CFBD line snapshot. A
+    # failure (no key, quota, network) only means bets are priced from CFBD lines alone.
+    if cfg.bets.enabled and cfg.odds.enabled:
+        from cfbr.ingest.odds import fetch_odds_snapshot, odds_api_key
+
+        if odds_api_key() is None:
+            log.info("no Odds API key; paper bets use CFBD lines only")
+        else:
+            try:
+                fetch_odds_snapshot(cfg, season)
+            except Exception as e:
+                log.warning("Odds API snapshot failed (%s); paper bets use CFBD lines only", e)
     done = [wk for st, wk in fetch.completed_play_weeks(games) if st == "regular"]
     if not done:
         log.error("no completed weeks yet for %d", season)
@@ -342,6 +354,12 @@ def quota(config: ConfigOpt = None) -> None:
         client.close()
     typer.echo(f"local ledger: {client.calls_this_month()} calls this month")
     typer.echo(f"CFBD: {info.get('usedCalls')} used, {info.get('remainingCalls')} remaining, resets {info.get('resetAt')}")
+    from cfbr.ingest.odds import odds_api_key, usage
+
+    if odds_api_key() is not None:
+        u = usage(cfg)  # /v4/sports does not cost credits
+        typer.echo(f"The Odds API: {u['used']} credits used, {u['remaining']} remaining this month "
+                   f"(each weekly run costs {len(cfg.odds.regions)})")
 
 
 news_app = typer.Typer(no_args_is_help=True, help="Timestamped news/availability archive.")

@@ -13,8 +13,10 @@ Rules (fixed before any results, see DECISIONS.md):
     (what shopping them would have got). No book is excluded by jurisdiction,
     but offshore books are market data only: they count toward the consensus
     and never supply the best-line number.
-  - Risk |odds|/100 units to win 1 at
-    negative odds (e.g. 1.1 to win 1 at -110).
+  - The consensus record is graded at the configured odds (-110). Risk |odds|/100
+    units to win 1 at negative odds (e.g. 1.1 to win 1 at -110). The best-line
+    record uses the book's own price when the feed has one (The Odds API does,
+    CFBD doesn't): the best number for the side, ties broken by the better price.
   - Closing-line value (CLV) = points the recorded line beat the closing line by.
 """
 
@@ -28,6 +30,7 @@ import polars as pl
 
 from cfbr.backtest.metrics import NON_BOOKS, wilson_ci
 from cfbr.config import Bets
+from cfbr.ingest.odds import BOOK_SCHEMA
 
 LEDGER_SCHEMA = {
     "game_id": pl.Int64, "season": pl.Int32, "week": pl.Int32, "placed_at": pl.Utf8, "kickoff_ts": pl.Utf8,
@@ -38,7 +41,7 @@ LEDGER_SCHEMA = {
     "clv": pl.Float64, "units": pl.Float64,
     # Added later; older ledgers get these as nulls.
     "books": pl.Utf8, "best_status": pl.Utf8, "best_units": pl.Float64, "best_clv": pl.Float64,
-    "season_type": pl.Utf8,
+    "season_type": pl.Utf8, "best_odds": pl.Int32,
 }
 
 SETTLED = ["won", "lost", "push"]
@@ -55,31 +58,62 @@ BACKTEST_TIER_COVER = {(3.0, 6.0): (860, 1706), (6.0, 10.0): (493, 972), (10.0, 
 
 
 def snapshot_frame(lines_json: list) -> pl.DataFrame:
-    """Sportsbook-level spreads from a raw /lines snapshot (non-books dropped)."""
+    """Sportsbook-level spreads from a raw CFBD /lines snapshot (non-books dropped; CFBD has no prices)."""
     rows = [{"game_id": g["id"], "provider": ln.get("provider"), "spread": ln.get("spread")}
             for g in lines_json for ln in (g.get("lines") or [])
             if ln.get("spread") is not None and (ln.get("provider") or "").lower() not in NON_BOOKS]
-    return pl.DataFrame(rows, schema={"game_id": pl.Int64, "provider": pl.Utf8, "spread": pl.Float64})
+    return pl.DataFrame(rows, schema=BOOK_SCHEMA)
 
 
-def market(snapshot: pl.DataFrame, offshore: list[str] | None = None) -> pl.DataFrame:
+def book_key(name: str) -> str:
+    """Provider name normalized across feeds ("BetOnline.ag" and "BetOnline" are one book)."""
+    n = name.lower().removesuffix(".ag")
+    return "".join(ch for ch in n if ch.isalnum())
+
+
+def combine_books(*frames: pl.DataFrame) -> pl.DataFrame:
+    """One row per game and book across feeds; earlier frames win (pass the priced feed first)."""
+    d = pl.concat([f.select(list(BOOK_SCHEMA)).cast(BOOK_SCHEMA) for f in frames])
+    return (d.with_columns(_k=pl.col("provider").map_elements(book_key, return_dtype=pl.Utf8))
+            .unique(["game_id", "_k"], keep="first", maintain_order=True).drop("_k"))
+
+
+def payout(odds: pl.Expr) -> pl.Expr:
+    """Amount won per unit risked at American odds (higher is a better price)."""
+    return pl.when(odds > 0).then(odds / 100).otherwise(100 / -odds)
+
+
+def _price(x: int | None) -> str:
+    return "" if x is None else f"{x:+d}"
+
+
+def market(snapshot: pl.DataFrame, offshore: list[str] | None = None, default_odds: int = -110) -> pl.DataFrame:
     """Consensus (median) home spread per game over all books, plus the best
     number for each side over non-offshore books only (null if none posted):
-    a home bettor wants the highest spread, an away bettor the lowest."""
-    off = {b.lower() for b in (offshore or [])}
-    snap = snapshot.with_columns(offshore=pl.col("provider").str.to_lowercase().is_in(list(off)))
-    on = ~pl.col("offshore")
-    label = pl.format("{} {}{}", pl.col("provider"),
-                      pl.col("spread").map_elements(lambda x: f"{x:+g}", return_dtype=pl.Utf8),
+    a home bettor wants the highest spread, an away bettor the lowest, and
+    between equal spreads the better price (unpriced books count as ``default_odds``)."""
+    off = {book_key(b) for b in (offshore or [])}
+    snap = snapshot.with_columns(
+        offshore=pl.col("provider").map_elements(book_key, return_dtype=pl.Utf8).is_in(list(off)),
+        hp=payout(pl.col("home_price").fill_null(default_odds)),
+        ap=payout(pl.col("away_price").fill_null(default_odds)))
+    prices = pl.when(pl.col("home_price").is_not_null()).then(pl.format(
+        " ({}/{})", pl.col("home_price").map_elements(_price, return_dtype=pl.Utf8),
+        pl.col("away_price").map_elements(_price, return_dtype=pl.Utf8))).otherwise(pl.lit(""))
+    label = pl.format("{} {}{}{}", pl.col("provider"),
+                      pl.col("spread").map_elements(lambda x: f"{x:+g}", return_dtype=pl.Utf8), prices,
                       pl.when(pl.col("offshore")).then(pl.lit(" (offshore)")).otherwise(pl.lit("")))
-    return (snap.group_by("game_id").agg(
-        line=pl.col("spread").median(), n_providers=pl.len().cast(pl.Int32),
-        best_home=pl.col("spread").filter(on).max(),
-        best_home_provider=pl.col("provider").filter(on).sort_by(pl.col("spread").filter(on)).last(),
-        best_away=pl.col("spread").filter(on).min(),
-        best_away_provider=pl.col("provider").filter(on).sort_by(pl.col("spread").filter(on)).first(),
-        books=label.sort().str.join("; "),
-    ))
+
+    # Best number per side over non-offshore books: rank by (points for the bettor, price), take the top row.
+    on = snap.filter(~pl.col("offshore"))
+    best_home = (on.sort("spread", "hp").group_by("game_id", maintain_order=True).last()
+                 .select("game_id", best_home="spread", best_home_provider="provider", best_home_price="home_price"))
+    best_away = (on.with_columns(_pts=-pl.col("spread")).sort("_pts", "ap").group_by("game_id", maintain_order=True)
+                 .last().select("game_id", best_away="spread", best_away_provider="provider",
+                                best_away_price="away_price"))
+    return (snap.group_by("game_id").agg(line=pl.col("spread").median(), n_providers=pl.len().cast(pl.Int32),
+                                         books=label.sort().str.join("; "))
+            .join(best_home, on="game_id", how="left").join(best_away, on="game_id", how="left"))
 
 
 def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datetime, cfg: Bets) -> pl.DataFrame:
@@ -88,7 +122,7 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
     Only games that kick off after the snapshot are eligible."""
     preds = preds.with_columns(pl.col("kickoff_ts").cast(pl.Utf8).str.to_datetime(time_zone="UTC")
                                if preds.schema["kickoff_ts"] == pl.Utf8 else pl.col("kickoff_ts"))
-    m = market(snapshot, cfg.offshore_books)
+    m = market(snapshot, cfg.offshore_books, cfg.odds)
     d = (preds.join(m, on="game_id", how="inner")
          .filter(pl.col("kickoff_ts") > placed_at)
          .with_columns(edge=pl.col("pred_margin") + pl.col("line"))  # model margin - (-spread)
@@ -112,6 +146,7 @@ def candidate_bets(preds: pl.DataFrame, snapshot: pl.DataFrame, placed_at: datet
         pl.lit(None, pl.Float64).alias("units"),
         "books", pl.lit(None, pl.Utf8).alias("best_status"), pl.lit(None, pl.Float64).alias("best_units"),
         pl.lit(None, pl.Float64).alias("best_clv"), pl.lit(None, pl.Utf8).alias("season_type"),
+        pl.when(home).then(pl.col("best_home_price")).otherwise(pl.col("best_away_price")).alias("best_odds"),
     )
 
 
@@ -187,8 +222,10 @@ def settle(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame) -> 
             r["units"] = {"won": won, "lost": -risked, "push": 0.0}[r["status"]]
             best = r["best_line"]  # null when only offshore books had a line
             if best is not None:
+                # At the book's own price when known, else the configured odds.
+                b_risked, b_won = risk(r["best_odds"] if r["best_odds"] is not None else r["odds"], r["stake"])
                 r["best_status"] = grade(r["side"], best, r["hp"], r["ap"])
-                r["best_units"] = {"won": won, "lost": -risked, "push": 0.0}[r["best_status"]]
+                r["best_units"] = {"won": b_won, "lost": -b_risked, "push": 0.0}[r["best_status"]]
             if r["cl"] is not None:
                 r["closing_line"] = r["cl"]
                 r["clv"] = clv(r["side"], r["line"], r["cl"])
@@ -220,7 +257,8 @@ def summarize(ledger: pl.DataFrame, cfg: Bets, basis: str = "consensus") -> dict
     l = int((s[st] == "lost").sum())
     p = int((s[st] == "push").sum())
     lo, hi = wilson_ci(w, w + l)
-    risked = float(sum(risk(o, k)[0] for o, k in s.select("odds", "stake").iter_rows())) if s.height else 0.0
+    price = pl.col("odds") if basis == "consensus" else pl.coalesce("best_odds", "odds")
+    risked = float(sum(risk(o, k)[0] for o, k in s.select(price, "stake").iter_rows())) if s.height else 0.0
     units = float(s[un].sum()) if s.height else 0.0
     c = s.filter(pl.col(cv).is_not_null())
     be = (-cfg.odds / (100 - cfg.odds)) if cfg.odds < 0 else 100 / (100 + cfg.odds)
@@ -312,8 +350,8 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
         f"to win {money(to_win * cfg.unit_value, signed=False)}.", "",
         verdict, "",
         "Two records: **at consensus** (median line across books, measures whether the model beats the market) "
-        "and **best line** (the best number across non-offshore books, what shopping them would get; offshore books "
-        "count toward the consensus but are never used to price a bet).",
+        "and **best line** (the best number across non-offshore books at that book's own price when known, what "
+        "shopping them would get; offshore books count toward the consensus but are never used to price a bet).",
         "",
         *head, *block("all — at consensus", ledger), *block("all — best line", ledger, "best"),
         *block("home side", ledger.filter(pl.col("side") == "home")),
@@ -346,7 +384,7 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
     lines.append("")
     opn = ledger.filter(pl.col("status") == "open").with_columns(tier=tier_expr(cfg)).sort("kickoff_ts")
     if opn.height:
-        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | model (home margin) | edge | best available | all books (home spread) |",
+        lines += ["## Open bets", "", "| kickoff (UTC) | game | bet | tier | home spread | model (home margin) | edge | best available | all books (home spread, home/away price) |",
                   "|---|---|---|---|---|---|---|---|---|"]
         for r in opn.iter_rows(named=True):
             team_line = r["line"] if r["side"] == "home" else -r["line"]
@@ -354,7 +392,8 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int) -> str:
                 best_txt = "– (offshore only)"
             else:
                 best = r["best_line"] if r["side"] == "home" else -r["best_line"]
-                best_txt = f"{best:+g} ({r['best_provider']})"
+                price = f" {r['best_odds']:+d}" if r["best_odds"] is not None else ""
+                best_txt = f"{best:+g}{price} ({r['best_provider']})"
             lines.append(f"| {r['kickoff_ts'][:16].replace('T', ' ')} | {r['away_team']} @ {r['home_team']} | "
                          f"{r['team']} {team_line:+g} | {r['tier']} | {r['line']:+g} | {r['model_margin']:+.1f} | {r['edge']:+.1f} | "
                          f"{best_txt} | {r['books'] or '–'} |")

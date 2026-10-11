@@ -14,6 +14,8 @@ chmod 600 .keys
 
 The CFBD free tier allows 1,000 calls a month. A full backfill for 2014–present takes about 300 calls. Every API call is logged to `data/raw/_calls.jsonl`, and `cfbr quota` shows usage. Raw responses are cached under `data/raw/`, so re-runs make no calls (use `--refresh` to re-fetch).
 
+Paper bets also use The Odds API for US sportsbook spreads with prices. Its key goes in `.keys` as `ODDS_API_KEY` (or `ODD_API_KEY`). The free tier gives 500 credits a month, and each `cfbr weekly` run spends 2 (one per region in `[odds].regions`). Calls are logged to `data/raw/_odds_calls.jsonl`, and `cfbr quota` shows the remaining credits without spending any.
+
 ## Commands
 
 | Command | What it does |
@@ -29,7 +31,7 @@ The CFBD free tier allows 1,000 calls a month. A full backfill for 2014–presen
 | `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line → web data for the season |
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
-| `cfbr quota` | Show API usage this month |
+| `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
 
 `rank` and `weekly` use `config/tuned.toml` when it exists. Pass `--config` to override.
 
@@ -83,7 +85,7 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 1. grades open bets whose games are final, and records the closing line and closing-line value (CLV),
 2. records a new 1-unit bet at −110 for every upcoming game where the model and the consensus line (median across books in the newest line snapshot) differ by 3 or more points. A bet is recorded once, before kickoff, and never changed.
 
-Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record, ROI, CLV, open bets). Each bet is graded twice: at the consensus line, and at the best number across every non-offshore sportsbook CFBD lists. No book is excluded by state; offshore books (e.g. Bovada) count toward the consensus line but never price a bet. Settings are in `[bets]` in `config/default.toml`. Run it by hand with `cfbr bets --season 2026 --week 6`. The summary draws no conclusion before 500 settled bets. Treat positive average CLV as the first sign of a real edge; win rate alone is mostly noise at small samples.
+Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record, ROI, CLV, open bets). Lines come from the newest CFBD snapshot plus the newest Odds API snapshot from the same run, which adds FanDuel, theScore Bet, BetRivers, BetMGM, Hard Rock Bet and others with their prices. Each bet is graded twice: at the consensus line (−110), and at the best number across every non-offshore sportsbook, at that book's price. No book is excluded by state; offshore books (e.g. Bovada) count toward the consensus line but never price a bet. Settings are in `[bets]` in `config/default.toml`. Run it by hand with `cfbr bets --season 2026 --week 6`. The summary draws no conclusion before 500 settled bets. Treat positive average CLV as the first sign of a real edge; win rate alone is mostly noise at small samples.
 
 ## Prior shadow comparison
 

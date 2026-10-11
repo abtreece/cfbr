@@ -10,11 +10,12 @@ from pathlib import Path
 import polars as pl
 
 from cfbr.backtest.metrics import consensus_spread
-from cfbr.bets.ledger import (add_bets, candidate_bets, market, read_ledger, settle, snapshot_frame,
-                              summarize, summary_markdown)
+from cfbr.bets.ledger import (add_bets, candidate_bets, combine_books, market, read_ledger, settle,
+                              snapshot_frame, summarize, summary_markdown)
 from cfbr.config import Config
 from cfbr.data import Dataset
 from cfbr.ingest.fetch import latest_lines_snapshot
+from cfbr.ingest.odds import latest_odds_snapshot, odds_frame, team_aliases
 
 log = logging.getLogger(__name__)
 
@@ -34,17 +35,17 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
         "game_id", closing_line="spread")
     ledger = settle(ledger, games.select("game_id", "completed", "home_points", "away_points"), closing)
 
-    snap = latest_lines_snapshot(cfg.paths.raw_dir, season)
+    books = current_books(cfg, games, season)
     preds_path = out_dir / f"w{week:02d}" / "predictions.csv"
     added = 0
-    if snap is None:
+    if books is None:
         log.warning("no live line snapshot for %d; no new bets recorded", season)
     elif not preds_path.exists():
         log.warning("%s missing; run `cfbr rank` first", preds_path)
     else:
-        placed_at, lines_json = snap
+        placed_at, book_lines = books
         preds = pl.read_csv(preds_path)
-        new = candidate_bets(preds, snapshot_frame(lines_json), placed_at, cfg.bets)
+        new = candidate_bets(preds, book_lines, placed_at, cfg.bets)
         new = (new.drop("season", "week", "season_type")
                .join(games.select("game_id", pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32),
                                   "season_type"),
@@ -64,6 +65,35 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
              added, m["open"], m["settled"], m["won"], m["lost"], m["push"], m["units"],
              "n/a" if m["n_clv"] == 0 else f"{m['avg_clv']:+.2f}")
     return ledger_path
+
+
+def current_books(cfg: Config, games: pl.DataFrame, season: int) -> tuple[datetime, pl.DataFrame] | None:
+    """Book-level lines to price new bets: the newest CFBD snapshot, plus the newest
+    Odds API snapshot when the two were taken within ``odds.max_snapshot_gap_hours``
+    (Odds API rows win for a book in both, since they carry prices). Bets count as
+    placed at the later of the two times, so only games kicking off after both qualify."""
+    raw = cfg.paths.raw_dir
+    snap = latest_lines_snapshot(raw, season)
+    odds = latest_odds_snapshot(raw, season) if cfg.odds.enabled else None
+    frames, times = [], []
+    if odds is not None:
+        gap = None if snap is None else abs((odds[0] - snap[0]).total_seconds()) / 3600
+        if gap is not None and gap > cfg.odds.max_snapshot_gap_hours:
+            log.warning("Odds API snapshot is %.1f h from the CFBD snapshot; not used", gap)
+        else:
+            teams_path = raw / "teams_fbs" / str(season) / "season.json"
+            aliases = team_aliases(json.loads(teams_path.read_text())) if teams_path.exists() else {}
+            f = odds_frame(odds[1], games, aliases)
+            log.info("Odds API: %d events, %d matched to games, %d book lines", len(odds[1]),
+                     f["game_id"].n_unique(), f.height)
+            frames.append(f)
+            times.append(odds[0])
+    if snap is not None:
+        frames.append(snapshot_frame(snap[1]))
+        times.append(snap[0])
+    if not frames:
+        return None
+    return max(times), combine_books(*frames)
 
 
 def fill_books(ledger: pl.DataFrame, raw_dir: Path, season: int, offshore: list[str]) -> pl.DataFrame:

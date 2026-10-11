@@ -83,13 +83,25 @@ class Bets(BaseModel):
     min_sample: int = 500
     # Offshore books: their lines feed the consensus (market data) but a bet is
     # never priced at one, so they never supply the best-line number.
-    offshore_books: list[str] = ["Bovada", "BetOnline", "MyBookie", "BetUS", "Bookmaker", "5Dimes",
+    offshore_books: list[str] = ["Bovada", "BetOnline", "LowVig", "MyBookie", "BetUS", "Bookmaker", "5Dimes",
                                  "SportsBetting", "Heritage"]
     # Dollar value of one unit, for reporting only (a 1-unit bet at -110 risks $110 to win $100).
     unit_value: float = 100.0
     # Reporting tiers by edge size: name -> minimum |edge| in points. Every bet is
     # still a flat stake; the tier only groups bets by how far the model is from the market.
     tiers: dict[str, float] = {"Small": 3.0, "Medium": 6.0, "Large": 10.0}
+
+
+class Odds(BaseModel):
+    """The Odds API snapshots for the paper-bet tracker (US sportsbook spreads with prices)."""
+    enabled: bool = True
+    # Each region costs one credit per call: "us" = DraftKings, FanDuel, BetRivers, BetMGM...
+    # plus offshore books; "us2" = theScore Bet, Hard Rock Bet, Bally Bet, betPARX...
+    regions: list[str] = ["us", "us2"]
+    monthly_quota: int = 500
+    quota_reserve: int = 50
+    # Combine an odds snapshot with the CFBD line snapshot only when taken this close together.
+    max_snapshot_gap_hours: float = 6.0
 
 
 class Config(BaseModel):
@@ -102,6 +114,7 @@ class Config(BaseModel):
     seasons: Seasons = Seasons()
     backtest: Backtest = Backtest()
     bets: Bets = Bets()
+    odds: Odds = Odds()
     source: str | None = Field(default=None, exclude=True)
 
 
