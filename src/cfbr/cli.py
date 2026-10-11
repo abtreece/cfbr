@@ -214,7 +214,8 @@ def weekly(config: ConfigOpt = None) -> None:
     """Cron entry point: ingest -> prep -> rank -> season-to-date backtest line.
 
     Safe to re-run: a lock prevents overlapping runs, ingest is cached, and the
-    accuracy line for a week is replaced rather than duplicated.
+    accuracy line for a week is replaced rather than duplicated. Exit code 6
+    means everything ran except the paper-bet step.
     """
     import fcntl
     import json
@@ -272,9 +273,36 @@ def weekly(config: ConfigOpt = None) -> None:
     append_accuracy(acc_path, season, week, m)
     log.info("season-to-date: %s", json.dumps({k: m.get(k) for k in ("n_games", "mae", "line_mae", "model_mae_lined",
                                                                      "ats_win_rate", "massey_mae")}, default=float))
+    # Paper bets are isolated so a failure here can't block the web refresh.
+    bets_failed = False
+    if cfg.bets.enabled:
+        from cfbr.bets.run import run_bets
+
+        try:
+            run_bets(cfg, ds, season, week)
+        except Exception:
+            log.exception("paper-bet step failed; continuing")
+            bets_failed = True
     # Last, so a web-data failure can't cost the rankings or the accuracy line.
     web_out = build_season(eng, season, web_dir(cfg))
     typer.echo(f"wrote {out}, {acc_path} and {web_out}")
+    if bets_failed:
+        raise typer.Exit(code=6)
+
+
+@app.command()
+def bets(
+    season: Annotated[int, typer.Option()],
+    week: Annotated[int, typer.Option(help="Last completed week (uses out/{season}/wNN/predictions.csv)")],
+    config: ConfigOpt = None,
+) -> None:
+    """Settle finished paper bets and record new ones from the latest line snapshot."""
+    from cfbr.bets.run import run_bets
+    from cfbr.data import Dataset
+
+    cfg = _default_config(config)
+    path = run_bets(cfg, Dataset.load(cfg), season, week)
+    typer.echo(f"wrote {path} and {path.with_name('bets.md')}")
 
 
 @app.command()

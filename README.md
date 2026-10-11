@@ -62,6 +62,15 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 
 `weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet.
 
+## Paper bets
+
+`cfbr weekly` also maintains a paper-trading ledger. It never places a bet, and betting lines never feed the ratings. On each run it:
+
+1. grades open bets whose games are final, and records the closing line and closing-line value (CLV),
+2. records a new 1-unit bet at −110 for every upcoming game where the model and the consensus line (median across books in the newest line snapshot) differ by 3 or more points. A bet is recorded once, before kickoff, and never changed.
+
+Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record, ROI, CLV, open bets). Settings are in `[bets]` in `config/default.toml`. Run it by hand with `cfbr bets --season 2026 --week 6`. The summary draws no conclusion before 500 settled bets. Treat positive average CLV as the first sign of a real edge; win rate alone is mostly noise at small samples.
+
 ## Point-in-time guarantee
 
 Every prediction for a game in slot *w* (regular-season week, or a 7-day postseason window) uses only plays and games that kicked off before that slot's first kickoff. Cross-season models (the preseason prior and the points calibration) use leave-one-season-out within the tuning seasons, and only earlier seasons for the holdout and live seasons. `tests/test_leakage.py` checks this with an explicit max-kickoff assertion and a canary future game.

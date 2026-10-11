@@ -48,3 +48,14 @@ holdout = [2022, 2025]
 [backtest]
 # Closing spread benchmark: median across providers of `spread`.
 spread_consensus = "median"
+
+[bets]
+# Paper-trading tracker: reports and grades hypothetical bets; never places one.
+enabled = true
+# Paper bet when the model and the consensus line differ by at least this many points.
+threshold = 3.0
+# Assumed price for every spread bet (CFBD has no spread prices).
+odds = -110
+stake = 1.0
+# Settled bets needed before the summary draws conclusions.
+min_sample = 500

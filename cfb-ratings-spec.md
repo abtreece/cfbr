@@ -187,4 +187,4 @@ Implement only after v1 has shipped. Each one must beat the frozen v1 on the hol
 - Resumé-style or committee-mimicking rankings.
 - A web UI. File outputs are enough for v1.
 - Live in-game data.
-- Betting automation of any kind.
+- Automated bet placement of any kind. (Amended 2026-10-11: a paper-trading tracker that flags model-vs-line edges, records hypothetical bets and grades them is in scope; it never places a bet, and betting lines still never feed the ratings.)

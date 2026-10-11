@@ -67,6 +67,19 @@ class Backtest(BaseModel):
     spread_consensus: str = "median"
 
 
+class Bets(BaseModel):
+    """Paper-betting tracker. Rules are fixed before results come in; see DECISIONS.md."""
+    enabled: bool = True
+    # Bet when |model home margin - market home margin| >= threshold (points).
+    threshold: float = 3.0
+    # American odds assumed for every spread bet (CFBD lines carry no spread prices).
+    odds: int = -110
+    # Units risked per bet (flat staking).
+    stake: float = 1.0
+    # Minimum settled bets before the summary draws any conclusion.
+    min_sample: int = 500
+
+
 class Config(BaseModel):
     paths: Paths = Paths()
     ingest: Ingest = Ingest()
@@ -76,6 +89,7 @@ class Config(BaseModel):
     prior: Prior = Prior()
     seasons: Seasons = Seasons()
     backtest: Backtest = Backtest()
+    bets: Bets = Bets()
     source: str | None = Field(default=None, exclude=True)
 
 

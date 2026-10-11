@@ -32,8 +32,38 @@ def fetch_season_level(client: CFBDClient, year: int, live_week: int | None = No
         client.get(ep, {"year": year}, year, "season")
     key = "both" if live_week is None else f"both_w{live_week:02d}"
     client.get("/games", {"year": year, "seasonType": "both"}, year, key)
-    client.get("/lines", {"year": year, "seasonType": "both"}, year, key)
+    if live_week is None:
+        client.get("/lines", {"year": year, "seasonType": "both"}, year, key)
+    else:
+        fetch_live_lines(client, year, key)
     fetch_rankings(client, year, live_week)
+
+
+def fetch_live_lines(client: CFBDClient, year: int, key: str) -> list:
+    """Live-season lines are re-fetched on every run (lines move and new games
+    get posted between the 9 AM and 3 PM runs), and each fetch is also kept as
+    a timestamped snapshot under lines/{year}/snapshots/ for the bet tracker."""
+    params = {"year": year, "seasonType": "both"}
+    was = client.refresh
+    client.refresh = True
+    try:
+        data = client.get("/lines", params, year, key)
+    finally:
+        client.refresh = was
+    snap_dir = client.cache_path(client.raw_dir, "/lines", year, key).parent / "snapshots"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}.json").write_text(json.dumps(data))
+    return data
+
+
+def latest_lines_snapshot(client_or_raw, year: int):
+    """(captured_at, lines) for the newest live-season snapshot, or None."""
+    raw = getattr(client_or_raw, "raw_dir", client_or_raw)
+    snaps = sorted((raw / "lines" / str(year) / "snapshots").glob("*.json"))
+    if not snaps:
+        return None
+    ts = datetime.strptime(snaps[-1].stem, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    return ts, json.loads(snaps[-1].read_text())
 
 
 def fetch_rankings(client: CFBDClient, year: int, live_week: int | None = None) -> None:
@@ -118,7 +148,8 @@ def weekly(client: CFBDClient, year: int, week: int) -> None:
     """Incremental ingest through regular-season ``week`` of an in-progress
     season: refresh games/lines (keyed by week), then any finished weeks' plays
     not yet cached. About 4 calls per week on a cold cache (games, lines,
-    polls, plays), plus one per re-run while that week's polls are pending."""
+    polls, plays); a re-run costs 1 (lines are always re-fetched for the bet
+    tracker) plus 1 while that week's polls are pending."""
     fetch_season_level(client, year, live_week=week)
     for st, wk in completed_play_weeks(_season_games(client, year)):
         if st == "regular" and wk > week:
