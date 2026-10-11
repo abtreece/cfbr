@@ -1,0 +1,50 @@
+# News/availability archive sources. Every fetch is stored with the time it was
+# fetched, which is what makes the archive usable point-in-time.
+#
+# Policy (checked live on every run, see src/cfbr/news/policy.py):
+#   - robots.txt must allow the URL for our user agent;
+#   - sites whose robots.txt names an AI agent (anthropic-ai, ClaudeBot, GPTBot,
+#     Google-Extended, ...) are skipped, because this archive feeds a language model.
+#     Blocking only CCBot (Common Crawl) is not treated as an AI opt-out;
+#   - bot challenges are never bypassed: a challenged source is skipped.
+# Excluded on that basis (2026-10-11): secsports.com (incl. SEC reports served via
+# the HD Intelligence embed), espn.com, sports.yahoo.com, cbssports.com, theathletic.com.
+
+user_agent = "cfb-ratings-news-collector/0.1 (personal research; low-frequency)"
+min_seconds_between_requests_per_host = 5
+
+[[source]]
+name = "big_ten_availability"
+kind = "availability_page"   # official report, rendered in a headless browser
+url = "https://bigten.org/fb/availability-reports/"
+tier = "official"
+
+[[source]]
+name = "acc_availability"
+kind = "availability_page"
+url = "https://theacc.com/sports/2025/8/28/availability-reporting-football.aspx"
+tier = "official"
+
+[[source]]
+name = "on3"
+kind = "rss"
+url = "https://www.on3.com/feed/"
+tier = "outlet"
+
+[[source]]
+name = "college_football_network"
+kind = "rss"
+url = "https://collegefootballnetwork.com/feed/"
+tier = "outlet"
+
+[[source]]
+name = "saturday_down_south"
+kind = "rss"
+url = "https://www.saturdaydownsouth.com/feed/"
+tier = "outlet"
+
+[[source]]
+name = "fbschedules"
+kind = "rss"
+url = "https://fbschedules.com/feed/"
+tier = "outlet"

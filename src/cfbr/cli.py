@@ -344,6 +344,46 @@ def quota(config: ConfigOpt = None) -> None:
     typer.echo(f"CFBD: {info.get('usedCalls')} used, {info.get('remainingCalls')} remaining, resets {info.get('resetAt')}")
 
 
+news_app = typer.Typer(no_args_is_help=True, help="Timestamped news/availability archive.")
+app.add_typer(news_app, name="news")
+
+
+@news_app.command("collect")
+def news_collect(
+    source: Annotated[Optional[list[str]], typer.Option(help="Only these source names")] = None,
+) -> None:
+    """Fetch configured sources (config/news.toml) into data/news/. Safe to run hourly."""
+    import fcntl
+
+    from cfbr.news.collect import NEWS_DIR, collect
+
+    NEWS_DIR.mkdir(parents=True, exist_ok=True)
+    lock = open(NEWS_DIR / ".collect.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log.error("another news collection is running; exiting")
+        raise typer.Exit(code=4)
+    results = collect(source)
+    for name, res in results.items():
+        typer.echo(f"{name:28s} {res}")
+
+
+@news_app.command("status")
+def news_status() -> None:
+    """Per-source last run, result, and archive size."""
+    import json
+
+    from cfbr.news.collect import NEWS_DIR
+
+    state = json.loads((NEWS_DIR / "state.json").read_text()) if (NEWS_DIR / "state.json").exists() else {}
+    n_items = sum(1 for _ in open(NEWS_DIR / "items.jsonl")) if (NEWS_DIR / "items.jsonl").exists() else 0
+    n_snaps = sum(1 for _ in open(NEWS_DIR / "snapshots.jsonl")) if (NEWS_DIR / "snapshots.jsonl").exists() else 0
+    typer.echo(f"items: {n_items}  snapshots: {n_snaps}")
+    for name, st in sorted(state.items()):
+        typer.echo(f"{name:28s} {st.get('last_run', '-'):32s} {st.get('last_result', '-')}")
+
+
 web_app = typer.Typer(no_args_is_help=True, help="Local web app over the ratings.")
 app.add_typer(web_app, name="web")
 

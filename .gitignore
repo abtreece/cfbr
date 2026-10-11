@@ -11,3 +11,4 @@ __pycache__/
 .pytest_cache/
 data/.weekly.lock
 data/*.log
+data/news/
