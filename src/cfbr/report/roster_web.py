@@ -21,7 +21,9 @@ Columns (null = unknown):
                      prev_class_year (last season's, 1-5), to_team (this season's roster
                      they appear on, else null), reason (DEPARTURE_REASONS), draft_round,
                      draft_overall (NFL draft held before this season; null if not
-                     drafted), draft_nfl_team, in_portal (entered the transfer portal
+                     drafted), draft_nfl_team (city only, as CFBD gives it),
+                     draft_nfl_team_name (full franchise name, e.g. "Los Angeles
+                     Rams"; null if unknown), in_portal (entered the transfer portal
                      for this season; null before 2021, when CFBD's portal data
                      starts), portal_destination (school listed in the portal, which
                      may be non-FBS), prev_plays, prev_ppa_total, prev_tackles,
@@ -148,13 +150,16 @@ def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame)
     prev_ros = (ds.roster.filter(pl.col("season") == season - 1).unique("player_id", keep="first")
                 .select("player_id", "name", "position", prev_class_year="class_year", roster_team="team"))
     draft = getattr(ds, "draft_picks", None)
+    if draft is not None and "nfl_team_name" not in draft.columns:  # store built before the column existed
+        draft = draft.with_columns(nfl_team_name=pl.lit(None, pl.Utf8))
     draft = (draft.filter((pl.col("season") == season) & pl.col("player_id").is_not_null())
              .unique("player_id", keep="first")
              .select("player_id", draft_college_team="college_team", draft_round="round", draft_overall="overall",
-                     draft_nfl_team="nfl_team")
+                     draft_nfl_team="nfl_team", draft_nfl_team_name="nfl_team_name")
              if draft is not None else pl.DataFrame(schema={"player_id": pl.Utf8, "draft_college_team": pl.Utf8,
                                                            "draft_round": pl.Int32, "draft_overall": pl.Int32,
-                                                           "draft_nfl_team": pl.Utf8}))
+                                                           "draft_nfl_team": pl.Utf8,
+                                                           "draft_nfl_team_name": pl.Utf8}))
     # Drafted players with no stats last season (mostly offensive linemen) are
     # departures too; place them on last season's roster team.
     no_stats = (draft.join(prev.select("player_id"), on="player_id", how="anti")
@@ -184,7 +189,7 @@ def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame)
               .otherwise(pl.lit("unknown")))
     return out.select(pl.lit(season, pl.Int32).alias("season"), pl.col("prev_team").alias("team"), "player_id",
                       "name", "position", "prev_class_year", "to_team", reason.alias("reason"), "draft_round",
-                      "draft_overall", "draft_nfl_team", "in_portal", "portal_destination", "prev_plays",
+                      "draft_overall", "draft_nfl_team", "draft_nfl_team_name", "in_portal", "portal_destination", "prev_plays",
                       "prev_ppa_total", "prev_tackles", "prev_havoc")
 
 

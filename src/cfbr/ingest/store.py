@@ -203,15 +203,32 @@ def build_roster(raw: Path) -> pl.DataFrame:
 
 
 DRAFT_SCHEMA = {"season": pl.Int32, "player_id": pl.Utf8, "name": pl.Utf8, "college_team": pl.Utf8,
-                "position": pl.Utf8, "nfl_team": pl.Utf8, "round": pl.Int32, "pick": pl.Int32, "overall": pl.Int32}
+                "position": pl.Utf8, "nfl_team": pl.Utf8, "nfl_team_name": pl.Utf8, "round": pl.Int32,
+                "pick": pl.Int32, "overall": pl.Int32}
+
+# CFBD's nflTeamId is ESPN's franchise id, and nflTeam is the franchise's current
+# city only ("Los Angeles" is Rams or Chargers, "New York" Giants or Jets). The
+# /draft/teams list has nicknames but no ids, so the mapping lives here.
+NFL_NICKNAMES = {1: "Falcons", 2: "Bills", 3: "Bears", 4: "Bengals", 5: "Browns", 6: "Cowboys", 7: "Broncos",
+                 8: "Lions", 9: "Packers", 10: "Titans", 11: "Colts", 12: "Chiefs", 13: "Raiders", 14: "Rams",
+                 15: "Dolphins", 16: "Vikings", 17: "Patriots", 18: "Saints", 19: "Giants", 20: "Jets", 21: "Eagles",
+                 22: "Cardinals", 23: "Steelers", 24: "Chargers", 25: "49ers", 26: "Seahawks", 27: "Buccaneers",
+                 28: "Commanders", 29: "Panthers", 30: "Jaguars", 33: "Ravens", 34: "Texans"}
 
 
 def build_draft_picks(raw: Path) -> pl.DataFrame:
     """NFL draft picks; ``season`` is the draft year (the college season the player
-    did not return for). ``player_id`` is the CFBD college athlete id."""
+    did not return for). ``player_id`` is the CFBD college athlete id.
+    ``nfl_team_name`` is the full franchise name ("Los Angeles Rams"), null for an
+    unknown franchise id."""
+    def full_name(r: dict) -> str | None:
+        nick = NFL_NICKNAMES.get(r.get("nflTeamId"))
+        return " ".join(x for x in (r.get("nflTeam"), nick) if x) if nick else None
+
     rows = [{"season": y, "player_id": str(r["collegeAthleteId"]) if r.get("collegeAthleteId") is not None else None,
              "name": r.get("name"), "college_team": r.get("collegeTeam"), "position": r.get("position"),
-             "nfl_team": r.get("nflTeam"), "round": r.get("round"), "pick": r.get("pick"), "overall": r.get("overall")}
+             "nfl_team": r.get("nflTeam"), "nfl_team_name": full_name(r), "round": r.get("round"),
+             "pick": r.get("pick"), "overall": r.get("overall")}
             for y, p in _season_files(raw, "draft_picks") for r in _read(p)]
     return pl.DataFrame(rows, schema=DRAFT_SCHEMA)
 
