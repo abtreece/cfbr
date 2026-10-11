@@ -160,3 +160,49 @@ def test_calibration_v2_trains_on_the_same_seasons_as_the_base_calibration(cfg, 
     eng.stage2(target)
     assert seen == training_seasons(target, cfg, eng.prior_available())
     assert target not in seen
+
+
+# -- day mode (DECISIONS "M1 intra-week as-of") -------------------------------------
+
+def test_day_as_of_cutoffs_by_hand():
+    from datetime import datetime, timezone
+
+    from cfbr.data import day_as_of, slot_as_of
+
+    def et(s):  # Eastern daylight time in October
+        return datetime.fromisoformat(s + "-04:00").astimezone(timezone.utc)
+
+    kick = {1: et("2026-10-15T19:30"),   # Thu night: slot as-of
+            2: et("2026-10-16T22:30"),   # Fri late
+            3: et("2026-10-17T12:00"),   # Sat noon: Saturday group starts here
+            4: et("2026-10-17T22:30"),   # Sat late: same group as game 3
+            5: et("2026-10-18T00:30")}   # Hawaii, Sat 6:30 PM HST = Sunday Eastern
+    g = pl.DataFrame({"game_id": list(kick), "season": [2026] * 5, "slot": ["r08"] * 5, "slot_order": [8] * 5,
+                      "kickoff_ts": list(kick.values())})
+    d = {r["game_id"]: r["cutoff"] for r in day_as_of(g, slot_as_of(g)).iter_rows(named=True)}
+    assert d[1] == kick[1]                                   # first day: the slot as-of
+    assert d[2] == kick[2] - timedelta(hours=5)              # Fri 5:30 PM ET: Thursday's game is in
+    assert d[3] == d[4] == kick[3] - timedelta(hours=5)      # 7 AM ET Saturday: Fri late game is in (8.5 h before)
+    assert kick[2] < d[3] and not (kick[4] < d[4])           # the Sat late game never feeds its own group
+    assert d[5] == kick[5] - timedelta(hours=5)              # 7:30 PM ET Sat: excludes the Sat 22:30 game...
+    assert not (kick[4] < d[5]) and kick[3] < d[5]           # ...still in progress then; Sat noon is over
+
+
+def test_day_mode_never_trains_on_a_game_in_progress(cfg, dataset):
+    from cfbr.data import GAME_DURATION_BOUND
+
+    eng = Engine(dataset, cfg, last_completed=2025, as_of_mode="day")
+    season = 2024
+    grp = eng.day_groups.filter(pl.col("season") == season).join(
+        eng.season_slots(season).select("slot", "as_of"), on="slot")
+    games = eng.games.filter(pl.col("season") == season).select("kickoff_ts")["kickoff_ts"]
+    for r in grp.unique(["slot", "day"]).iter_rows(named=True):
+        used = games.filter(games < r["cutoff"])
+        # every game before the cutoff kicked off >= 5 h before the group's first game, or before the slot as-of
+        ok = (used + GAME_DURATION_BOUND <= r["group_first"]) | (used < r["as_of"])
+        assert ok.all(), (r["slot"], r["day"])
+    p = eng.predict(season)
+    assert (p["as_of"] <= p["kickoff_ts"]).all()
+    # slot mode is untouched: same as_of as before for every game
+    slot = Engine(dataset, cfg, last_completed=2025).group_cutoffs(season)
+    assert slot.join(eng.season_slots(season).select("as_of"), on="as_of", how="anti").height == 0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 import duckdb
 import polars as pl
@@ -115,6 +116,26 @@ def slot_as_of(games: pl.DataFrame) -> pl.DataFrame:
     """As-of time per (season, slot): the earliest kickoff among that slot's games."""
     return games.group_by("season", "slot", "slot_order").agg(as_of=pl.col("kickoff_ts").min()).sort(
         "season", "slot_order")
+
+
+# Longest a game can still be in progress after its kickoff. Day-mode as-of times
+# (DECISIONS "M1 intra-week as-of") only use games that kicked off at least this long
+# before the group's first kickoff: selection keys on kickoff, so a game still being
+# played must never pass.
+GAME_DURATION_BOUND = timedelta(hours=5)
+DAY_TZ = "America/New_York"
+
+
+def day_as_of(games: pl.DataFrame, slots: pl.DataFrame) -> pl.DataFrame:
+    """Per (season, slot, Eastern kickoff date) group: game_id -> group key and training cutoff.
+    cutoff = max(slot as-of, group's earliest kickoff - GAME_DURATION_BOUND)."""
+    g = games.select("game_id", "season", "slot", "kickoff_ts").with_columns(
+        day=pl.col("kickoff_ts").dt.convert_time_zone(DAY_TZ).dt.date())
+    first = g.group_by("season", "slot", "day").agg(group_first=pl.col("kickoff_ts").min())
+    return (g.join(first, on=["season", "slot", "day"])
+            .join(slots.select("season", "slot", "as_of"), on=["season", "slot"])
+            .with_columns(cutoff=pl.max_horizontal("as_of", pl.col("group_first") - GAME_DURATION_BOUND))
+            .select("game_id", "season", "slot", "day", "group_first", "cutoff"))
 
 
 def training_slice(df: pl.DataFrame, season: int, as_of, ts_col: str = "kickoff_ts") -> pl.DataFrame:

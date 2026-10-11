@@ -18,7 +18,7 @@ import polars as pl
 from scipy.stats import norm
 
 from cfbr.config import Config
-from cfbr.data import Dataset, slot_as_of, training_slice
+from cfbr.data import Dataset, day_as_of, slot_as_of, training_slice
 from cfbr.model.calibrate import Calibration, fit_calibration, fit_stage2, predict_margin, stage2_design
 from cfbr.model.massey import fit_massey
 from cfbr.model.prior import (COMPONENTS, fit_prior_models, pooled_priors, predict_priors,
@@ -57,7 +57,15 @@ def _ns(ts) -> int:
 
 
 class Engine:
-    def __init__(self, ds: Dataset, cfg: Config, last_completed: int):
+    def __init__(self, ds: Dataset, cfg: Config, last_completed: int, as_of_mode: str = "slot"):
+        """``as_of_mode``: "slot" (published: every game in a slot uses plays before the slot's first
+        kickoff) or "day" (evaluation only, DECISIONS "M1 intra-week as-of": games grouped by Eastern
+        kickoff date within a slot, each group using games that kicked off >= 5 h before its first
+        kickoff). Day mode changes game predictions and the calibration fit on them; ratings(), the
+        Massey baseline and priors stay slot-based."""
+        if as_of_mode not in ("slot", "day"):
+            raise ValueError(f"unknown as_of_mode {as_of_mode!r}")
+        self.as_of_mode = as_of_mode
         self.ds = ds
         self.cfg = cfg
         self.first = cfg.ingest.first_season          # features only (no prior)
@@ -66,6 +74,7 @@ class Engine:
         self.plays = ds.model_plays(cfg)
         self.games = ds.pooled_games(cfg)
         self.slots = slot_as_of(self.games)
+        self.day_groups = day_as_of(self.games, self.slots) if as_of_mode == "day" else None
         self._final: dict[int, pl.DataFrame] = {}
         self._priors: dict[int, pl.DataFrame] = {}
         self._snaps: dict[int, dict[str, pl.DataFrame]] = {}
@@ -181,12 +190,24 @@ class Engine:
     def season_slots(self, season: int) -> pl.DataFrame:
         return self.slots.filter(pl.col("season") == season)
 
-    def snapshots(self, season: int) -> dict[str, pl.DataFrame]:
+    def snapshots(self, season: int) -> dict:
+        """Prediction-group key -> snapshot. Keys are slots, or (slot, day) in day mode."""
         if season not in self._snaps:
-            self._snaps[season] = {
-                r["slot"]: self.snapshot(season, r["as_of"]) for r in self.season_slots(season).iter_rows(named=True)
-            }
+            if self.as_of_mode == "day":
+                grp = self.day_groups.filter(pl.col("season") == season).unique(["slot", "day"])
+                self._snaps[season] = {(r["slot"], r["day"]): self.snapshot(season, r["cutoff"])
+                                       for r in grp.iter_rows(named=True)}
+            else:
+                self._snaps[season] = {r["slot"]: self.snapshot(season, r["as_of"])
+                                       for r in self.season_slots(season).iter_rows(named=True)}
         return self._snaps[season]
+
+    def group_cutoffs(self, season: int) -> pl.DataFrame:
+        """game_id -> the training cutoff its prediction used."""
+        if self.as_of_mode == "day":
+            return self.day_groups.filter(pl.col("season") == season).select("game_id", as_of="cutoff")
+        g = self.games.filter(pl.col("season") == season).select("game_id", "slot")
+        return g.join(self.season_slots(season).select("slot", "as_of"), on="slot", how="left").drop("slot")
 
     # -- games -> features ----------------------------------------------------
     def _attach(self, games: pl.DataFrame, ratings: pl.DataFrame) -> pl.DataFrame:
@@ -203,14 +224,19 @@ class Engine:
     def _season_games_with_snapshots(self, season: int) -> pl.DataFrame:
         snaps = self.snapshots(season)
         g = self.games.filter(pl.col("season") == season)
+        if self.as_of_mode == "day":
+            g = g.join(self.day_groups.select("game_id", "day"), on="game_id", how="left")
         parts = []
-        for slot, snap in snaps.items():
+        for key, snap in snaps.items():
             share = snap.select("team", prior_share=prior_share_expr(self.cfg))
-            part = self._attach(g.filter(pl.col("slot") == slot), snap)
+            sel = ((pl.col("slot") == key[0]) & (pl.col("day") == key[1]) if self.as_of_mode == "day"
+                   else pl.col("slot") == key)
+            part = self._attach(g.filter(sel), snap)
             part = (part.join(share.rename({"prior_share": "prior_share_h"}), left_on="home", right_on="team", how="left")
                     .join(share.rename({"prior_share": "prior_share_a"}), left_on="away", right_on="team", how="left"))
             parts.append(part)
-        return pl.concat(parts) if parts else g
+        out = pl.concat(parts) if parts else g
+        return out.drop("day") if "day" in out.columns else out
 
     def calibration(self, season: int) -> Calibration:
         if season not in self._cal:
@@ -268,10 +294,9 @@ class Engine:
         g = g.with_columns(win_prob=pl.Series(norm.cdf(g["pred_margin"].to_numpy() / cal.sigma)))
         prior_g = self._attach(self.games.filter(pl.col("season") == season), self.priors(season))
         prior_g = prior_g.select("game_id", prior_pred=pl.Series(predict_margin(cal, prior_g)))
-        as_of = self.season_slots(season).select("slot", "as_of")
         return (g.join(prior_g, on="game_id", how="left")
                 .join(self.massey_predictions(season), on="game_id", how="left")
-                .join(as_of, on="slot", how="left")
+                .join(self.group_cutoffs(season), on="game_id", how="left")
                 .with_columns(sigma=pl.lit(cal.sigma))
                 .select("game_id", "season", "week", "season_type", "slot", "slot_order", "as_of", "kickoff_ts",
                         "completed", "neutral_site", "home", "away", "home_team", "away_team", "margin",
