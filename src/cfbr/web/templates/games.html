@@ -32,7 +32,7 @@
 
 <h1>{{ season }} · {{ slot|slot_label }}</h1>
 {% if slot.startswith('p') %}<p class="lede">Postseason weeks are 7-day windows from the first bowl game.</p>{% endif %}
-{% if s.meta.lines_as_of and rows|selectattr("completed", "false")|list %}<p class="note lines-as-of">Vegas lines for games not yet played are as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.</p>{% endif %}
+{% if s.meta.lines_as_of and s.meta.live and rows|selectattr("completed", "false")|list %}<p class="note lines-as-of">Vegas lines for games not yet played are as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.</p>{% endif %}
 
 {% if locked %}{{ premium_notice(season, "predictions") }}{% endif %}
 {% if summary and summary.n_games %}
