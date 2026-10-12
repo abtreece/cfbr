@@ -125,6 +125,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         season, ledger = pick(season)
         risked, to_win = risk(cfg.bets.odds, cfg.bets.stake)
         ctx = {"bet_seasons": store.bet_seasons(), "season": season, "rules": cfg.bets,
+               "close_max_age": cfg.odds.closing_max_age_hours,
                "unit_risk": risked * cfg.bets.unit_value, "unit_win": to_win * cfg.bets.unit_value}
         if ledger is not None:
             rows = bet_rows(ledger, cfg)

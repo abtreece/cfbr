@@ -468,6 +468,9 @@ def test_bets_page(bets_client):
     assert "Bovada" in html and "never sets the best line" in html
     assert "Only DraftKings, FanDuel, bet365 can set the best line" in html
     assert "bet365's lines come from a separate feed used only to price bets" in html
+    # The selection rule and the close's CFBD fallback are both stated, not simplified away.
+    assert "the number-and-price pair worth the most against the consensus" in html
+    assert "at most 12 hours earlier), or CFBD's post-game consensus when none qualifies" in html
     # What-if panel: hypothetical framing, the live plan first and marked, all three plans.
     assert "What if: staking plans" in html and "not a separate record" in html
     assert "Flat 1% (live)" in html.replace('<span class="muted">', "").replace("</span>", "")
