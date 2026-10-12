@@ -68,7 +68,7 @@
 </div>
 <p class="note"><strong>Line at bet</strong> is fixed when the bet is recorded; <strong>Line now</strong> is the line on Games{% if lines_as_of %}, as of {{ lines_as_of|iso_ts }}{% endif %}.
   {% if n_below %}{{ n_below }} of {{ open_bets|length }} bets are no longer {{ rules.threshold|num(0) }}+ off the current line, so Games doesn't flag them; the bet stands as recorded.{% endif %}
-  "More columns" adds Edge now, Tier, stake, the number of books in the consensus (hover for each book's line) and when each bet was recorded. <a href="#how">How it works ↓</a></p>
+  "More columns" adds Edge now,{% if show_cents %} Edge ¢,{% endif %}{% if show_cover %} Cover %,{% endif %} Tier, stake, the number of books in the consensus (hover for each book's line) and when each bet was recorded. <a href="#how">How it works ↓</a></p>
 {% else %}
 <p class="muted">No open bets.</p>
 {% endif %}

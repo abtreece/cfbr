@@ -1363,6 +1363,17 @@ def test_refresh_lines_skips_while_the_weekly_lock_is_held(web_cfg):
         assert (d / "games.parquet").read_bytes() == before
 
 
+def test_an_older_odds_snapshot_never_rolls_lines_back():
+    from cfbr.web.lines import newer_than
+
+    sat = datetime(2026, 10, 17, 23, tzinfo=UTC)
+    fresh = (sat, pl.DataFrame({"game_id": [1], "spread": [-3.0]}))
+    # Sunday's CFBD fetch succeeded but the Odds API fetch failed: Saturday's odds snapshot is older.
+    assert newer_than(fresh, "2026-10-18T14:00:00+00:00") is None
+    assert newer_than(fresh, "2026-10-17T14:00:00+00:00") is fresh  # older CFBD: odds apply
+    assert newer_than(fresh, None) is fresh and newer_than(None, "2026-10-18T14:00:00+00:00") is None
+
+
 def test_games_mark_lines_older_than_the_snapshot(web_cfg):
     d = _write_season(web_dir(web_cfg), datetime.now(UTC))
     games = pl.read_parquet(d / "games.parquet")
@@ -1400,6 +1411,22 @@ def test_unplayed_lines_say_when_they_were_fetched(web_cfg, tmp_path):
     assert "Vegas lines for games not yet played are as of Oct 11, 3:00 PM CT" in html
     # A week that's all final doesn't need it.
     assert "lines-as-of" not in c.get("/games?season=2026&slot=r01").text
+    # Nor does a finished season, even with leftover uncompleted rows (cancelled games).
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:11+00:00", "live": False}))
+    assert "lines-as-of" not in TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text
+
+
+def test_more_columns_note_lists_edge_cents_and_cover_when_shown(web_cfg):
+    from cfbr.bets.ledger import read_ledger
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    path = _write_ledger(web_cfg)
+    c = TestClient(create_app(web_cfg))
+    html = " ".join(c.get("/bets").text.split())
+    assert '"More columns" adds Edge now, Tier,' in html  # neither column in this ledger
+    read_ledger(path).with_columns(edge_cents=pl.lit(12.0), cover_prob=pl.lit(0.51)).write_csv(path)
+    html = " ".join(c.get("/bets").text.split())
+    assert '"More columns" adds Edge now, Edge ¢, Cover %, Tier,' in html
 
 
 def test_games_and_bets_label_their_line_sources(client, bets_client):

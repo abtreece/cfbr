@@ -32,9 +32,9 @@
 
 <h1>{{ season }} · {{ slot|slot_label }}</h1>
 {% if slot.startswith('p') %}<p class="lede">Postseason weeks are 7-day windows from the first bowl game.</p>{% endif %}
-{% if s.meta.lines_as_of and rows|selectattr("completed", "false")|list %}<p class="note lines-as-of">Vegas lines for games not yet played are as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.
+{% if s.meta.lines_as_of and s.meta.live and rows|selectattr("completed", "false")|list %}<p class="note lines-as-of">Vegas lines for games not yet played are as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.
   {%- if s.meta.cfbd_lines_as_of|older_line(s.meta.lines_as_of) and rows|selectattr("completed", "false")|selectattr("line_source", "eq", "cfbd")|list %}
-  Lines marked * are older ({{ s.meta.cfbd_lines_as_of|iso_ts }}): the newer odds snapshot didn't include those games.{% endif %}</p>{% endif %}
+  Lines marked * are older ({{ s.meta.cfbd_lines_as_of|iso_ts }}): the newest odds snapshot had no pre-kickoff line for those games.{% endif %}</p>{% endif %}
 
 {% if locked %}{{ premium_notice(season, "predictions") }}{% endif %}
 {% if summary and summary.n_games %}

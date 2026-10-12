@@ -45,6 +45,18 @@ def odds_consensus(raw_dir: Path, season: int, games: pl.DataFrame) -> tuple[dat
     return ts, books.group_by("game_id").agg(pl.col("spread").median())
 
 
+def newer_than(fresh: tuple[datetime, pl.DataFrame] | None,
+               cfbd_as_of: str | None) -> tuple[datetime, pl.DataFrame] | None:
+    """``fresh`` only if its snapshot is newer than CFBD's lines; an older Odds API snapshot
+    (e.g. Sunday's Odds API fetch failed after the CFBD one succeeded) would roll lines back."""
+    if fresh is None or not cfbd_as_of:
+        return fresh
+    try:
+        return fresh if fresh[0] > datetime.fromisoformat(cfbd_as_of) else None
+    except ValueError:
+        return fresh
+
+
 def apply_lines(games: pl.DataFrame, fresh: tuple[datetime, pl.DataFrame] | None,
                 cfbd_as_of: str | None) -> pl.DataFrame:
     """Set ``spread`` from ``cfbd_spread`` (CFBD's line), then, for games still unplayed when
@@ -107,7 +119,9 @@ def refresh_lines(cfg: Config, season: int) -> int | None:
         if "cfbd_spread" not in games.columns:
             log.info("web data for %d predates line refresh; rebuild it once (cfbr web build)", season)
             return None
-        fresh = odds_consensus(cfg.paths.raw_dir, season, games)
+        if not meta.get("live", True):
+            return None  # a finished season keeps its closing lines
+        fresh = newer_than(odds_consensus(cfg.paths.raw_dir, season, games), meta.get("cfbd_lines_as_of"))
         if fresh is None:
             return None
         out = apply_lines(games.drop([c for c in ("line_source", "line_as_of") if c in games.columns]),
