@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 
 from cfbr.backtest.metrics import summarize
 from cfbr.config import Config
+from cfbr.web import MODEL_NAME
 from cfbr.web.access import bets_access, premium_viewer
 from cfbr.web.bets import NO_STORE, price_str, spread_str
 
@@ -437,7 +438,8 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                     "iso_ts": iso_ts,
                     "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
-    env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL, "prob": prob}
+    env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL, "prob": prob,
+                    "MODEL": MODEL_NAME}
 
     def get_season(season: int | None) -> Season:
         season = season or store.latest()
@@ -630,7 +632,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
             "x": by_slot["label"].to_list(),
             "n": by_slot["n"].to_list(),
             "series": [{"name": n, "values": by_slot[c].to_list()} for n, c in
-                       (("Model", "model"), ("Vegas", "vegas"), ("Massey baseline", "massey"))],
+                       ((MODEL_NAME, "model"), ("Vegas", "vegas"), ("Massey baseline", "massey"))],
         }
         per_season = []
         for y in store.seasons():

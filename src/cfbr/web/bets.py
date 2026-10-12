@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse
 from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly, what_if
 from cfbr.config import Config
+from cfbr.web import MODEL_NAME
 from cfbr.web.access import bets_access
 from cfbr.web.store import Store
 
@@ -221,7 +222,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
 
 # Visitor-facing names for the retro models; the ledger and reports keep the internal ones
 # (cfbr.bets.retro.MODELS: "published model (v1 prior)", "roster-prior shadow model").
-RETRO_LABELS = {"v1": "Published model", "roster": "Experimental roster model"}
+RETRO_LABELS = {"v1": f"{MODEL_NAME} (published)", "roster": "Experimental roster model"}
 
 
 def retro_models(led: pl.DataFrame, cfg: Config) -> list[dict]:

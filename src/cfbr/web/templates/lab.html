@@ -15,7 +15,7 @@
 <p class="note">One line per <code>cfbr weekly</code> run: season-to-date accuracy through that week.</p>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th>Through</th><th>Run at</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Vegas MAE</th>
+  <thead><tr><th>Through</th><th>Run at</th><th class="num">Games</th><th class="num">{{ MODEL }} MAE</th><th class="num">Vegas MAE</th>
     <th class="num">Massey MAE</th><th class="num">ATS</th></tr></thead>
   <tbody>
   {% for r in log.iter_rows(named=True) %}
@@ -33,7 +33,7 @@
 <p class="note">From <code>results/</code>. Each run records its own config; runs before tuning used <code>config/default.toml</code>.</p>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th>Run</th><th>Seasons</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Vegas</th>
+  <thead><tr><th>Run</th><th>Seasons</th><th class="num">Games</th><th class="num">{{ MODEL }} MAE</th><th class="num">Vegas</th>
     <th class="num">Massey</th><th class="num">ATS [95% CI]</th></tr></thead>
   <tbody>
   {% for run in runs %}{% set o = run.metrics.overall %}

@@ -18,8 +18,8 @@
 {% if summary.n_games %}
 <div class="tiles">
   {{ tile("Games", summary.n_games) }}
-  {{ tile("Model MAE", summary.mae|num(2) ~ " pts") }}
-  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num(2) ~ " pts", "model " ~ summary.model_mae_lined|num(2) ~ " on the same " ~ summary.n_lined ~ " games") }}{% endif %}
+  {{ tile(MODEL ~ " MAE", summary.mae|num(2) ~ " pts") }}
+  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num(2) ~ " pts", MODEL ~ " " ~ summary.model_mae_lined|num(2) ~ " on the same " ~ summary.n_lined ~ " games") }}{% endif %}
   {{ tile("Massey MAE", summary.massey_mae|num(2) ~ " pts", "score-only baseline") }}
   {{ tile("Winners picked", summary.su_accuracy|pct(1)) }}
   {% if summary.ats_n %}{{ tile("Against the spread", summary.ats_win_rate|pct(1),
@@ -32,7 +32,7 @@
   <summary>Week-by-week table</summary>
   <div class="table-wrap">
   <table class="data">
-    <thead><tr><th>Week</th><th class="num">Games</th><th class="num">Model</th><th class="num">Vegas</th><th class="num">Massey</th></tr></thead>
+    <thead><tr><th>Week</th><th class="num">Games</th><th class="num">{{ MODEL }}</th><th class="num">Vegas</th><th class="num">Massey</th></tr></thead>
     <tbody>
     {% for r in by_slot %}
       <tr><td><a href="/games?season={{ season }}&amp;slot={{ r.slot }}">{{ r.label }}</a></td><td class="num">{{ r.n }}</td>
@@ -51,7 +51,7 @@
 <p class="note">Same model and config for every season. Vegas and model MAE in the "same games" columns use only games with a closing line.</p>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th>Season</th><th>Set</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Model (same games)</th>
+  <thead><tr><th>Season</th><th>Set</th><th class="num">Games</th><th class="num">{{ MODEL }} MAE</th><th class="num">{{ MODEL }} (same games)</th>
     <th class="num">Vegas</th><th class="num">Gap</th><th class="num">Massey</th><th class="num">Winners</th><th class="num">ATS [95% CI]</th></tr></thead>
   <tbody>
   {% for r in per_season|reverse %}

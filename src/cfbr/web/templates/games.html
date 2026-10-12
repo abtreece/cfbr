@@ -30,8 +30,8 @@
 {% if summary and summary.n_games %}
 <div class="tiles">
   {{ tile("Games final", summary.n_games) }}
-  {{ tile("Model MAE", summary.mae|num ~ " pts") }}
-  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num ~ " pts", "model " ~ summary.model_mae_lined|num ~ " on same games") }}{% endif %}
+  {{ tile(MODEL ~ " MAE", summary.mae|num ~ " pts") }}
+  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num ~ " pts", MODEL ~ " " ~ summary.model_mae_lined|num ~ " on same games") }}{% endif %}
   {{ tile("Winners picked", summary.su_accuracy|pct(0)) }}
   {% if summary.ats_n %}{{ tile("Against the spread", summary.ats_wins ~ "–" ~ (summary.ats_n - summary.ats_wins),
        "95% CI " ~ summary.ats_ci95_low|pct(0) ~ "–" ~ summary.ats_ci95_high|pct(0)) }}{% endif %}
@@ -44,15 +44,15 @@
   <a href="{{ base }}"{% if show == "all" %} aria-current="true"{% endif %}>All <span class="muted">{{ counts.all }}</span></a>
   <a href="{{ base }}&amp;show=flagged"{% if show == "flagged" %} aria-current="true"{% endif %}
      title="The model picks the underdog to win, or is {{ threshold|num(0) }}+ points off the Vegas line">Flagged <span class="muted">{{ counts.flagged }}</span></a>
-  {% if counts.upsets %}<a href="{{ base }}&amp;show=upsets"{% if show == "upsets" %} aria-current="true"{% endif %}>Model picks the underdog <span class="muted">{{ counts.upsets }}</span></a>{% endif %}
+  {% if counts.upsets %}<a href="{{ base }}&amp;show=upsets"{% if show == "upsets" %} aria-current="true"{% endif %}>{{ MODEL }} picks the underdog <span class="muted">{{ counts.upsets }}</span></a>{% endif %}
 </nav>
 {% endif %}
 
 <div class="table-wrap">
 <table class="data sortable" id="games">
   <thead>
-    <tr><th data-sort="num" data-first="asc">Kickoff ({{ tz_label }})</th><th>Matchup</th>{% if not locked %}<th>Model</th><th data-sort="num" class="num opt" title="Win probability of the team the model favors">Win %</th>{% endif %}<th title="Median spread across sportsbooks: the latest line for games not yet played, the closing line once final">Vegas</th>
-      {% if not locked %}<th data-sort="num" title="Points between the model's margin and the Vegas line, and toward which team">Edge</th>{% endif %}{% if any_final %}<th>Final</th>{% if not locked %}<th data-sort="num" class="num opt">Model err</th>{% endif %}<th data-sort="num" class="num opt">Vegas err</th>{% if not locked %}<th>ATS</th>{% endif %}{% endif %}</tr>
+    <tr><th data-sort="num" data-first="asc">Kickoff ({{ tz_label }})</th><th>Matchup</th>{% if not locked %}<th>{{ MODEL }}</th><th data-sort="num" class="num opt" title="Win probability of the team the model favors">Win %</th>{% endif %}<th title="Median spread across sportsbooks: the latest line for games not yet played, the closing line once final">Vegas</th>
+      {% if not locked %}<th data-sort="num" title="Points between the model's margin and the Vegas line, and toward which team">Edge</th>{% endif %}{% if any_final %}<th>Final</th>{% if not locked %}<th data-sort="num" class="num opt">{{ MODEL }} err</th>{% endif %}<th data-sort="num" class="num opt">Vegas err</th>{% if not locked %}<th>ATS</th>{% endif %}{% endif %}</tr>
   </thead>
   <tbody>
   {% for g in rows %}

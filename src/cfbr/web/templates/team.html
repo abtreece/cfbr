@@ -101,8 +101,8 @@
 <table class="data">
   <thead>
     <tr><th>Date ({{ tz_label }})</th><th>Wk</th><th>Opponent</th><th>Result</th>
-      {% if not locked %}<th class="num" title="Model's expected margin for {{ team }}">Model</th><th class="num" title="{{ team }}'s win probability">Win %</th>{% endif %}<th class="num" title="Vegas line as an expected margin for {{ team }} (−7 on the line shows as +7.0): the latest line for games not yet played, the closing line once final">Vegas</th><th class="num">Actual</th>
-      {% if not locked %}<th class="num">Model err</th>{% endif %}<th class="num">Vegas err</th></tr>
+      {% if not locked %}<th class="num" title="{{ MODEL }}'s expected margin for {{ team }}">{{ MODEL }}</th><th class="num" title="{{ team }}'s win probability">Win %</th>{% endif %}<th class="num" title="Vegas line as an expected margin for {{ team }} (−7 on the line shows as +7.0): the latest line for games not yet played, the closing line once final">Vegas</th><th class="num">Actual</th>
+      {% if not locked %}<th class="num">{{ MODEL }} err</th>{% endif %}<th class="num">Vegas err</th></tr>
   </thead>
   <tbody>
   {% for g in games %}
