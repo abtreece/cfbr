@@ -71,9 +71,9 @@ DoD: all tables are populated for 2014 through the latest completed week; row-co
 Build a clean play-level table, `model_plays`, with one row per scrimmage play.
 
 - Keep: rushes, passes (completions, incompletions, sacks, interceptions), and fumbles on scrimmage plays. Drop: kickoffs, punts, field goals, extra points, timeouts, end-of-period rows, and penalty-only plays with no snap result. Record the exact play-type mapping in DECISIONS.md.
-- Garbage-time filter (configurable). Drop a play when the score margin at the snap is greater than: Q2 38, Q3 28, Q4 22. No filter in Q1. Overtime plays are kept.
+- Garbage-time filter (configurable; the thresholds are Bill Connelly's SP+ definition). Drop a play when the score margin at the snap is greater than: Q2 38, Q3 28, Q4 22. No filter in Q1. Overtime plays are kept.
 - Columns: `season, week, game_id, kickoff_ts, offense, defense, offense_fcs, defense_fcs, home_team, neutral_site, ppa (EPA), success (bool)`.
-- Success definition: on 1st down, gain ≥ 50% of yards to go; on 2nd down, ≥ 70%; on 3rd/4th down, 100%.
+- Success definition (Football Outsiders' college definition, popularized by Bill Connelly): on 1st down, gain ≥ 50% of yards to go; on 2nd down, ≥ 70%; on 3rd/4th down, 100%.
 - FCS handling: replace every FCS team with a single pooled `FCS` entity. Make this configurable so tiered pooling (by FCS conference) can be tried later.
 - Rows with null PPA: drop them and log the share dropped per season.
 
@@ -116,7 +116,7 @@ DoD: given `(season, week)`, the model returns a ratings table for all FBS teams
 For each season `s`, build each team's prior O and D values from features that were known before week 1 of season `s`:
 
 - the team's final rating from season `s-1` (offense and defense separately)
-- returning production (offense and defense percentages)
+- returning production (offense and defense percentages; CFBD's own measure, offense-only in practice per DECISIONS.md, not the one Bill Connelly publishes)
 - team talent composite
 - a 4-year weighted average of recruiting team rating
 
