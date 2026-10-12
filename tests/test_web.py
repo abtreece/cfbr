@@ -503,7 +503,7 @@ def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
     assert [w["label"] for w in body["weekly"]] == ["Week 6"] and body["weekly"][0]["cum_dollars"] == pytest.approx(-1)
     assert body["weekly"][0]["balance"] == pytest.approx(999) and body["summary"]["balance"] == pytest.approx(999)
     assert [t["name"] for t in body["tiers"]] == ["Small", "Medium", "Large"]
-    assert [t["key"] for t in body["tests"]] == ["core_filter", "second_look"]
+    assert [t["key"] for t in body["tests"]] == ["core_filter", "second_look", "shortlist"]
     assert [p["key"] for p in body["what_if"]] == ["flat_1", "flat_2", "all_in"]
     assert body["what_if"][0]["balance"] == pytest.approx(body["summary"]["balance"])
     assert sum(g["settled"] for g in body["tests"][0]["groups"]) == m["settled"]
