@@ -16,7 +16,7 @@
   Nothing is wagered, and this is not betting advice.</p>
 
 {% if models is not defined %}
-<p class="muted">No retroactive paper bets yet. <code>cfbr bets-retro</code> builds them.</p>
+{# Built by `cfbr bets-retro`. #}<p class="muted">No retroactive paper bets yet.</p>
 {% else %}
 <div class="callout">
   <strong>Retroactive, not live.</strong> Reconstructed after the games and kept apart from the live record.
@@ -30,9 +30,9 @@
       they never count toward the live record's {{ rules.min_sample }}-bet minimum.</li>
     <li>Opening lines come from CFBD: DraftKings, plus offshore Bovada in the consensus. Other US books have no free line history,
       so the best line is DraftKings' opening number.</li>
-    <li>Two models: the published model (v1 prior), and the roster-prior shadow model, which isn't published. The roster prior was judged on these same weeks,
-      so its numbers here flatter it; its fair test is the shadow comparison from week 7 on.</li>
-    <li>The two models bet many of the same games{% if overlap %} ({{ overlap.both }} in common, {{ overlap.same_side }} on the same side; {{ overlap.v1_only }} v1 only, {{ overlap.roster_only }} roster only){% endif %},
+    <li>Two models: the published one, and an experimental one whose preseason starting point uses roster turnover. The experimental model was chosen on these same weeks,
+      so its numbers here flatter it; its fair test is the weeks after this replay.</li>
+    <li>The two models bet many of the same games{% if overlap %} ({{ overlap.both }} in common, {{ overlap.same_side }} on the same side; {{ overlap.v1_only }} published only, {{ overlap.roster_only }} experimental only){% endif %},
       so their records aren't independent.</li>
   </ul>
 </details>
