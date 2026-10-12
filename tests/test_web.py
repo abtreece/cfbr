@@ -208,7 +208,7 @@ def test_no_data_is_503(web_cfg):
 def test_lab_lists_backtest_runs_and_track_record_does_not(client):
     html = client.get("/lab").text
     assert "20260101T000000Z-test" in html
-    assert "Model MAE" in html
+    assert "CFBrR MAE" in html
     acc = client.get("/accuracy").text
     assert "20260101T000000Z-test" not in acc and 'href="/lab' not in acc  # linked from nowhere
 
@@ -522,7 +522,7 @@ def test_retro_bets_page_and_api(web_cfg):
     assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
     html = " ".join(r.text.split())
     assert "Retroactive, not live." in html and "<strong>opening</strong> line" in html and "point-in-time" in html
-    assert "Published model" in html and "Experimental roster model" in html
+    assert "CFBrR (published)" in html and "Experimental roster model" in html
     assert "v1 prior" not in html and "shadow" not in html  # internal names stay off the page
     # Each model: week 1 went 1-1 (+$10 - $11), week 2 won: bankroll $1,000 -> $999 -> $1,009.
     assert "Week 1" in html and "−$1" in html and "$1,009" in html and "Retro U −7" in html
@@ -602,7 +602,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
 # Strings that only exist if model output for the synthetic live season leaked:
 # ratings (+21.0, +16.0 ...), offense/defense, predicted margins and picks.
 MODEL_STRINGS = ["+21.0", "+16.0", "+11.0", "+6.0", "+10.0", "+9.0", "by 10.0", "by 4.0", "by 30.0", "Toss-up",
-                 "Model err", ">Edge</th>", "Win %"]
+                 "CFBrR err", ">CFBrR</th>", ">Edge</th>", "Win %"]
 
 
 def _write_finished(root, now):
@@ -675,7 +675,7 @@ def test_free_api_withholds_live_model_output(free_client):
 
 def test_accuracy_stays_free_and_aggregate(free_client):
     html = " ".join(free_client.get("/accuracy?season=2026").text.split())
-    assert "Model MAE" in html
+    assert "CFBrR MAE" in html
     for leak in ("by 10.0", "by 4.0", "Toss-up", "+21.0"):
         assert leak not in html
 
@@ -1366,6 +1366,17 @@ def test_matchup_page(web_cfg):
     assert r.status_code == 200 and "for subscribers" in r.text and "h2h-data" not in r.text
     for leak in MODEL_STRINGS:
         assert leak not in r.text
+
+
+def test_model_name_is_site_text_only(client):
+    from cfbr.web import MODEL_NAME
+
+    html = client.get("/games?season=2026&slot=r01").text
+    assert f">{MODEL_NAME}</th>" in html and f">{MODEL_NAME} err</th>" in html
+    assert f"called <strong>{MODEL_NAME}</strong>" in client.get("/method").text
+    # The API keeps its field names; the name is a display label.
+    api = client.get("/api/games?season=2026&slot=r01").text
+    assert "pred_margin" in api and MODEL_NAME not in api
 
 
 def test_footer_shows_build_time(client):
