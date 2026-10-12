@@ -111,3 +111,13 @@ def test_sorted_by_kickoff_and_keeps_ledger_columns():
     s = shortlist(d, REF, CFG)
     assert s["game_id"].to_list() == [2, 1]
     assert set(LEDGER_SCHEMA) <= set(s.columns) and not any(c.startswith("_") for c in s.columns)
+
+
+def test_empty_pricing_books_means_any_non_offshore_book():
+    cfg = Bets(pricing_books=[])
+    d = _ledger([
+        _row(1, books="BetMGM -7 (-110/-110); Bovada -6.5 (-110/-110) (offshore)"),
+        _row(2, books="Bovada -6.5 (-110/-110) (offshore)"),
+    ])
+    assert shortlist_ids(d, cfg) == [1]
+    assert shortlist(d, cfg.pricing_books, cfg)["bet_at_book"].to_list() == ["BetMGM"]

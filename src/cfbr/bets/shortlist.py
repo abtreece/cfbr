@@ -54,11 +54,11 @@ def _payout(odds: int) -> float:
 def bet_at(side: str, line: float, entries: list[BookLine], allowed: set[str], default_odds: int,
            table: PricingTable | None = None) -> BookLine | None:
     """The best of the allowed books' entries that offer ``side`` at ``line`` (home spread) or
-    better, chosen as ``ledger.market`` chooses the best line: highest expected value against
+    better (an empty ``allowed`` means any non-offshore book), chosen as ``ledger.market`` chooses the best line: highest expected value against
     the consensus with ``table``, else most points then best price. None if no book qualifies."""
     flip = 1 if side == "home" else -1
     price = (lambda e: e.home_price) if side == "home" else (lambda e: e.away_price)
-    ok = [e for e in entries if not e.offshore and book_key(e.book) in allowed
+    ok = [e for e in entries if not e.offshore and (not allowed or book_key(e.book) in allowed)
           and flip * e.home_spread >= flip * line]
     if not ok:
         return None

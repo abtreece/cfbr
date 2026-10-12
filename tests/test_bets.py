@@ -264,6 +264,8 @@ def test_tracked_tests_split_the_ledger_by_fixed_rules():
     # Shortlist: core + first capture + a reference book at the line. Game 5 has only BetMGM.
     assert t3["key"] == "shortlist" and [g["settled"] for g in t3["groups"]] == [1, 5]
     assert t3["n_in"] == 1 and math.isnan(t3["gap"])
+    assert t3["groups"][0]["label"] == "Shortlist (DraftKings, FanDuel, bet365)"
+    assert tracked_tests(d, CFG.model_copy(update={"pricing_books": ["BetMGM"]}))[2]["groups"][0]["label"] == "Shortlist (BetMGM)"
     g = clv_gap(pl.Series([1.0, 2.0, 3.0]), pl.Series([0.0, 1.0, 2.0]))
     assert g["gap"] == pytest.approx(1.0) and g["ci95"][0] < 1.0 < g["ci95"][1]
     assert math.isnan(clv_gap(pl.Series([1.0]), pl.Series([0.0, 1.0]))["gap"])

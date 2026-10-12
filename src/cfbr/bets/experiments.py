@@ -27,7 +27,7 @@ class Test:
     key: str
     name: str
     question: str
-    in_label: str
+    in_label: str | Callable[[Bets], str]   # a callable renders from the bet rules (T3's books)
     out_label: str
     rule: Callable[[pl.DataFrame, Bets], pl.Expr]   # (ledger with helper columns, bet rules) -> boolean "in" expression
     decision: str
@@ -48,6 +48,11 @@ def _shortlisted(d: pl.DataFrame, cfg: Bets) -> pl.Expr:
     return pl.col("game_id").is_in(shortlist_ids(d, cfg))
 
 
+def shortlist_label(cfg: Bets) -> str:
+    """T3's in-group label, naming the books its rule uses (any non-offshore book when none are set)."""
+    return f"Shortlist ({', '.join(cfg.pricing_books) or 'any non-offshore book'})"
+
+
 TESTS = [
     Test("core_filter", "T1 · Core filter",
          "Does the model beat the market more on competitive FBS games?",
@@ -61,7 +66,7 @@ TESTS = [
          "otherwise keep recording at every run."),
     Test("shortlist", "T3 · Shortlist",
          "Do the shortlisted bets (core, first capture, a reference book at the line) beat the market more than the rest?",
-         "Shortlist (DraftKings, FanDuel, bet365)", "Every other paper bet", _shortlisted,
+         shortlist_label, "Every other paper bet", _shortlisted,
          "Keep publishing the shortlist if the CLV gap (in − out) has a 95% CI above 0; otherwise the page says "
          "it hasn't beaten the full list, and it is reconsidered. Mostly T1 ∩ T2: read it alongside them."),
 ]
@@ -98,7 +103,7 @@ def tracked_tests(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
         ready = min(gap["n_in"], gap["n_out"]) >= MIN_CLV_BETS
         out.append({"key": t.key, "name": t.name, "question": t.question, "decision": t.decision,
                     "decision_point": DECISION_POINT, "min_clv_bets": MIN_CLV_BETS, "enough_data": ready,
-                    "groups": [{"label": t.in_label, **summarize(inn, cfg)},
+                    "groups": [{"label": t.in_label(cfg) if callable(t.in_label) else t.in_label, **summarize(inn, cfg)},
                                {"label": t.out_label, **summarize(rest, cfg)}],
                     "all_roi": summarize(ledger, cfg)["roi"], **gap})
     return out
