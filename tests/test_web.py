@@ -1651,3 +1651,18 @@ def test_build_exports_calibration(engine, tmp_path):
     build_season(engine, 2023, tmp_path, now=datetime.now(UTC))
     cal = json.loads((tmp_path / "2023" / "meta.json").read_text())["calibration"]
     assert cal["b_home"] == pytest.approx(engine.calibration(2023).b_home) and cal["sigma"] > 0
+
+
+# -- shortlist book choice ---------------------------------------------------------------
+
+
+def test_choose_books_validates_against_the_selectable_list():
+    from cfbr.config import Bets
+    from cfbr.web.access import book_cookie_value, choose_books
+
+    b = Bets()
+    assert choose_books(["draftkings", "Bovada", "nope", " FanDuel "], b) == {"DraftKings", "FanDuel"}
+    assert choose_books([], b) == choose_books(["Bovada"], b) == frozenset(b.pricing_books)  # offshore is not selectable
+    assert "Bovada" not in b.selectable_books and set(b.pricing_books) <= set(b.selectable_books)
+    v = book_cookie_value({"Bally Bet", "DraftKings"})
+    assert v == "ballybet.draftkings" and choose_books(v.split("."), b) == {"Bally Bet", "DraftKings"}

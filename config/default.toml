@@ -67,6 +67,8 @@ offshore_books = ["Bovada", "BetOnline", "LowVig", "MyBookie", "BetUS", "Bookmak
 # Books a bet may be priced at (best line). All books still feed the consensus line.
 # bet365 has no US feed in CFBD or The Odds API today, so in practice DraftKings and FanDuel.
 pricing_books = ["DraftKings", "FanDuel", "bet365"]
+# Books a viewer may pick for the real-money shortlist; never offshore. No choice = pricing_books.
+selectable_books = ["DraftKings", "FanDuel", "bet365", "BetMGM", "BetRivers", "Bally Bet", "betPARX", "theScore Bet"]
 # Dollar reporting only: starting bankroll, and one unit = 1% of it, so a 1-unit bet
 # at -110 risks $11 to win $10 (week 1 can carry ~75 bets at once; 1% keeps that under the bankroll).
 bankroll = 1000.0

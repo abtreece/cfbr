@@ -28,10 +28,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+from collections.abc import Iterable
 
 from fastapi import Depends, HTTPException, Request
 
-from cfbr.config import REPO_ROOT
+from cfbr.bets.ledger import book_key
+from cfbr.config import REPO_ROOT, Bets
 
 OWNER_KEY_NAME = "OWNER_KEY"
 OWNER_COOKIE = "cfbr_owner"
@@ -84,3 +86,30 @@ def is_owner(request: Request) -> bool:
 def owner_viewer(request: Request) -> bool:
     """FastAPI dependency: whether this viewer is the site owner (independent of premium)."""
     return is_owner(request)
+
+
+# -- the viewer's sportsbooks for the real-money shortlist --------------------------------
+# The site has no accounts, so the choice lives in a cookie. It is a preference, not a
+# credential. viewer_books is the only code that knows that; with accounts, only it changes
+# (DECISIONS "Shortlist book choice").
+
+BOOKS_COOKIE = "cfbr_books"
+BOOKS_COOKIE_DAYS = 365
+
+
+def choose_books(names: Iterable[str], bets: Bets) -> frozenset[str]:
+    """The selectable books among ``names`` (any spelling ``book_key`` matches), spelled as in
+    config; the reference set (``pricing_books``) when none are."""
+    by_key = {book_key(b): b for b in bets.selectable_books}
+    chosen = frozenset(by_key[k] for n in names if (k := book_key(n.strip())) in by_key)
+    return chosen or frozenset(bets.pricing_books)
+
+
+def book_cookie_value(books: Iterable[str]) -> str:
+    """Cookie-safe encoding of a book choice: the books' keys, sorted, joined with dots."""
+    return ".".join(sorted(book_key(b) for b in books))
+
+
+def viewer_books(request: Request, bets: Bets) -> frozenset[str]:
+    """This viewer's sportsbooks (from the cookie; the reference set when unset or invalid)."""
+    return choose_books((request.cookies.get(BOOKS_COOKIE) or "").split("."), bets)
