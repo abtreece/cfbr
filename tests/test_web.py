@@ -1247,6 +1247,8 @@ def test_delta_shows_no_arrow_for_a_rounded_zero(client):
 def test_games_and_bets_label_their_line_sources(client, bets_client):
     games = client.get("/games?season=2026&slot=r01").text
     assert "the latest line for games not yet played, the closing line once final" in games and ">Edge</th>" in games
+    team = client.get("/team/2026/Texas%20A%26M").text
+    assert "the latest line for games not yet played, the closing line once final" in team
     bets = bets_client.get("/bets").text
     assert ">Bet (line at bet)</th>" in bets and "wins by" in bets
 
