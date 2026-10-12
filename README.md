@@ -75,15 +75,23 @@ The server never fits a model. It reads `out/web/{season}/` and picks up new fil
 
 ### Deploying code changes
 
-The service runs from this checkout, so a merge to `main` goes live in two halves: Jinja reloads templates from disk at once, but the Python already loaded (routes, row builders, filters) stays the old version until the process restarts. In between, a new template can ask for a column the old code never produces and every page using it returns a 500. So after any merge that touches `src/cfbr/`, restart and check before walking away:
+Code is written on a dev machine and reaches the server (javelin, `~/cfb-ratings`) only through GitHub: branch → PR → squash-merge to `main` → deploy. Never edit or commit on the server. From a local checkout:
 
 ```bash
-systemctl --user restart cfbr-web
-for p in / /accuracy /bets /api/bets; do printf '%s ' "$p"; curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:8000$p"; done
-tail -n 30 data/web.log | grep -n Traceback || echo "no tracebacks"
+deploy/deploy.sh    # DEPLOY_HOST / DEPLOY_DIR override javelin and cfb-ratings
 ```
 
-Data-only changes (a `cfbr weekly` run, new files under `out/`) need no restart.
+It sends itself over ssh and, on the server: refuses a dirty working tree; holds the `cfbr weekly` lock (refuses while a run is in progress, and no run starts mid-deploy); fast-forwards to `origin/main` (refuses anything else); `uv sync --frozen`; runs the tests against the real data; rebuilds `out/web/`; restarts `cfbr-web`; and checks `/`, `/accuracy`, `/bets` and `/api/bets` for 200 and `data/web.log` for new tracebacks. If any step after the fast-forward fails, it resets to the previous commit, rebuilds `out/web/` and restarts.
+
+The restart is required: Jinja reloads templates from disk at once, but the Python already loaded (routes, row builders, filters) stays the old version until the process restarts, and a new template asking for a column the old code never produces returns a 500. Cron jobs run `uv run` from the checkout and pick up new code on their next run. Data-only changes (a `cfbr weekly` run, new files under `out/`) need no deploy.
+
+For local development, copy the server's data once. Nothing in it needs an API call to rebuild, and the dev machine has no `.keys`, so it can't spend CFBD quota:
+
+```bash
+rsync -a --exclude='*.log' --exclude='.*.lock' javelin:cfb-ratings/data javelin:cfb-ratings/out javelin:cfb-ratings/results ./
+```
+
+On macOS, `tests/test_backup.py` needs GNU rsync (`brew install rsync`); the system `openrsync` handles `--relative --delete --backup` differently.
 
 ## Cron (Sunday mornings, Central time)
 
