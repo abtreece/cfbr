@@ -189,6 +189,9 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "tests": tracked_tests(ledger, cfg.bets),
                     "what_if": (wi := what_if(ledger, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll),
                     "open_bets": open_bets,
+                    # Bets whose "consensus" was one book (recorded before multi-book pricing, or
+                    # on a run where the Odds API was unavailable); explained under "How it works".
+                    "n_single_book": ledger.filter(pl.col("n_providers") == 1).height,
                     "n_below": sum(1 for r in open_bets if r["below_threshold"]),
                     # Older ledgers predate these columns; don't show a column of dashes.
                     "show_cents": any(r.get("edge_cents") is not None for r in open_bets),
