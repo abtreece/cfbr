@@ -42,6 +42,10 @@ CFBD API → data/raw/ (JSON cache) → data/cfb.duckdb (build_store rebuilds it
 
 `cfbr weekly` is the cron entry point (Sunday 9am and 3pm Central; see README). It takes a lock and runs ingest → build_store → prep → rank → accuracy line → paper bets (isolated; a failure there exits with 6) → web season rebuild (last). Exit codes: 3 = quota, 4 = lock held, 5 = no completed weeks, 6 = bets step failed.
 
+## Where things run
+
+Production (cron, `cfbr-web`, the API key, the paper-bet ledger of record) is javelin, `~/cfb-ratings`. Development happens in a local checkout: branch → PR → squash-merge → `deploy/deploy.sh` (see README "Deploying code changes"). Never edit, commit or run git writes on javelin. The local checkout has a copy of `data/`, `out/` and `results/` but no `.keys`. Don't add one, and don't run `weekly`, `bets`, `odds-snapshot`, `backup` or `check` locally: they spend quota, write ledgers or send alerts that belong to production. Deploying is a stop-and-ask step.
+
 ## Invariants (don't break these)
 
 - **Point-in-time:** a prediction for a game in slot *w* uses only plays and games that kicked off before that slot's first kickoff. Cross-season models follow `schemes.training_seasons`. `tests/test_leakage.py` enforces this with a max-kickoff assertion and a canary future game. Any doubt about leakage is a reason to stop and ask.
