@@ -53,6 +53,17 @@ def signed(x, digits: int = 1) -> str:
     return "—" if _missing(x) else f"{x:+.{digits}f}".replace("-", "−")
 
 
+def margin(x, digits: int = 1) -> str:
+    """A team's expected margin in words ("wins by 3.5"), so it never reads as a line.
+    Lines are "Team −3.5" (see ``spread``); margins are never shown as a bare signed number
+    next to one."""
+    if _missing(x):
+        return "—"
+    if round(x, digits) == 0:
+        return "toss-up"
+    return f"{'wins' if x > 0 else 'loses'} by {abs(x):.{digits}f}"
+
+
 def money(x, signed: bool = True) -> str:
     if _missing(x):
         return "—"
@@ -405,7 +416,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     # filter the old process didn't define) and broke the page until a restart.
     env.auto_reload = False
     app.state.templates = templates
-    env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
+    env.filters |= {"num": num, "signed": signed, "margin": margin, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
                     "iso_ts": iso_ts,
                     "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
@@ -525,7 +536,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         order = slots(s)
         slot = slot or default_slot(s, datetime.now(UTC))
         if slot not in order:
-            raise HTTPException(404, f"No games in slot {slot!r} of {s.meta['season']}.")
+            raise HTTPException(404, f"No such week in {s.meta['season']}. Pick one from the week menu.")
         g = s.games.filter(pl.col("slot") == slot)
         now = datetime.now(UTC)
         rows = [game_row(r, now, bool(s.meta.get("live")), cfg.bets.threshold) for r in g.to_dicts()]
@@ -566,7 +577,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
             "x": by_slot["label"].to_list(),
             "n": by_slot["n"].to_list(),
             "series": [{"name": n, "values": by_slot[c].to_list()} for n, c in
-                       (("Model", "model"), ("Closing line", "vegas"), ("Massey baseline", "massey"))],
+                       (("Model", "model"), ("Vegas", "vegas"), ("Massey baseline", "massey"))],
         }
         per_season = []
         for y in store.seasons():
@@ -624,7 +635,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         slot = slot or default_slot(s, datetime.now(UTC))
         g = s.games.filter(pl.col("slot") == slot)
         if g.height == 0:
-            raise HTTPException(404, f"No games in slot {slot!r} of {s.meta['season']}.")
+            raise HTTPException(404, f"No such week in {s.meta['season']}.")
         return clean({"season": s.meta["season"], "slot": slot, "games": g.to_dicts()})
 
     # Paper bets: a separate router behind its own access gate (see cfbr.web.access).

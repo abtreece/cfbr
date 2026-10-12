@@ -69,7 +69,7 @@
 {% if open_bets %}
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Model</th><th class="num">Edge</th>{% if show_cents %}<th class="num opt">Edge ¢</th>{% endif %}{% if show_cover %}<th class="num opt">Cover %</th>{% endif %}<th>Tier</th><th class="num opt">Risk / to win</th>
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th title="Consensus line when the bet was recorded; it can differ from the line on Games, which keeps moving until kickoff">Bet (line at bet)</th><th class="num opt">Model</th><th class="num">Edge</th>{% if show_cents %}<th class="num opt">Edge ¢</th>{% endif %}{% if show_cover %}<th class="num opt">Cover %</th>{% endif %}<th>Tier</th><th class="num opt">Risk / to win</th>
     <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded ({{ tz_label }})</th></tr></thead>
   <tbody>
   {% for b in open_bets %}
@@ -77,7 +77,7 @@
       <td class="opt">{{ b.kickoff|kickoff }}</td>
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
       <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
-      <td class="num opt" title="Model's expected margin for {{ b.team }}">{{ b.model_team|signed }}</td>
+      <td class="num opt" title="Model's expected margin for {{ b.team }}" data-v="{{ b.model_team }}">{{ b.model_team|margin }}</td>
       <td class="num">{{ b.edge_pts|num }}</td>
       {% if show_cents %}<td class="num opt">{{ b.edge_cents|signed(0) if b.edge_cents is not none else "—" }}</td>{% endif %}
       {% if show_cover %}<td class="num opt">{{ b.cover_prob|pct(0) if b.cover_prob is not none else "—" }}</td>{% endif %}

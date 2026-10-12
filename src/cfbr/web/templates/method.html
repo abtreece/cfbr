@@ -20,14 +20,16 @@
 <h2 id="lines">Betting lines</h2>
 <p>Lines are never model inputs; they are only used to measure the model.</p>
 <ul>
-  <li><strong>Vegas / closing line</strong> is the median closing spread across sportsbooks.</li>
-  <li><strong>Model vs Vegas</strong> is how many points the model's margin differs from the closing line, and toward which team.</li>
+  <li><strong>Vegas</strong> is the median spread across sportsbooks, written as the favorite and its line (<em>Georgia −7</em>). For a game not yet played it is the latest line as of the last data update; once the game is final it is the closing line, which every accuracy number uses.</li>
+  <li><strong>Model</strong> margins are written in words (<em>Georgia by 9.0</em>, or <em>wins by 9.0</em> from one team's side), so they never read as a line.</li>
+  <li><strong>Edge</strong> is how many points the model's margin differs from the Vegas line, and toward which team. It is the only thing called an edge on this site.</li>
   <li><strong>ATS</strong> grades the model's side of the closing line; pushes and exact agreement are not graded.</li>
-  <li><strong>Win %</strong> is the model's win probability, from its margin and the calibrated spread of game outcomes.</li>
+  <li><strong>Win %</strong> is the model's win probability, from its margin and the calibrated spread of game outcomes: for the favored team on the games page, for the team itself on a team page.</li>
+  <li>On a team page the <strong>Vegas</strong> column is the same line turned into that team's expected margin, so <em>−7</em> on the line shows as <em>+7.0</em>.</li>
 </ul>
 
 <h2 id="polls">Polls</h2>
-<p>AP, Coaches and CFP ranks are shown for comparison only and are never model inputs. <strong>#N</strong> before a team's name is its AP rank going into the game. <strong>vs AP</strong> is the model's rank minus the AP rank: ▼ means the model has the team higher than the poll.</p>
+<p>AP, Coaches and CFP ranks are shown for comparison only and are never model inputs. <strong>#N</strong> before a team's name is its AP rank going into the game. <strong>vs AP</strong> is how many places higher (▲) or lower (▼) the model ranks a team than the AP poll does. In the API, <code>vs_ap</code> is the model's rank minus the AP rank, so it has the opposite sign.</p>
 
 <h2 id="accuracy">Accuracy</h2>
 <ul>
@@ -41,7 +43,7 @@
 <p>Each week's season odds come from simulating the rest of the season many times on the ratings available after that week, then the conference title games and the playoff. They are probabilities, not predictions. Bowl means 6+ wins; Bye means a top-4 playoff seed; &lt;1% means it happened in at least one simulated season but under 1 in 100. The odds page lists the simplifications each simulation makes.</p>
 
 <h2 id="matchup">Matchup tool</h2>
-<p>Expected margin = rating difference + home edge (0 on a neutral field); win probability = Φ(margin / σ), using the same points calibration as the game predictions.
+<p>Expected margin = rating difference + home-field advantage (0 on a neutral field); win probability = Φ(margin / σ), using the same points calibration as the game predictions.
   {% if cfg.model.calibration_v2 %}Calibration v2 then adjusts the margin by the prior-share and home terms fitted on past seasons, as the game predictions do.{% endif %}
   It runs in your browser on the published ratings; nothing is fitted there.</p>
 

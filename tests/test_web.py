@@ -595,7 +595,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
 # Strings that only exist if model output for the synthetic live season leaked:
 # ratings (+21.0, +16.0 ...), offense/defense, predicted margins and picks.
 MODEL_STRINGS = ["+21.0", "+16.0", "+11.0", "+6.0", "+10.0", "+9.0", "by 10.0", "by 4.0", "by 30.0", "Toss-up",
-                 "Model err", "Model vs Vegas", "Win %"]
+                 "Model err", ">Edge</th>", "Win %"]
 
 
 def _write_finished(root, now):
@@ -892,7 +892,7 @@ def test_odds_page_for_premium_viewers(odds_client):
     r = odds_client.get("/odds")
     assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
     html = " ".join(r.text.split())
-    assert "2026 season odds <span class=\"muted\">after week 1</span>" in html
+    assert "2026 season odds <span class=\"muted\">through week 1</span>" in html
     assert "Probabilities, not predictions." in html
     # Notes come from the .md (escaped, with **bold**), and stop before its table.
     assert "<strong>Approximations:</strong> pairings use win % &lt;then&gt; strength." in html and "| team |" not in html
@@ -1227,6 +1227,33 @@ def test_rankings_vs_ap_column(poll_client):
     # Texas A&M: model #1, AP #3 -> model has the team higher than the poll: vs_ap = -2.
     api = poll_client.get("/api/rankings?season=2026&week=1").json()["teams"]
     assert {t["team"]: t["vs_ap"] for t in api}["Texas A&M"] == -2
+    # On the page the arrow points the way the model moves the team: up two places, in green.
+    assert '<span class="up">▲ 2</span>' in html
+
+
+def test_margin_filter_never_reads_as_a_line():
+    from cfbr.web.app import margin
+
+    assert margin(9.04) == "wins by 9.0" and margin(-3.5) == "loses by 3.5"
+    assert margin(0.02) == "toss-up" and margin(None) == "—" and margin(float("nan")) == "—"
+
+
+def test_delta_shows_no_arrow_for_a_rounded_zero(client):
+    tmpl = client.app.state.templates.env.from_string('{% from "macros.html" import delta %}{{ delta(x) }}')
+    assert tmpl.render(x=0.02) == '<span class="muted">0</span>'
+    assert "▲ 0.1" in tmpl.render(x=0.06) and "▼ 1.0" in tmpl.render(x=-1.0)
+
+
+def test_games_and_bets_label_their_line_sources(client, bets_client):
+    games = client.get("/games?season=2026&slot=r01").text
+    assert "the latest line for games not yet played, the closing line once final" in games and ">Edge</th>" in games
+    bets = bets_client.get("/bets").text
+    assert ">Bet (line at bet)</th>" in bets and "wins by" in bets
+
+
+def test_bad_week_error_hides_slot_ids(client):
+    r = client.get("/games?season=2026&slot=r6")
+    assert r.status_code == 404 and "No such week in 2026" in r.text and "r6" not in r.text
 
 
 def test_upset_alerts_on_games_page(client):
