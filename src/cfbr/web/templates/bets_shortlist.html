@@ -61,14 +61,14 @@
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
       <td class="strong wrap">{{ b.team }} {{ b.bet_at|spread }} or better at {{ b.bet_at_book }}{% if b.bet_at_odds is not none %} ({{ b.bet_at_odds|price }}){% endif %}
         {% if b.moved_past %}<br><span class="muted">Consensus moved {{ b.team_line|spread }} → {{ b.line_now|spread }} since capture: check {{ b.bet_at_book }} before betting</span>{% endif %}</td>
-      <td class="num opt">{{ b.line_now|spread }}</td>
+      <td class="num opt">{{ b.line_now|spread }}{% if b.line_now_older %}<sup class="muted" title="Older line: as of {{ b.line_now_as_of|iso_ts }}">*</sup>{% endif %}</td>
       <td class="opt">{{ b.team_line|spread }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-<p class="note"><strong>Paper line</strong> is the consensus when the bet was recorded; <strong>Line now</strong> is the consensus on Games{% if lines_as_of %}, as of {{ lines_as_of|iso_ts }}{% endif %}. Neither is your book's live number.</p>
+<p class="note"><strong>Paper line</strong> is the consensus when the bet was recorded; <strong>Line now</strong> is the consensus on Games{% if lines_as_of %}, as of {{ lines_as_of|iso_ts }}{% endif %}.{% if open_picks|selectattr("line_now_older")|list %} Lines marked * are older (hover for when): the newest odds snapshot had no line for those games.{% endif %} Neither is your book's live number.</p>
 {% else %}
 <p class="muted">No open picks{% if not reference %} at your books{% endif %}. A pick needs a competitive FBS game found at the week's first look, with one of your books at the number.</p>
 {% endif %}

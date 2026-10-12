@@ -23,6 +23,7 @@ from cfbr.config import Config
 from cfbr.web import MODEL_NAME
 from cfbr.web.access import (BOOKS_COOKIE, BOOKS_COOKIE_DAYS, bets_access, book_cookie_value, choose_books,
                              owner_viewer, viewer_books)
+from cfbr.web.lines import older_line
 from cfbr.web.store import Store
 
 # Betting data is per-viewer once the section is gated; never let a shared cache keep it.
@@ -89,15 +90,24 @@ def books_from_side(books: str | None, home: bool) -> str | None:
 def with_line_now(rows: list[dict], s, threshold: float) -> list[dict]:
     """Add the current line (the one /games shows, ``games.spread``) to open bets, from the
     side bet on, and whether the model is still ``threshold``+ points off it. A bet's own
-    line never changes; this only explains why /games may no longer flag the game."""
+    line never changes; this only explains why /games may no longer flag the game.
+
+    ``line_now_older`` marks a line older than the page's ``lines_as_of``: Games keeps CFBD's
+    line when the newest odds snapshot had none for the game, and stars it the same way."""
     # The ledger stores game ids as text; the season's games as integers.
-    spreads = {} if s is None else {str(k): v for k, v in s.games.select("game_id", "spread").iter_rows()}
+    games = None if s is None else s.games
+    cols = [c for c in ("spread", "line_source", "line_as_of") if games is not None and c in games.columns]
+    lines = {} if games is None else {str(r["game_id"]): r for r in games.select("game_id", *cols).iter_rows(named=True)}
+    lines_as_of = None if s is None else s.meta.get("lines_as_of")
     out = []
     for r in rows:
-        spread = spreads.get(str(r["game_id"]))
+        g = lines.get(str(r["game_id"]), {})
+        spread = g.get("spread")
         now = None if spread is None or spread != spread else (spread if r["side"] == "home" else -spread)
         edge_now = None if now is None else r["model_team"] + now
+        older = now is not None and g.get("line_source") == "cfbd" and older_line(g.get("line_as_of"), lines_as_of)
         out.append(r | {"line_now": now, "edge_now": edge_now,
+                        "line_now_older": older, "line_now_as_of": g.get("line_as_of") if older else None,
                         "below_threshold": edge_now is not None and edge_now < threshold})
     return out
 
