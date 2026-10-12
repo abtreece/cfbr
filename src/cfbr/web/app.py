@@ -37,6 +37,7 @@ from cfbr.web.odds import make_router as odds_router
 from cfbr.web.odds import prob
 from cfbr.web.roster import count_str, roster_card
 from cfbr.web.roster import make_router as roster_router
+from cfbr.web.lines import older_line
 from cfbr.web.store import Season, Store
 
 HERE = Path(__file__).parent
@@ -452,6 +453,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     app.state.templates = templates
     env.filters |= {"num": num, "signed": signed, "margin": margin, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
                     "iso_ts": iso_ts, "poll_line": poll_line,
+                    "older_line": older_line,
                     "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL, "prob": prob,

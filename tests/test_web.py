@@ -1270,6 +1270,126 @@ def test_poll_line_names_matching_polls_together():
     assert poll_line([]) == ""
 
 
+def _odds_event(eid, home, away, kickoff, books):
+    """An Odds API event with spreads markets: books = [(title, home_point), ...]."""
+    return {"id": eid, "home_team": home, "away_team": away,
+            "commence_time": kickoff.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "bookmakers": [{"title": b, "markets": [{"key": "spreads", "outcomes": [
+                {"name": home, "point": pt, "price": -110}, {"name": away, "point": -pt, "price": -110}]}]}
+                           for b, pt in books]}
+
+
+def test_apply_lines_overlays_only_unplayed_games_the_snapshot_carries():
+    from cfbr.web.lines import apply_lines
+
+    snap = datetime(2026, 10, 14, 21, tzinfo=UTC)
+    games = pl.DataFrame({
+        "game_id": [1, 2, 3, 4],
+        "completed": [True, False, False, False],
+        "kickoff_ts": [snap - timedelta(days=3), snap + timedelta(days=3), snap + timedelta(days=3), snap - timedelta(hours=1)],
+        "cfbd_spread": [-7.0, -3.0, -10.0, -1.0],
+    })
+    fresh = (snap, pl.DataFrame({"game_id": [1, 2, 4], "spread": [-8.0, -4.5, -2.0]}))
+    out = apply_lines(games, fresh, "2026-10-11T20:00:11+00:00").sort("game_id").to_dicts()
+    # 1: final -> keeps CFBD's close. 2: unplayed and in the snapshot -> Odds API line.
+    # 3: unplayed, not in the snapshot -> CFBD. 4: kicked off before the snapshot -> CFBD (no live lines).
+    assert [(r["spread"], r["line_source"]) for r in out] == [(-7.0, "cfbd"), (-4.5, "odds"), (-10.0, "cfbd"), (-1.0, "cfbd")]
+    assert out[1]["line_as_of"] == snap.isoformat() and out[2]["line_as_of"] == "2026-10-11T20:00:11+00:00"
+    assert apply_lines(games, None, None)["spread"].to_list() == [-7.0, -3.0, -10.0, -1.0]
+    # During a build kickoff_ts is local time (America/Chicago), not UTC; same result.
+    local = games.with_columns(pl.col("kickoff_ts").dt.convert_time_zone("America/Chicago"))
+    assert apply_lines(local, fresh, None).sort("game_id")["line_source"].to_list() == ["cfbd", "odds", "cfbd", "cfbd"]
+
+
+def test_refresh_lines_patches_the_site_and_never_sticks(web_cfg):
+    from cfbr.web.lines import refresh_lines
+
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    games = pl.read_parquet(d / "games.parquet")
+    # As built today: CFBD lines kept in cfbd_spread.
+    games.with_columns(cfbd_spread=pl.col("spread")).write_parquet(d / "games.parquet")
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:11+00:00",
+                                                    "cfbd_lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    web_cfg.paths.raw_dir = web_cfg.paths.out_dir.parent / "raw"
+    web_cfg.paths.db_path = web_cfg.paths.out_dir.parent / "db" / "cfb.duckdb"
+    web_cfg.paths.db_path.parent.mkdir(parents=True)
+    assert refresh_lines(web_cfg, SEASON) is None  # no snapshot yet: nothing changes
+
+    # Game 3 (Texas A&M @ Ohio State, unplayed, CFBD −3) moves to −6.5 in a later Odds API snapshot.
+    kick = games.filter(pl.col("game_id") == 3)["kickoff_ts"][0]
+    snaps = web_cfg.paths.raw_dir / "odds" / str(SEASON) / "snapshots"
+    snaps.mkdir(parents=True)
+    ts = datetime.now(UTC).replace(microsecond=0)
+    (snaps / f"{ts:%Y%m%dT%H%M%SZ}.json").write_text(json.dumps(
+        [_odds_event("e3", "Ohio State", "Texas A&M", kick, [("DraftKings", -6.0), ("FanDuel", -7.0)])]))
+    before = (d / "meta.json").stat().st_mtime_ns
+    assert refresh_lines(web_cfg, SEASON) == 1
+    after = pl.read_parquet(d / "games.parquet").sort("game_id")
+    assert after.filter(pl.col("game_id") == 3)["spread"][0] == -6.5  # median of −6 and −7
+    assert after.filter(pl.col("game_id") == 3)["line_source"][0] == "odds"
+    assert after.filter(pl.col("game_id") == 1)["spread"][0] == -7.0  # final: CFBD close untouched
+    # Predictions untouched; meta rewritten last with the snapshot time.
+    assert after["pred_margin"].to_list() == games.sort("game_id")["pred_margin"].to_list()
+    meta = json.loads((d / "meta.json").read_text())
+    assert meta["lines_as_of"] == ts.isoformat() and (d / "meta.json").stat().st_mtime_ns > before
+    html = " ".join(TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text.split())
+    assert "Ohio State −6.5" in html
+
+    # A newer snapshot without the game: it falls back to CFBD instead of keeping the stale odds line.
+    (snaps / f"{ts + timedelta(minutes=5):%Y%m%dT%H%M%SZ}.json").write_text("[]")
+    assert refresh_lines(web_cfg, SEASON) == 0
+    g3 = pl.read_parquet(d / "games.parquet").filter(pl.col("game_id") == 3)
+    assert g3["spread"][0] == -3.0 and g3["line_source"][0] == "cfbd"
+
+
+def test_refresh_lines_skips_while_the_weekly_lock_is_held(web_cfg):
+    import fcntl
+
+    from cfbr.web.lines import refresh_lines
+
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    pl.read_parquet(d / "games.parquet").with_columns(cfbd_spread=pl.col("spread")).write_parquet(d / "games.parquet")
+    web_cfg.paths.raw_dir = web_cfg.paths.out_dir.parent / "raw"
+    web_cfg.paths.db_path = web_cfg.paths.out_dir.parent / "db" / "cfb.duckdb"
+    web_cfg.paths.db_path.parent.mkdir(parents=True)
+    snaps = web_cfg.paths.raw_dir / "odds" / str(SEASON) / "snapshots"
+    snaps.mkdir(parents=True)
+    (snaps / "20261014T210000Z.json").write_text("[]")
+    with open(web_cfg.paths.db_path.parent / ".weekly.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        before = (d / "games.parquet").read_bytes()
+        assert refresh_lines(web_cfg, SEASON) is None
+        assert (d / "games.parquet").read_bytes() == before
+
+
+def test_an_older_odds_snapshot_never_rolls_lines_back():
+    from cfbr.web.lines import newer_than
+
+    sat = datetime(2026, 10, 17, 23, tzinfo=UTC)
+    fresh = (sat, pl.DataFrame({"game_id": [1], "spread": [-3.0]}))
+    # Sunday's CFBD fetch succeeded but the Odds API fetch failed: Saturday's odds snapshot is older.
+    assert newer_than(fresh, "2026-10-18T14:00:00+00:00") is None
+    assert newer_than(fresh, "2026-10-17T14:00:00+00:00") is fresh  # older CFBD: odds apply
+    assert newer_than(fresh, None) is fresh and newer_than(None, "2026-10-18T14:00:00+00:00") is None
+
+
+def test_games_mark_lines_older_than_the_snapshot(web_cfg):
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    games = pl.read_parquet(d / "games.parquet")
+    games.with_columns(line_source=pl.lit("cfbd"), line_as_of=pl.lit("2026-10-11T20:00:11+00:00")).write_parquet(d / "games.parquet")
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-14T21:00:00+00:00",
+                                                    "cfbd_lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    html = " ".join(TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text.split())
+    assert "Lines marked * are older (Oct 11, 3:00 PM CT)" in html and 'title="Older line: as of' in html
+    # Snapshots seconds apart (the same run) aren't "older": no marker, no note.
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:55+00:00",
+                                                    "cfbd_lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    html = TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text
+    assert "Older line" not in html and "Lines marked *" not in html
+
+
 def test_unplayed_lines_say_when_they_were_fetched(web_cfg, tmp_path):
     from cfbr.web.build import lines_as_of
 

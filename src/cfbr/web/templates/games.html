@@ -32,7 +32,9 @@
 
 <h1>{{ season }} · {{ slot|slot_label }}</h1>
 {% if slot.startswith('p') %}<p class="lede">Postseason weeks are 7-day windows from the first bowl game.</p>{% endif %}
-{% if s.meta.lines_as_of and s.meta.live and rows|selectattr("completed", "false")|list %}<p class="note lines-as-of">Vegas lines for games not yet played are as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.</p>{% endif %}
+{% if s.meta.lines_as_of and s.meta.live and rows|selectattr("completed", "false")|list %}<p class="note lines-as-of">Vegas lines for games not yet played are as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.
+  {%- if s.meta.cfbd_lines_as_of|older_line(s.meta.lines_as_of) and rows|selectattr("completed", "false")|selectattr("line_source", "eq", "cfbd")|list %}
+  Lines marked * are older ({{ s.meta.cfbd_lines_as_of|iso_ts }}): the newest odds snapshot had no pre-kickoff line for those games.{% endif %}</p>{% endif %}
 
 {% if locked %}{{ premium_notice(season, "predictions") }}{% endif %}
 {% if summary and summary.n_games %}
@@ -72,7 +74,7 @@
       <td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}{% if g.status in ("postponed", "cancelled") and not any_final %} <span class="badge">{{ g.status }}</span>{% endif %}</td>
       {% if not locked %}<td class="strong wrap" data-v="{{ g.pred_margin|abs if g.pred_margin is not none else -1 }}">{{ g.model_pick }}</td>
       <td class="num opt" data-v="{{ g.fav_prob if g.fav_prob is not none else -1 }}">{{ prob(g.fav_prob) }}</td>{% endif %}
-      <td class="wrap" data-v="{{ g.spread|abs if g.spread is not none and g.spread == g.spread else -1 }}">{{ g.vegas_pick or "—" }}</td>
+      <td class="wrap" data-v="{{ g.spread|abs if g.spread is not none and g.spread == g.spread else -1 }}">{{ g.vegas_pick or "—" }}{% if not g.completed and g.line_source == "cfbd" and g.line_as_of|older_line(s.meta.lines_as_of) %}<sup class="muted" title="Older line: as of {{ g.line_as_of|iso_ts }}">*</sup>{% endif %}</td>
       {% if not locked %}<td class="wrap{% if g.flag %} strong{% endif %}" data-v="{{ g.edge_pts if g.edge_pts is not none else -1 }}">{{ g.edge or "—" }}{% if g.flag == "upset" %} <span class="badge">upset pick</span>{% elif g.flag == "edge" %}<span class="sr-only"> (flagged: {{ threshold|num(0) }}+ off the line)</span>{% endif %}</td>{% endif %}
       {% if any_final %}
       <td>{% if g.completed and g.home_points is not none %}{{ g.away_points }}–{{ g.home_points }}{% else %}<span class="muted">{{ g.status if g.status != "upcoming" else "—" }}</span>{% endif %}</td>
