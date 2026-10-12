@@ -18,7 +18,7 @@
   where one of your books had the number. Not betting advice. Check the live line before you bet.</p>
 
 <details class="books">
-  <summary>Your books: <strong>{% for b in rules.selectable_books if b in books %}{{ b }}{% if not loop.last %}, {% endif %}{% endfor %}</strong>{% if reference %} <span class="muted">(default)</span>{% endif %} <span class="change">Change</span></summary>
+  <summary>Your books: <strong>{% for b in rules.selectable_books if b in books %}{{ b }}{% if not loop.last %}, {% endif %}{% else %}any non-offshore book{% endfor %}</strong>{% if reference %} <span class="muted">(default)</span>{% endif %} <span class="change">Change</span></summary>
   <form class="book-choices" method="post" action="/bets/shortlist/books">
     {% if season %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
     <fieldset>
@@ -29,7 +29,7 @@
     </fieldset>
     <div class="actions">
       <button type="submit">Save</button>
-      {% if not reference %}<button type="submit" class="link" form="books-default">Use default ({{ rules.pricing_books|join(', ') or 'any book' }})</button>{% endif %}
+      {% if not reference %}<button type="submit" class="link" form="books-default">Use default ({{ rules.pricing_books|join(', ') or 'any non-offshore book' }})</button>{% endif %}
     </div>
   </form>
   {% if not reference %}

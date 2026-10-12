@@ -2014,3 +2014,14 @@ def test_shortlist_book_picker_summarizes_the_choice_and_offers_the_default(shor
     # The reset form posts no books (clearing the cookie) and keeps the season.
     reset = html.split('id="books-default"')[1].split("</form>")[0]
     assert 'name="books"' not in reset and 'name="season" value="2026"' in reset
+
+
+def test_shortlist_book_picker_names_the_empty_reference_set(shortlist_client, web_cfg):
+    # pricing_books = [] means any non-offshore book (config.py); the picker must say so.
+    cfg = web_cfg.model_copy(update={"bets": web_cfg.bets.model_copy(update={"pricing_books": []})})
+    c = TestClient(create_app(cfg))
+    html = " ".join(c.get("/bets/shortlist").text.split())
+    assert "Your books: <strong>any non-offshore book</strong>" in html and "(default)" in html
+    c.cookies.set("cfbr_books", "betmgm")
+    html = " ".join(c.get("/bets/shortlist").text.split())
+    assert "Use default (any non-offshore book)" in html
