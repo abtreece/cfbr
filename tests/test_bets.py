@@ -496,3 +496,16 @@ def test_moneyline_bootstrap_resamples_whole_games():
     p = primary(sides.with_columns(real=pl.Series([0.2, 0.0, 0.3, 0.0, 0.25, 0.0])))
     assert p["n_sel_games"] == 3 and p["ci95"][0] > 0 and p["adopt"]
     assert not primary(sides.with_columns(pred=pl.lit(-0.1)))["adopt"]   # nothing selected
+
+
+def test_moneyline_book_with_no_usable_rows_reports_nan():
+    from cfbr.bets.moneyline import bands, game_sides, primary
+
+    # A reported book whose rows all lack the spread: typed empty output, NaN summaries, no crash.
+    d = _ml_frame([{"game_id": 1, "season": 2024, "provider": "X", "home_ml": -150, "away_ml": 130,
+                    "spread": None, "spread_open": None, "margin": 3.0, "cons_close": -3.0, "cons_open": -3.0}])
+    s = game_sides(d, {2024: _table()}, use_open=False)
+    assert s.height == 0 and "pred" in s.columns
+    p = primary(s)
+    assert p["n_sides"] == 0 and math.isnan(p["real"]) and not p["adopt"]
+    assert all(b["n"] == 0 and math.isnan(b["real"]) for b in bands(s))

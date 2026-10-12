@@ -25,6 +25,10 @@ MOVE = 1.5               # precheck: games whose consensus moved at least this m
 BANDS = [(0.0, 0.20, "<20%"), (0.20, 0.45, "20–45%"), (0.45, 0.55, "45–55%"),
          (0.55, 0.80, "55–80%"), (0.80, 1.01, "≥80%")]
 N_BOOT, SEED = 10_000, 0
+SIDES_SCHEMA = {"season": pl.Int32, "game_id": pl.Int64, "provider": pl.Utf8, "side": pl.Utf8,
+                "odds": pl.Float64, "number": pl.Float64, "center": pl.Float64, "p_win": pl.Float64,
+                "ev_ml": pl.Float64, "ev_ats": pl.Float64, "pred": pl.Float64,
+                "ret_ml": pl.Float64, "ret_ats": pl.Float64, "real": pl.Float64}
 
 
 def payout(odds: float) -> float:
@@ -104,12 +108,13 @@ def game_sides(d: pl.DataFrame, tables: dict[int, PricingTable], use_open: bool)
                          "odds": odds, "number": number, "center": center, "p_win": p_win,
                          "ev_ml": ev_ml, "ev_ats": ev_ats, "pred": ev_ml - ev_ats,
                          "ret_ml": ret_ml, "ret_ats": ret_ats, "real": ret_ml - ret_ats})
-    return pl.DataFrame(rows, infer_schema_length=None)
+    return pl.DataFrame(rows, schema=SIDES_SCHEMA)
 
 
 def cluster_bootstrap(sel: pl.DataFrame, col: str = "real") -> tuple[float, float]:
     """95% percentile CI of the mean of ``col``, resampling whole games (both sides together)."""
-    per = sel.group_by("game_id").agg(s=pl.col(col).sum(), n=pl.len())
+    # Sorted so a fixed seed draws the same games every run (group_by order is not stable).
+    per = sel.group_by("game_id").agg(s=pl.col(col).sum(), n=pl.len()).sort("game_id")
     if per.height < 2:
         return float("nan"), float("nan")
     s, n = per["s"].to_numpy(), per["n"].to_numpy()
