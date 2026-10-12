@@ -93,6 +93,7 @@ def test_roster_web_tables_status_departures_and_labels():
     assert set(t["roster_players"]["team"]) <= {"A", "B"}          # FBS teams only
     dep = {r["player_id"]: r for r in t["roster_departures"].iter_rows(named=True)}
     assert dep["qbA"]["team"] == "A" and dep["qbA"]["to_team"] is None
+    assert dep["qbA"]["prev_pass_plays"] > 0  # the web tile names the departed starter from this
     assert dep["wrA"]["to_team"] == "B" and "rbA" not in dep
     assert set(ROSTER_SUMMARY_LABELS) == set(ROSTER_FEATURES)
     assert t["roster_summary"].columns[:3] == ["season", "team", "roster_as_of"]

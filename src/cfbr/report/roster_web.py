@@ -190,7 +190,7 @@ def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame)
     return out.select(pl.lit(season, pl.Int32).alias("season"), pl.col("prev_team").alias("team"), "player_id",
                       "name", "position", "prev_class_year", "to_team", reason.alias("reason"), "draft_round",
                       "draft_overall", "draft_nfl_team", "draft_nfl_team_name", "in_portal", "portal_destination", "prev_plays",
-                      "prev_ppa_total", "prev_tackles", "prev_havoc")
+                      "prev_ppa_total", "prev_pass_plays", "prev_tackles", "prev_havoc")
 
 
 def _display_roster(ds: Dataset, season: int) -> pl.DataFrame:

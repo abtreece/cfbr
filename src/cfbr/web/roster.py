@@ -63,6 +63,37 @@ def summary_tiles(row: dict) -> list[dict]:
             for k, (label, definition) in ROSTER_SUMMARY_LABELS.items()]
 
 
+def last_qb(players: pl.DataFrame, departures: pl.DataFrame, summary: dict | None) -> dict:
+    """Last season's starting QB (most pass plays for the team, the model's definition) and where
+    he is now: back, drafted, at another school, or gone. Replaces a bare Yes/No on the tiles."""
+    cands: list[tuple[float, str, str]] = []
+    back = players.filter((pl.col("status") == "returner") & (pl.col("prev_pass_plays") > 0))
+    cands += [(float(r["prev_pass_plays"]), r["name"], "returns") for r in back.iter_rows(named=True)]
+    if "prev_pass_plays" in departures.columns:  # older builds lack the column
+        for r in departures.filter(pl.col("prev_pass_plays") > 0).iter_rows(named=True):
+            reason = r.get("reason")
+            if reason == "drafted":
+                where = "drafted" + (f" (Rd {int(r['draft_round'])})" if not _missing(r.get("draft_round")) else "")
+            elif r.get("to_team"):
+                where = f"now at {r['to_team']}"
+            elif r.get("portal_destination"):
+                where = f"now at {r['portal_destination']}"
+            elif r.get("in_portal"):
+                where = "entered the portal"
+            else:
+                where = "not on an FBS roster"
+            cands.append((float(r["prev_pass_plays"]), r["name"], where))
+    feat = summary.get("qb_returns") if summary else None
+    if not cands or (cands and max(cands)[2] == "returns" and not _missing(feat) and feat < 0.5):
+        # No pass-play data for the departed starter (or none at all): fall back to the feature.
+        if _missing(feat):
+            return {"name": "—", "detail": None}
+        return ({"name": "Back", "detail": "last season's starter is on the roster"} if feat >= 0.5
+                else {"name": "Not back", "detail": "last season's starter is off the roster"})
+    att, name, where = max(cands)
+    return {"name": name, "detail": f"{where} · {count_str(att)} pass att. last season"}
+
+
 def incoming_qb(summary: dict | None) -> dict | None:
     """The incoming transfer QB with the most pass attempts last season (any count), if any.
     Complements qb_in_ppa, which only counts QBs with 100+ attempts."""
@@ -130,7 +161,7 @@ def roster_card(roster: Roster | None, team: str) -> dict | None:
             "no_stats": counts.get("new", 0), "departures": d.height, "transfers_out": d["to_team"].is_not_null().sum(),
             "drafted": int((d["reason"] == "drafted").sum()) if "reason" in d.columns else None,
             "ret_offense": feature_value("off_ret_share", s.get("off_ret_share")) if s else "—",
-            "qb_back": feature_value("qb_returns", s.get("qb_returns")) if s else "—",
+            "last_qb": last_qb(p, d, s),
             "as_of": s.get("roster_as_of") if s else None}
 
 

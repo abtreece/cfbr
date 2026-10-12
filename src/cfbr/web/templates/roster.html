@@ -21,7 +21,8 @@
 <div class="tiles">
   {{ tile("Players", card.size, card.returners ~ " returners · " ~ card.transfers_in ~ " transfers in · " ~ card.no_stats ~ " no prior stats") }}
   {{ tile("Departures", card.departures, (card.drafted ~ " drafted · " if card.drafted is not none else "") ~ card.transfers_out ~ " now on another roster") }}
-  {% for t in tiles %}{% if t.key in ("off_ret_share", "qb_returns", "def_ret_tackles", "qb_in_ppa") %}{{ tile(t.label, t.value) }}{% endif %}{% endfor %}
+  {% for t in tiles %}{% if t.key in ("off_ret_share", "def_ret_tackles", "qb_in_ppa") %}{{ tile(t.label, t.value) }}{% endif %}{% endfor %}
+  {{ tile("Last season's starting QB", card.last_qb.name, card.last_qb.detail) }}
   {% if in_qb %}{{ tile("Incoming transfer QB", in_qb.name, in_qb.detail) }}{% endif %}
 </div>
 {% endif %}

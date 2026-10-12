@@ -807,6 +807,10 @@ def test_team_page_shows_roster_card(roster_client):
     html = " ".join(roster_client.get("/team/2026/Texas%20A%26M").text.split())
     assert '<a href="/roster/2026/Texas%20A%26M">Full roster' in html
     assert "1 returners · 1 transfers in" in html
+    # The starting-QB tile names him and says where he is, not a bare Yes/No.
+    assert ("starting QB</div><div class=\"tile-value\">Sam Starter</div> "
+            "<div class=\"tile-sub\">returns · 380 pass att. last season" in html)
+    assert "Starting QB back" not in html
     # No roster rows for this team -> no card.
     assert "/roster/2026/Hawai%27i" not in roster_client.get("/team/2026/Hawai%27i").text
 
@@ -955,3 +959,23 @@ def test_player_page_without_career_file(roster_client):
     assert r.status_code == 200 and "Career history isn't available" in r.text
     assert roster_client.get("/player/2026/nope").status_code == 404
     assert roster_client.get("/api/player/2026/nope").status_code == 404
+
+
+def test_last_qb_names_the_starter_and_where_he_went():
+    from cfbr.web.roster import last_qb
+
+    players = pl.DataFrame({"name": ["Backup Bob"], "status": ["returner"], "prev_pass_plays": [40]})
+    deps = pl.DataFrame({"name": ["Gone Pro"], "reason": ["drafted"], "draft_round": [1], "to_team": [None],
+                         "portal_destination": [None], "in_portal": [False], "prev_pass_plays": [410]},
+                        schema_overrides={"to_team": pl.Utf8, "portal_destination": pl.Utf8})
+    assert last_qb(players, deps, {"qb_returns": 0.0}) == {
+        "name": "Gone Pro", "detail": "drafted (Rd 1) · 410 pass att. last season"}
+    moved = deps.with_columns(reason=pl.lit("transfer"), to_team=pl.lit("Ohio State"), draft_round=pl.lit(None, pl.Int32))
+    assert last_qb(players, moved, {"qb_returns": 0.0})["detail"].startswith("now at Ohio State")
+    # Returner with the most pass plays is the starter.
+    assert last_qb(players, deps.clear(), {"qb_returns": 1.0}) == {
+        "name": "Backup Bob", "detail": "returns · 40 pass att. last season"}
+    # Older build: departures lack pass plays, so the feature decides and no name is guessed.
+    old = deps.drop("prev_pass_plays")
+    assert last_qb(players, old, {"qb_returns": 0.0})["name"] == "Not back"
+    assert last_qb(players.clear(), old, None) == {"name": "—", "detail": None}

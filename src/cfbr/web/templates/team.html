@@ -62,7 +62,7 @@
 <div class="tiles">
   {{ tile("Players", roster.size, roster.returners ~ " returners · " ~ roster.transfers_in ~ " transfers in") }}
   {{ tile("Returning offense", roster.ret_offense, "share of last season's offensive plays") }}
-  {{ tile("Starting QB back", roster.qb_back) }}
+  {{ tile("Last season's starting QB", roster.last_qb.name, roster.last_qb.detail) }}
   {{ tile("Departures", roster.departures, (roster.drafted ~ " drafted · " if roster.drafted is not none else "") ~ roster.transfers_out ~ " to other rosters") }}
 </div>
 <p><a href="/roster/{{ season }}/{{ team|q }}">Full roster, transfers and departures →</a></p>
