@@ -18,23 +18,21 @@
 <div class="tiles">
   {% if not locked %}
   {% if is_fbs %}{{ tile("Rank", "#" ~ latest.rank, "of FBS") }}{% endif %}
-  {{ tile("Rating", latest.rating|signed, "pts vs. avg FBS") }}
-  {{ tile("Offense", latest.offense|signed) }}
-  {{ tile("Defense", latest.defense|signed) }}
+  {{ tile("Rating", latest.rating|signed, "off " ~ latest.offense|signed ~ " · def " ~ latest.defense|signed ~ " · prior " ~ latest.prior_share|pct(0)) }}
   {% endif %}
   {{ tile("Record", latest.w ~ "–" ~ latest.l) }}
-  {% if not locked %}{{ tile("Prior share", latest.prior_share|pct(0)) }}{% endif %}
   {% if is_fbs %}
-  {{ tile("AP poll", "#" ~ latest.ap_rank if latest.ap_rank is not none else "Unranked") }}
-  {{ tile("Coaches poll", "#" ~ latest.coaches_rank if latest.coaches_rank is not none else "Unranked") }}
-  {% if show_cfp %}{{ tile("CFP", "#" ~ latest.cfp_rank if latest.cfp_rank is not none else "Unranked") }}{% endif %}
+  {% set others = [] %}
+  {% if latest.coaches_rank is not none %}{% set _ = others.append("Coaches #" ~ latest.coaches_rank) %}{% endif %}
+  {% if show_cfp and latest.cfp_rank is not none %}{% set _ = others.append("CFP #" ~ latest.cfp_rank) %}{% endif %}
+  {{ tile("AP poll", "#" ~ latest.ap_rank if latest.ap_rank is not none else "Unranked", others|join(" · ")) }}
   {% endif %}
 </div>
-{% if is_fbs and polls %}<p class="note poll-note">Polls — {{ polls|join(" · ") }}.</p>{% endif %}
+{% if is_fbs and polls %}<p class="note poll-note">Polls: {{ polls|join(" · ") }}.</p>{% endif %}
 
 {% if explain %}
 <h2>Explain the rating</h2>
-<p class="note">The four play-efficiency terms behind the rating, each adjusted for opponents and shown as a deviation from the FBS average (higher is better on both sides of the ball). The rating converts them to points.</p>
+<p class="note">Opponent-adjusted, against the FBS average; higher is better on both sides. <a href="/method#rating">More →</a></p>
 <div class="tiles explain">
   {% for e in explain %}
   {{ tile(e.label, (e.value|signed(3)) if e.kind == "ppa" else ((100 * e.value)|signed(1) ~ " pp"), e.sub) }}
@@ -78,19 +76,15 @@
 {% endif %}
 
 {% if roster %}
-<h2>Roster</h2>
-<div class="tiles">
-  {{ tile("Players", roster.size, roster.returners ~ " returners · " ~ roster.transfers_in ~ " transfers in") }}
-  {{ tile("Returning offense", roster.ret_offense, "share of last season's offensive plays") }}
-  {{ tile("Last season's starting QB", roster.last_qb.name, roster.last_qb.detail) }}
-  {{ tile("Departures", roster.departures, (roster.drafted ~ " drafted · " if roster.drafted is not none else "") ~ roster.transfers_out ~ " to other rosters") }}
-</div>
-<p><a href="/roster/{{ season }}/{{ team|q }}">Full roster, transfers and departures →</a></p>
+<p class="note roster-line"><strong>Roster:</strong> {{ roster.size }} players ({{ roster.returners }} returners, {{ roster.transfers_in }} transfers in)
+  {%- set qb = roster.last_qb %}
+  {%- if qb.name in ("Back", "Not back") %} · last season's starting QB {{ qb.name|lower }}
+  {%- elif qb.name != "—" %} · last season's starting QB {{ qb.name }} ({{ qb.detail }}){% endif %}
+  · {{ roster.departures }} departures. <a href="/roster/{{ season }}/{{ team|q }}">Full roster →</a></p>
 {% endif %}
 
 <h2>Games</h2>
-<p class="note">Margins are from {{ team }}'s side: positive means {{ team }} {% if not locked %}is expected to win (or won){% else %}won or is favored{% endif %} by that many points.
-  Predictions use only games played before each week kicked off. #N is the opponent's AP rank going into the game.</p>
+<p class="note">Margins are from {{ team }}'s side: positive means {{ team }} {% if not locked %}is expected to win (or won){% else %}won or is favored{% endif %} by that many points.</p>
 <div class="table-wrap">
 <table class="data">
   <thead>

@@ -117,11 +117,15 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             s = store.season(season)
             if s is not None:
                 fbs = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
+            open_bets = [r for r in rows if r["status"] == "open"]
             ctx |= {"summary": summarize(ledger, cfg.bets), "best": summarize(ledger, cfg.bets, "best"),
                     "breakdown": breakdown(ledger, cfg), "weeks": weeks, "tiers": by_tier(ledger, cfg.bets),
                     "tests": tracked_tests(ledger, cfg.bets),
                     "what_if": (wi := what_if(ledger, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll),
-                    "open_bets": [r for r in rows if r["status"] == "open"],
+                    "open_bets": open_bets,
+                    # Older ledgers predate these columns; don't show a column of dashes.
+                    "show_cents": any(r.get("edge_cents") is not None for r in open_bets),
+                    "show_cover": any(r.get("cover_prob") is not None for r in open_bets),
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
         ctx["has_retro"] = season in store.retro_seasons()

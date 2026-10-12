@@ -171,16 +171,6 @@ def rankings_rows(s: Season, week: int, conference: str | None = None) -> list[d
     return cur.join(trend, on="team", how="left").sort("rank").to_dicts()
 
 
-def ap_disagreements(rows: list[dict], n: int = 3) -> dict:
-    """Where the model and the AP poll differ most: ``over`` (AP rank well above the model's),
-    ``under`` (model well above the AP rank) and ``unranked`` (model top 25, no AP vote)."""
-    ranked = [r for r in rows if r.get("ap_rank") is not None and r.get("vs_ap") is not None]
-    over = sorted((r for r in ranked if r["vs_ap"] > 0), key=lambda r: (-r["vs_ap"], r["ap_rank"]))[:n]
-    under = sorted((r for r in ranked if r["vs_ap"] < 0), key=lambda r: (r["vs_ap"], r["rank"]))[:n]
-    unranked = [r for r in rows if r.get("ap_rank") is None and r.get("rank") is not None and r["rank"] <= 25][:n]
-    return {"over": over, "under": under, "unranked": unranked}
-
-
 EXPLAIN = (("o_ppa", "Offense: points per play", "opponent-adjusted PPA, {} in FBS"),
            ("d_ppa", "Defense: points per play", "opponent-adjusted PPA allowed, {} in FBS"),
            ("o_sr", "Offense: success rate", "opponent-adjusted, {} in FBS"),
@@ -492,13 +482,11 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         fbs = s.ratings.filter(pl.col("fbs"))
         conferences = sorted(c for c in fbs["conference"].unique().to_list() if c)
         lo, hi = fbs["rating"].min(), fbs["rating"].max()
-        as_of = fbs.filter(pl.col("week") == week)["as_of"][0]
         show_cfp = fbs.filter(pl.col("week") == week)["cfp_rank"].is_not_null().any()
         show_ap = fbs.filter(pl.col("week") == week)["ap_rank"].is_not_null().any()
         resp = render(request, "rankings.html", s=s, season=s.meta["season"], week=week, conf=conf, rows=rows,
                       polls=poll_note(s, week), show_cfp=show_cfp, show_ap=show_ap,
-                      ap=ap_disagreements(rows if not conf else rankings_rows(s, week)) if show_ap else None,
-                      conferences=conferences, lo=lo, hi=hi, as_of=as_of, kind=season_kind(cfg, s.meta["season"]),
+                      conferences=conferences, lo=lo, hi=hi, kind=season_kind(cfg, s.meta["season"]),
                       live_season=live_season)
         # The landing page with a live-season notice is viewer-specific (free viewers only see it).
         return private(resp, s, shared=live_season is None)
@@ -590,6 +578,13 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                       per_season=per_season, runs=store.runs(), log=store.accuracy_log(season), cfg=cfg)
         # Aggregate only, the same for every viewer; a finished season's page may be cached.
         return private(resp, s) if not s.meta.get("live") else resp
+
+    @app.get("/method", response_class=HTMLResponse, include_in_schema=False)
+    def method_page(request: Request):
+        # Definitions and conventions only; no data, so the same for every viewer.
+        resp = render(request, "method.html", cfg=cfg)
+        resp.headers.update(PUBLIC_HOUR)
+        return resp
 
     # -- JSON API ---------------------------------------------------------------
 

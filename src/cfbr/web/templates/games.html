@@ -13,8 +13,7 @@
 </form>
 
 <h1>{{ season }} · {{ slot|slot_label }}</h1>
-<p class="lede">{% if locked %}Schedule, scores, closing lines and AP ranks.{% else %}Predictions use only games played before this week's first kickoff.{% endif %}
-  {% if slot.startswith('p') %}Postseason weeks are 7-day windows from the first bowl game.{% endif %}</p>
+{% if slot.startswith('p') %}<p class="lede">Postseason weeks are 7-day windows from the first bowl game.</p>{% endif %}
 
 {% if locked %}{{ premium_notice(season, "predictions") }}{% endif %}
 {% if summary and summary.n_games %}
@@ -68,6 +67,5 @@
   </tbody>
 </table>
 </div>
-<p class="note">#N is the team's AP rank going into the game. Final score is shown away–home.{% if not locked %} "Model vs Vegas" is how many points the model's margin differs from the closing line, and toward which team.
-  ATS grades the model's side of the closing line; pushes and exact agreement are not graded.{% endif %}</p>
+<p class="note">#N is the AP rank going into the game; finals are away–home. <a href="/method#lines">Column definitions →</a></p>
 {% endblock %}

@@ -2,9 +2,11 @@
 {% from "macros.html" import line_chart %}
 {% if plans and plans[0].weeks %}
 <{{ hx }}>What if: staking plans</{{ hx }}>
+{% if explain is not defined or explain %}
 <p class="note">Hypothetical: the same graded bets re-staked from the {{ rules.bankroll|money(false) }} starting bankroll.
   This is not a separate record and not a recommendation; with this few bets, the plan that looks best is mostly luck.
   All-in splits the whole bankroll across that week's bets, so a week with one bet puts everything on one game.</p>
+{% endif %}
 {% if chart %}{{ line_chart(cid, chart, "Bankroll by staking plan", "dollars") }}{% endif %}
 <div class="table-wrap">
 <table class="data">

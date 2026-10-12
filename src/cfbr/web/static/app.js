@@ -28,6 +28,14 @@ document.getElementById("theme-toggle")?.addEventListener("click", () => {
   document.querySelectorAll("figure.chart").forEach((f) => f._render && f._render());
 });
 
+// -- links to a collapsed <details> (e.g. "How it works ↑") open it ------------------
+function openTarget() {
+  const el = location.hash && document.getElementById(location.hash.slice(1));
+  if (el && el.tagName === "DETAILS") el.open = true;
+}
+window.addEventListener("hashchange", openTarget);
+openTarget();
+
 // -- sortable tables ------------------------------------------------------------------
 document.querySelectorAll("table.sortable").forEach((table) => {
   const headers = Array.from(table.querySelectorAll("th"));

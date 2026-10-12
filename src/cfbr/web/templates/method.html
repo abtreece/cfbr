@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Method · CFB Ratings{% endblock %}
+{% block content %}
+<h1>Method</h1>
+<p class="lede">How the ratings, predictions and accuracy numbers are made, and what each column means. Every other page links here instead of repeating it.</p>
+
+<div class="prose">
+<h2 id="rating">The rating</h2>
+<p>A team's rating is its expected point margin against an average FBS team on a neutral field: +10 means it would be favored by 10 over an average FBS team. It comes from opponent-adjusted play efficiency (expected points added per play and success rate, on offense and defense), fit with ridge regression, shrunk toward a preseason prior and calibrated to points.</p>
+<ul>
+  <li><strong>Off / Def</strong> are the offense and defense components in points; higher is better on both sides of the ball.</li>
+  <li><strong>Prior share</strong> is how much of the rating still comes from the preseason prior. It falls as a team's plays accumulate; by midseason most of a rating comes from this season's games.</li>
+  <li><strong>Explain the rating</strong> (team pages) shows the four play-efficiency terms behind it, each adjusted for opponents and shown as a deviation from the FBS average.</li>
+  <li>FCS opponents are pooled {% if cfg.prep.fcs_pooling == "conference" %}by conference, one rated team per FCS conference{% else %}into a single rated team{% endif %}.</li>
+</ul>
+
+<h2 id="point-in-time">Point in time</h2>
+<p>Every prediction for a game uses only games that kicked off before that week's first kickoff, so the numbers shown are the ones the model would have published at the time. Ratings "through week N" are fixed until the next week kicks off. Postseason weeks are 7-day windows from the first bowl game.</p>
+
+<h2 id="lines">Betting lines</h2>
+<p>Lines are never model inputs; they are only used to measure the model.</p>
+<ul>
+  <li><strong>Vegas / closing line</strong> is the median closing spread across sportsbooks.</li>
+  <li><strong>Model vs Vegas</strong> is how many points the model's margin differs from the closing line, and toward which team.</li>
+  <li><strong>ATS</strong> grades the model's side of the closing line; pushes and exact agreement are not graded.</li>
+  <li><strong>Win %</strong> is the model's win probability, from its margin and the calibrated spread of game outcomes.</li>
+</ul>
+
+<h2 id="polls">Polls</h2>
+<p>AP, Coaches and CFP ranks are shown for comparison only and are never model inputs. <strong>#N</strong> before a team's name is its AP rank going into the game. <strong>vs AP</strong> is the model's rank minus the AP rank: ▼ means the model has the team higher than the poll.</p>
+
+<h2 id="accuracy">Accuracy</h2>
+<ul>
+  <li><strong>MAE</strong> is the mean absolute error of the predicted margin, in points; lower is better. "Same games" compares the model and Vegas only on games with a closing line.</li>
+  <li><strong>Massey</strong> is a score-only baseline rating, for reference.</li>
+  <li><strong>Tuning seasons</strong> ({{ cfg.seasons.tuning[0] }}–{{ cfg.seasons.tuning[1] }}) were used to tune the model, so their numbers are slightly optimistic. <strong>Holdout seasons</strong> ({{ cfg.seasons.holdout[0] }}–{{ cfg.seasons.holdout[1] }}) were never used for tuning.</li>
+  <li>95% intervals on against-the-spread rates are Wilson intervals.</li>
+</ul>
+
+<h2 id="projections">Season odds</h2>
+<p>Each week's season odds come from simulating the rest of the season many times on the ratings available after that week, then the conference title games and the playoff. They are probabilities, not predictions. Bowl means 6+ wins; Bye means a top-4 playoff seed; &lt;1% means it happened in at least one simulated season but under 1 in 100. The odds page lists the simplifications each simulation makes.</p>
+
+<h2 id="matchup">Matchup tool</h2>
+<p>Expected margin = rating difference + home edge (0 on a neutral field); win probability = Φ(margin / σ), using the same points calibration as the game predictions. It runs in your browser on the published ratings.</p>
+
+<h2 id="rosters">Rosters</h2>
+<ul>
+  <li>Rosters come from CFBD and are imperfect. Last-season numbers are at whatever school the player was on.</li>
+  <li><strong>No prior stats</strong> means no box-score production last season: freshmen, most offensive linemen, and anyone without recorded stats.</li>
+  <li><strong>Departures</strong> are players from last season who are not on this roster. "Drafted" is the NFL draft held before this season. Portal entries are matched by name and school, so a few may be missed or mismatched. "Not on a roster" with no draft or portal record usually means eligibility ran out.</li>
+  <li>Final scores are shown away–home throughout the site.</li>
+</ul>
+</div>
+{% endblock %}
