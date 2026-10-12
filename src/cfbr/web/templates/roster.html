@@ -1,6 +1,13 @@
 {% extends "base.html" %}
-{% from "macros.html" import tile, team_link, tabs %}
+{% from "macros.html" import tile, team_link, tabs, col_legend  %}
 {% block title %}{{ team }} {{ season }} roster · CFB Ratings{% endblock %}
+{% set col_defs = [
+  ("Plays", "Plays with a recorded result last season, at any school"),
+  ("PPA/play", "Expected points added per play last season"),
+  ("Tkl", "Tackles last season, at any school"),
+  ("Havoc", "Tackles for loss + passes defended + interceptions last season"),
+  ("Career", "Prior seasons with recorded stats; for QBs, prior-season starts (games leading his team in pass attempts, 5+)"),
+  ("Class", "Class last season")] %}{% set col = dict(col_defs) %}
 {% block content %}
 <form class="filters" method="get" onsubmit="location.href='/roster/'+this.season.value+'/{{ team|q }}'; return false;">
   {% if roster_seasons|length > 1 %}
@@ -28,7 +35,7 @@
 
 {% if tiles %}
 <details class="rules">
-  <summary>Roster measures the model uses</summary>
+  <summary>Roster measures {{ MODEL }} uses</summary>
   <div class="table-wrap">
   <table class="data">
     <thead><tr><th>Measure</th><th class="num">{{ team }}</th><th class="opt">What it means</th></tr></thead>
@@ -63,11 +70,11 @@
     <th data-sort="num" class="num opt">#</th><th data-sort="text">Name</th><th data-sort="text">Pos</th>
     <th data-sort="num" data-first="asc" class="num opt">Class</th><th data-sort="num" class="num opt">Ht</th><th data-sort="num" class="num opt">Wt</th>
     <th data-sort="text" class="opt">Hometown</th><th data-sort="text">Status</th>
-    <th data-sort="num" class="num" title="Plays with a recorded result last season, at any school">Plays</th>
-    <th data-sort="num" class="num opt" title="Expected points added per play last season">PPA/play</th>
-    <th data-sort="num" class="num opt-xs" title="Tackles last season, at any school">Tkl</th>
-    <th data-sort="num" class="num opt" title="Tackles for loss + passes defended + interceptions last season">Havoc</th>
-    <th data-sort="num" class="opt" title="Prior seasons with recorded stats; for QBs, prior-season starts (games leading his team in pass attempts, 5+)">Career</th>
+    <th data-sort="num" class="num" title="{{ col["Plays"] }}">Plays</th>
+    <th data-sort="num" class="num opt" title="{{ col["PPA/play"] }}">PPA/play</th>
+    <th data-sort="num" class="num opt-xs" title="{{ col["Tkl"] }}">Tkl</th>
+    <th data-sort="num" class="num opt" title="{{ col["Havoc"] }}">Havoc</th>
+    <th data-sort="num" class="opt" title="{{ col["Career"] }}">Career</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}
@@ -91,6 +98,7 @@
   </tbody>
 </table>
 </div>
+{{ col_legend(col_defs) }}
 <p class="note">Last-season numbers are at whatever school the player was on. <a href="/method#rosters">More →</a></p>
 
 <h2>Departures</h2>
@@ -112,7 +120,7 @@
 <div class="table-wrap">
 <table class="data sortable" id="departures">
   <thead><tr><th data-sort="text">Name</th><th data-sort="text">Pos</th>
-    <th data-sort="num" data-first="asc" class="num opt" title="Class last season">Class</th>
+    <th data-sort="num" data-first="asc" class="num opt" title="{{ col["Class"] }}">Class</th>
     <th data-sort="num" data-first="asc">Why / now at</th>
     <th data-sort="num" class="num">Plays</th><th data-sort="num" class="num opt">PPA total</th>
     <th data-sort="num" class="num opt-xs">Tkl</th><th data-sort="num" class="num opt">Havoc</th></tr></thead>

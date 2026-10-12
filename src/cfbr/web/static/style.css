@@ -146,6 +146,12 @@ td.spark svg { display: block; }
 td.spark polyline { fill: none; stroke: var(--series-1); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 
 details.table-view { margin: 8px 0 0; }
+/* Column definitions under a table (same text as the header tooltips). */
+details.legend { margin: 6px 0 0; font-size: 13px; color: var(--text-2); }
+details.legend summary { cursor: pointer; color: var(--text-2); }
+details.legend dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0 0; max-width: 80ch; }
+details.legend dt { font-weight: 600; color: var(--text); }
+details.legend dd { margin: 0; }
 .diag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 details.table-view summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin-bottom: 8px; }
 

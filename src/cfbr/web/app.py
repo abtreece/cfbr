@@ -568,8 +568,10 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         if slot not in order:
             raise HTTPException(404, f"No such week in {s.meta['season']}. Pick one from the week menu.")
         week_games = s.games.filter(pl.col("slot") == slot)
-        conferences = sorted({c for col in ("home_conference", "away_conference")
-                              for c in week_games[col].drop_nulls().to_list()})
+        fbs_teams = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
+        # Conferences of this week's FBS teams only (FCS opponents' leagues aren't a useful filter).
+        conferences = sorted({r[f"{side}_conference"] for r in week_games.to_dicts() for side in ("home", "away")
+                              if r[f"{side}_team"] in fbs_teams and r[f"{side}_conference"]})
         # ?conf=SEC keeps games with an SEC team on either side; ?conf=top25 games with an AP-ranked team.
         if conf == "top25":
             g = week_games.filter(pl.col("home_ap_rank").is_not_null() | pl.col("away_ap_rank").is_not_null())
@@ -588,12 +590,17 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
             rows = [r for r in rows if r["flag"]]
         elif show == "upsets":
             rows = [r for r in rows if r["flag"] == "upset"]
+        if show != "all":  # a flagged view leads with the biggest disagreements
+            rows.sort(key=lambda r: -(r["edge_pts"] or 0))
         done = week_games.filter(pl.col("completed"))  # week tiles cover the whole week
         summary = summarize(done) if done.height and not locked else None
-        fbs_teams = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
+        # Season-to-date record against the spread (public on /accuracy), shown as a caution next to
+        # the flag filters. Not the edge-bucket research, which stays behind the betting gate (/lab).
+        ats = None if locked else season_summary(s)
         resp = render(request, "games.html", s=s, season=s.meta["season"], slot=slot, slot_order=order, rows=rows,
                       summary=summary, fbs_teams=fbs_teams, any_final=done.height > 0, locked=locked,
-                      show=show, counts=counts, threshold=cfg.bets.threshold, conf=conf, conferences=conferences)
+                      show=show, counts=counts, threshold=cfg.bets.threshold, conf=conf, conferences=conferences,
+                      ats=ats)
         return private(resp, s)
 
     @app.get("/matchup", response_class=HTMLResponse, include_in_schema=False)

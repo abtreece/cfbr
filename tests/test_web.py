@@ -892,7 +892,7 @@ def odds_client(web_cfg):
 
 def test_team_page_shows_its_projection(odds_client):
     html = " ".join(odds_client.get("/team/2026/Texas%20A%26M").text.split())
-    assert "Season outlook" in html and "Expected wins</div><div class=\"tile-value\">10.4" in html
+    assert "<h2>Projections <span" in html and "Expected wins</div><div class=\"tile-value\">10.4" in html
     # The link filters /odds to the team's conference in the ratings (Big Ten in this fixture).
     assert "/odds?season=2026&amp;week=1&amp;conf=Big%20Ten" in html
 
@@ -1312,7 +1312,10 @@ def test_flagged_games_are_highlighted_and_filterable(client):
     # Game 1: model Texas A&M by 10, line Texas A&M -7: 3-point edge -> flagged at the bet threshold.
     assert 'class="flagged"' in html and "Upset alerts" not in html
     assert "(flagged: 3+ off the line)" in html  # a text marker, not just the row tint
-    assert 'show=flagged" title=' in html and "Flagged <span class=\"muted\">1</span>" in html
+    assert "Flagged <span class=\"muted\">1</span>" in html
+    # "Flagged" is defined once, under the chips, with the season's public ATS as a caution.
+    assert html.count("picks the underdog, or is 3+ points off the") == 1
+    assert "against the spread this season" in html and "break-even at −110 is 52.4%" in html
     only = " ".join(client.get("/games?season=2026&slot=r01&show=flagged").text.split())
     assert only.count('class="flagged"') == only.count("<tr class") == 1
     # An unknown filter falls back to all games.
@@ -1446,14 +1449,95 @@ def test_bets_lead_with_open_bets(bets_client):
     assert "no settled bets yet" not in html
 
 
+def test_track_record_is_a_ratings_tab(client):
+    from cfbr.web import MODEL_NAME
+
+    rankings = client.get("/rankings?season=2026&week=1").text
+    accuracy = client.get("/accuracy?season=2026").text
+    for html, here in ((rankings, "Rankings"), (accuracy, "Track record")):
+        tabs = html[html.index('<nav class="tabs" aria-label="Ratings">'):]
+        tabs = tabs[:tabs.index("</nav>")]
+        assert ">Rankings</a>" in tabs and ">Track record</a>" in tabs
+        assert f'aria-current="page">{here}</a>' in tabs
+    # Rankings names the model and points at its track record.
+    assert f"{MODEL_NAME} ratings: each team's expected margin" in rankings
+    assert f'<a href="/accuracy?season=2026">How accurate is {MODEL_NAME}?' in rankings
+
+
+def test_flagged_view_leads_with_the_biggest_edges_and_filters_fbs_conferences(web_cfg):
+    from cfbr.web.app import game_row
+
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    # Week 2's FCS opponent (Montana, from the FCS:Big Sky pool) plays in a real FCS league.
+    games = pl.read_parquet(d / "games.parquet")
+    games.with_columns(away_conference=pl.when(pl.col("away_team") == "Montana").then(pl.lit("Big Sky"))
+                       .otherwise(pl.col("away_conference"))).write_parquet(d / "games.parquet")
+    (d / "meta.json").write_text((d / "meta.json").read_text())  # meta last, as the build does
+    client = TestClient(create_app(web_cfg))
+    html = client.get("/games?season=2026&slot=r02").text
+    assert "Montana" in html
+    # CFBrR margin and the Vegas line sort too.
+    assert html.count('<th data-sort="num"') >= 5 and '<th data-sort="num" title="Median spread' in html
+    # Only FBS teams' conferences are offered.
+    conf = html[html.index('name="conf"'):html.index("</select>", html.index('name="conf"'))]
+    assert "Big Sky" not in conf and "<option >SEC</option>" in conf
+    assert "Big Sky" in pl.read_parquet(d / "games.parquet")["away_conference"].to_list()  # the check is live
+    # Flagged rows sort by edge, largest first (game_row's edge_pts).
+    rows = [game_row(r, None, True, 3.0) for r in (
+        {"home_team": "H", "away_team": "A", "pred_margin": 10.0, "win_prob": 0.7, "spread": -6.0, "margin": None, "completed": False},
+        {"home_team": "H", "away_team": "A", "pred_margin": 12.0, "win_prob": 0.8, "spread": -3.0, "margin": None, "completed": False})]
+    assert sorted(r["edge_pts"] for r in rows) == [4.0, 9.0]
+
+
+def test_books_tooltip_reads_from_the_bet_team_s_side():
+    from cfbr.web.bets import books_from_side
+
+    books = "DraftKings +5.5 (-110/-105); Bovada +6 (-110/-110) (offshore); bet365 +5 (pricing only); odd entry"
+    # Away bet: the home spread flips and the away price shows.
+    assert books_from_side(books, home=False) == \
+        "DraftKings −5.5 (−105); Bovada −6 (−110) (offshore); bet365 −5 (pricing only); odd entry"
+    assert books_from_side(books, home=True).startswith("DraftKings +5.5 (−110); Bovada +6 (−110)")
+    assert books_from_side(None, True) is None
+
+
+def test_column_definitions_are_visible_not_just_tooltips(client):
+    html = client.get("/rankings?season=2026&week=1").text
+    legend = html[html.index('<details class="legend">'):]
+    legend = legend[:legend.index("</details>")]
+    # Same text in the tooltip and the legend.
+    assert 'title="How much of the rating still comes from the preseason prior">Prior</th>' in html
+    assert "<dt>Prior</dt><dd>How much of the rating still comes from the preseason prior</dd>" in legend
+    for url in ("/games?season=2026&slot=r01", "/team/2026/Ohio%20State"):
+        assert '<details class="legend">' in client.get(url).text, url
+
+
+def test_win_probability_never_rounds_to_certain():
+    from cfbr.web.odds import prob
+
+    assert prob(0.996) == ">99%" and prob(0.004) == "<1%" and prob(0.5) == "50%"
+
+
+def test_independents_get_no_conference_title_odds(odds_client, web_cfg):
+    import polars as pl
+
+    d = web_cfg.paths.out_dir / "2026" / "w01"
+    sim = pl.read_csv(d / "season_sim.csv")
+    sim.with_columns(conference=pl.when(pl.col("team") == "Ohio State").then(pl.lit("FBS Independents"))
+                     .otherwise(pl.col("conference"))).write_csv(d / "season_sim.csv")
+    html = " ".join(odds_client.get("/odds?season=2026&week=1").text.split())
+    row = html[html.index(">Ohio State</a>"):]
+    row = row[:row.index("</tr>")]
+    assert row.count(">—</td>") == 2  # title game and conference title
+
+
 def test_nav_and_skip_link(client):
     html = client.get("/rankings").text
     nav = html[html.index('<nav aria-label="Sections">'):html.index("</nav>")]
     assert [s.split("</a>")[0].split(">")[-1] for s in nav.split("<a ")[1:]] == \
-        ["Ratings", "Games", "Projections", "Bets", "Track record"]
+        ["Ratings", "Games", "Projections", "Bets"]
     assert '<a class="skip" href="#main">' in html and '<main id="main"' in html
     # Old routes still work under the new labels.
-    for url, label in (("/odds", None), ("/accuracy", "Track record"), ("/matchup", "Games")):
+    for url, label in (("/odds", None), ("/accuracy", "Ratings"), ("/matchup", "Games")):
         if label:
             assert f'aria-current="page">{label}</a>' in client.get(url).text, url
 
