@@ -280,6 +280,27 @@ def check(config: ConfigOpt = None) -> None:
     typer.echo("ok")
 
 
+def _bets_step(cfg, ds, season: int, week: int) -> bool:
+    """Weekly betting step; True if any part failed. Each part is isolated so a failure can't
+    block the web refresh: paper bets (only when ``[bets].enabled``), then the owner's real
+    bets, which settle whether or not the paper tracker is on."""
+    from cfbr.bets.run import run_bets, run_real_bets
+
+    failed = False
+    if cfg.bets.enabled:
+        try:
+            run_bets(cfg, ds, season, week)
+        except Exception:
+            log.exception("paper-bet step failed; continuing")
+            failed = True
+    try:
+        run_real_bets(cfg, ds, season)
+    except Exception:
+        log.exception("real-bet settlement failed; continuing")
+        failed = True
+    return failed
+
+
 def _weekly_run(config: ConfigOpt = None) -> None:
     import fcntl
     import json
@@ -353,16 +374,7 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     append_accuracy(acc_path, season, week, m)
     log.info("season-to-date: %s", json.dumps({k: m.get(k) for k in ("n_games", "mae", "line_mae", "model_mae_lined",
                                                                      "ats_win_rate", "massey_mae")}, default=float))
-    # Paper bets are isolated so a failure here can't block the web refresh.
-    bets_failed = False
-    if cfg.bets.enabled:
-        from cfbr.bets.run import run_bets
-
-        try:
-            run_bets(cfg, ds, season, week)
-        except Exception:
-            log.exception("paper-bet step failed; continuing")
-            bets_failed = True
+    bets_failed = _bets_step(cfg, ds, season, week)
     # Shadow prior comparison: also isolated, never affects published output.
     shadow_failed = False
     try:
@@ -406,6 +418,53 @@ def _weekly_run(config: ConfigOpt = None) -> None:
         raise typer.Exit(code=3)
     if bets_failed or shadow_failed or sim_failed:
         raise typer.Exit(code=6)
+
+
+@app.command("real-bet")
+def real_bet(
+    team: Annotated[str, typer.Option(help="Team bet on, as on the site (e.g. Cincinnati)")],
+    line: Annotated[float, typer.Option(help="Spread from that team's side: 1.5 for +1.5, -4.5 for −4.5")],
+    odds: Annotated[int, typer.Option(help="American price, e.g. -110")],
+    stake: Annotated[float, typer.Option(help="Dollars risked")],
+    placed: Annotated[str, typer.Option(help='When it was placed, Central time: "2026-10-11 23:06:17"')],
+    book: Annotated[Optional[str], typer.Option(help="Sportsbook, e.g. DraftKings")] = None,
+    season: Annotated[Optional[int], typer.Option(help="Defaults to the current season")] = None,
+    game_id: Annotated[Optional[int], typer.Option(help="Only when the team name matches more than one game")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Record a real bet you placed, in its own ledger (out/{season}/bets_real.csv), apart from the paper bets."""
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    import polars as pl
+
+    from cfbr.bets.closing import cached_games, cached_games_frame
+    from cfbr.bets.real import RealBetError, add_real, find_game, ledger_path, new_bet, update_real
+    from cfbr.ingest.fetch import current_season
+
+    cfg = _default_config(config)
+    season = season or current_season()
+    placed_at = datetime.fromisoformat(placed).replace(tzinfo=ZoneInfo("America/Chicago")).astimezone(UTC)
+    games = cached_games_frame(cfg.paths.raw_dir, season)
+    if games is None:
+        raise typer.BadParameter(f"no cached {season} schedule; run an ingest first")
+    try:
+        if game_id is not None:
+            rows = games.filter(pl.col("game_id") == game_id)
+            if rows.height == 0:
+                raise RealBetError(f"no game {game_id} in {season}")
+            game = rows.to_dicts()[0]
+        else:
+            game = find_game(games, team, placed_at)
+        week = next((g.get("week") for g in cached_games(cfg.paths.raw_dir, season) or [] if g["id"] == game["game_id"]), None)
+        bet = new_bet(game, team, line, odds, stake, book, placed_at, datetime.now(UTC), season, week)
+        path = ledger_path(cfg.paths.out_dir, season)
+        update_real(path, lambda df: add_real(df, bet))
+    except RealBetError as e:
+        raise typer.BadParameter(str(e)) from e
+    sign = f"{line:+g}".replace("-", "−")
+    typer.echo(f"recorded: {bet['team']} {sign} at {odds:+d}, ${stake:g} ({bet['away_team']} @ {bet['home_team']}, "
+               f"kickoff {game['kickoff_ts']:%Y-%m-%d %H:%M} UTC) in {path}")
 
 
 @app.command()

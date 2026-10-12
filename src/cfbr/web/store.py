@@ -63,6 +63,7 @@ class Store:
         self._runs: dict[str, tuple[float, Run]] = {}
         self._bets: dict[int, tuple[float, pl.DataFrame]] = {}
         self._retro: dict[int, tuple[float, pl.DataFrame]] = {}
+        self._real: dict[int, tuple[float, pl.DataFrame]] = {}
         self._rosters: dict[int, tuple[float, Roster | None]] = {}
         self._sims: dict[tuple[int, int], tuple[float, tuple[pl.DataFrame, str]]] = {}
         self._accuracy: dict[int, tuple[float, pl.DataFrame]] = {}
@@ -153,6 +154,13 @@ class Store:
         from cfbr.bets.ledger import read_ledger
 
         return self._cached_csv(self._bets, season, self.out_dir / str(season) / "bets.csv", read_ledger)
+
+    def real_bets(self, season: int) -> pl.DataFrame | None:
+        """The owner's real bets (``out/{season}/bets_real.csv``, from ``cfbr real-bet``), reloaded
+        when rewritten. Read only by the gated betting section (web.bets)."""
+        from cfbr.bets.real import read_real
+
+        return self._cached_csv(self._real, season, self.out_dir / str(season) / "bets_real.csv", read_real)
 
     def retro_seasons(self) -> list[int]:
         """Seasons with retroactive paper bets (``out/{season}/bets_retro.csv``)."""
