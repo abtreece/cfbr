@@ -80,6 +80,25 @@ def with_line_now(rows: list[dict], s, threshold: float) -> list[dict]:
     return out
 
 
+def real_bets_ctx(real: pl.DataFrame | None, s) -> dict | None:
+    """The owner's real bets for /bets: rows from the bettor's side plus a summary. Never
+    mixed into the paper ledger's numbers, and never in /api/bets."""
+    if real is None or real.height == 0:
+        return None
+    from cfbr.bets.real import summarize_real, win_dollars
+
+    spreads = {} if s is None else {k: v for k, v in s.games.select("game_id", "spread").iter_rows()}
+    rows = []
+    for r in real.sort("kickoff_ts", "placed_at").to_dicts():
+        flip = 1 if r["side"] == "home" else -1
+        spread = spreads.get(r["game_id"])
+        rows.append(r | {"kickoff": _ts(r["kickoff_ts"]), "placed": _ts(r["placed_at"]),
+                         "team_line": r["line"] * flip, "to_win": win_dollars(r["odds"], r["risk_dollars"]),
+                         "line_now": None if spread is None or spread != spread or r["status"] != "open" else spread * flip,
+                         "close_team": None if r["closing_line"] is None else r["closing_line"] * flip})
+    return {"rows": rows, "summary": summarize_real(real)}
+
+
 def breakdown(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
     """Same slices as ``bets.md``'s top table: all (consensus, best line), by side."""
     groups = [("All bets", ledger),
@@ -147,6 +166,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "show_cover": any(r.get("cover_prob") is not None for r in open_bets),
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
+        ctx["real"] = real_bets_ctx(store.real_bets(season) if season is not None else None, store.season(season)
+                                    if season is not None else None)
         ctx["has_retro"] = season in store.retro_seasons()
         resp = render(request, "bets.html", **ctx)
         resp.headers.update(NO_STORE)

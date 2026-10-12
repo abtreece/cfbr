@@ -1402,6 +1402,42 @@ def test_bets_hide_columns_the_ledger_never_filled(bets_client):
     assert ">Edge ¢</th>" not in html and ">Cover %</th>" not in html
 
 
+def _write_real(cfg):
+    from cfbr.bets.real import REAL_SCHEMA, write_real
+
+    rows = [{"game_id": 1, "season": SEASON, "week": 1, "kickoff_ts": "2026-09-05T16:00:00+00:00",
+             "home_team": "Texas A&M", "away_team": "Ohio State", "side": "away", "team": "Ohio State",
+             "line": -1.5, "odds": -110, "risk_dollars": 10.0, "book": "DraftKings",
+             "placed_at": "2026-09-01T04:06:17+00:00", "recorded_at": "2026-09-01T14:00:00+00:00", "status": "open"}]
+    write_real(pl.DataFrame(rows, schema=REAL_SCHEMA), cfg.paths.out_dir / str(SEASON) / "bets_real.csv")
+
+
+def test_real_bets_section_is_separate_and_gated(web_cfg):
+    from fastapi import HTTPException
+
+    from cfbr.web.access import bets_access
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_ledger(web_cfg)
+    before = TestClient(create_app(web_cfg)).get("/api/bets").json()
+    _write_real(web_cfg)
+    app = create_app(web_cfg)
+    c = TestClient(app)
+    html = " ".join(c.get("/bets").text.split())
+    assert 'id="yours">Your bets' in html and "Ohio State +1.5" in html and "$10 / $9" in html
+    # The open bet comes before "How it works", alongside the paper open bets.
+    assert html.index('id="yours"') < html.index('id="how"')
+    # The paper record and the API never include real bets.
+    after = c.get("/api/bets").json()
+    assert after["summary"] == before["summary"] and len(after["bets"]) == len(before["bets"])
+    assert '"risk_dollars"' not in c.get("/api/bets").text  # the real ledger's own column
+    # Same gate as the rest of /bets.
+    app.dependency_overrides[bets_access] = lambda: (_ for _ in ()).throw(HTTPException(402, "no"))
+    assert c.get("/bets").status_code == 402
+    for url in ("/rankings", "/games?slot=r01", "/team/2026/Ohio%20State", "/method"):
+        assert "Your bets" not in c.get(url).text, url
+
+
 def test_bets_lead_with_open_bets(bets_client):
     html = bets_client.get("/bets").text
     # Open bets come before the rules and the results.

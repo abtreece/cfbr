@@ -72,6 +72,38 @@
 <p class="muted">No open bets.</p>
 {% endif %}
 
+{% if real %}{% set rs = real.summary %}
+<h2 id="yours">Your bets <span class="muted">· real money, tracked apart from the paper record</span></h2>
+<div class="tiles">
+  {{ tile("Record", rs.won ~ "–" ~ rs.lost ~ "–" ~ rs.push, (rs.open ~ " open · " ~ rs.open_risk|money(false) ~ " at risk") if rs.open else "won–lost–push") }}
+  {{ tile("Profit", rs.dollars|money, ("ROI " ~ rs.roi|pct ~ " on " ~ rs.risked|money(false)) if rs.settled else "after games settle") }}
+  {{ tile("Avg CLV", (rs.avg_clv|signed(2) ~ " pts") if rs.n_clv else "—", ("over " ~ rs.n_clv ~ " bets") if rs.n_clv else "after games close") }}
+</div>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num">Price</th><th class="num">Stake / to win</th>
+    <th class="num opt">Line now</th><th>Result</th><th class="num opt">Close</th><th class="num opt">CLV</th><th class="opt">Book · placed</th></tr></thead>
+  <tbody>
+  {% for b in real.rows %}
+    <tr>
+      <td class="opt">{{ b.kickoff|kickoff }}</td>
+      <td class="wrap">{{ team_link(b.away_team, season, fbs_teams or []) }} @ {{ team_link(b.home_team, season, fbs_teams or []) }}<span class="m-only muted"><br>{{ b.kickoff|kickoff }} {{ tz_label }}</span></td>
+      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
+      <td class="num">{{ b.odds|price }}</td>
+      <td class="num">{{ b.risk_dollars|money(false) }} / {{ b.to_win|money(false) }}</td>
+      <td class="num opt">{{ b.line_now|spread }}</td>
+      <td>{% if b.status == "open" %}<span class="muted">open</span>{% else %}<span class="{{ {'won': 'up', 'lost': 'down'}.get(b.status, 'muted') }}">{{ b.status }} {{ b.dollars|money }}</span> <span class="muted">{{ b.away_points }}–{{ b.home_points }}</span>{% endif %}</td>
+      <td class="num opt">{{ b.close_team|spread }}</td>
+      <td class="num opt">{{ b.clv|signed(1) if b.clv is not none else "—" }}</td>
+      <td class="opt">{{ b.book or "—" }} <span class="muted">· {{ b.placed|short_ts }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Graded at your own number and price. CLV &gt; 0 means your line beat the close used for the paper bets. Final scores are away–home.</p>
+{% endif %}
+
 <details class="rules" id="how">
   <summary>How it works</summary>
   <ul>

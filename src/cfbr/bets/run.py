@@ -81,6 +81,25 @@ def run_bets(cfg: Config, ds: Dataset, season: int, week: int) -> Path | None:
     return ledger_path
 
 
+def run_real_bets(cfg: Config, ds: Dataset, season: int) -> Path | None:
+    """Settle the owner's real bets (bets.real) against final scores and the paper ledger's
+    close. Never touches bets.csv or its chain; does nothing when no real bet is recorded."""
+    from cfbr.bets.real import ledger_path, read_real, settle_real, summarize_real, write_real
+
+    path = ledger_path(cfg.paths.out_dir, season)
+    if not path.exists():
+        return None
+    real = read_real(path)
+    games = ds.games.filter(pl.col("season") == season)
+    closing = closing_lines(cfg, ds, games, real, season)
+    real = settle_real(real, games.select("game_id", "completed", "home_points", "away_points"), closing)
+    write_real(real, path)
+    m = summarize_real(real)
+    log.info("real bets: %d open, %d settled (%d-%d-%d), %+.2f dollars", m["open"], m["settled"],
+             m["won"], m["lost"], m["push"], m["dollars"])
+    return path
+
+
 def pricing_table(cfg: Config, ds: Dataset, season: int) -> PricingTable:
     """Points-to-cents table from every completed season before ``season`` with closing lines,
     cached at out/pricing_table.json (rebuilt when its seasons change). Lines never feed the ratings."""

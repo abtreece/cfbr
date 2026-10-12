@@ -162,6 +162,16 @@ For a real restore, stop the cron jobs and `cfbr-web`, then `rsync -a "$T/data/"
 
 Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record, ROI, CLV, open bets). Lines come from the newest CFBD snapshot plus the newest Odds API snapshot from the same run, which adds FanDuel, theScore Bet, BetRivers, BetMGM, Hard Rock Bet and others with their prices. Each bet is graded twice: at the consensus line (−110), and at the best number across every non-offshore sportsbook, at that book's price. No book is excluded by state; offshore books (e.g. Bovada) count toward the consensus line but never price a bet. Settings are in `[bets]` in `config/default.toml`. Run it by hand with `cfbr bets --season 2026 --week 6`. `cfbr bets-retro --season 2026 --through-week 6` replays the same rules on weeks already played, for both the published (v1) and roster-prior models, against opening lines, into a separate `out/{season}/bets_retro.csv`/`.md` that never counts toward the live ledger. The summary draws no conclusion before 500 settled bets. Treat positive average CLV as the first sign of a real edge; win rate alone is mostly noise at small samples.
 
+### Real bets
+
+Bets you actually place are tracked in their own ledger, `out/{season}/bets_real.csv`, never mixed into the paper record, its hash chain or the 500-bet test. Record one on the server:
+
+```bash
+uv run cfbr real-bet --team Cincinnati --line 1.5 --odds -110 --stake 10 --placed "2026-10-11 23:06:17" --book DraftKings
+```
+
+`--line` is from the team's side (+1.5 → `1.5`), `--stake` is dollars risked, and `--placed` is Central time. The bet is matched to the team's next game after `--placed` in the cached schedule (no API call); pass `--game-id` if two games tie. It refuses a bet placed at or after kickoff and an exact duplicate. `cfbr weekly` settles open real bets at their own line and price and records CLV against the same close the paper bets use; a failure there exits 6 like the paper step. They show as "Your bets" on `/bets`, behind the same gate, and never in `/api/bets`.
+
 ## Prior shadow comparison
 
 The published ratings use the v1 preseason prior. `cfbr weekly` also computes every game's point-in-time prediction with the roster-based prior (player rosters, transfers, defensive returning production) and writes `out/{season}/prior_comparison.csv` and `.md`. The roster predictions are never published. Under a rule fixed in DECISIONS.md, the roster prior becomes the default before 2027 week 1 only if it beats v1 on 2026 games from week 7 onward and the postseason. Run it by hand with `cfbr shadow --season 2026`.
