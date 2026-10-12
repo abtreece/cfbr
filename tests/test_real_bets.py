@@ -76,6 +76,70 @@ def test_settle_grades_at_the_bet_s_own_line_and_price(tmp_path):
     assert settle_real(out, games.with_columns(home_points=pl.lit(0)), closing).equals(out)
 
 
+def test_new_bet_refuses_a_team_not_in_the_game_and_non_finite_terms():
+    # e.g. a mistyped --game-id: Houston isn't in game 1, so it must not become "away".
+    with pytest.raises(RealBetError, match="isn't in Cincinnati @ West Virginia"):
+        _bet(team="Houston")
+    for line, risk in ((float("nan"), 10.0), (float("inf"), 10.0)):
+        with pytest.raises(RealBetError, match="line must be a number"):
+            _bet(line=line, risk=risk)
+    for risk in (float("nan"), float("inf"), 0.0):
+        with pytest.raises(RealBetError, match="stake must be a positive number"):
+            _bet(risk=risk)
+
+
+def test_only_an_identical_wager_is_a_duplicate(tmp_path):
+    led = add_real(read_real(tmp_path / "none.csv"), _bet())
+    # Same game, side and moment, but different price, line, stake or book: separate wagers.
+    for other in (_bet(odds=-105), _bet(line=2.0), _bet(risk=20.0), _bet() | {"book": "FanDuel"}):
+        led = add_real(led, other)
+    assert led.height == 5
+    with pytest.raises(RealBetError, match="already recorded"):
+        add_real(led, _bet())
+
+
+def test_update_real_holds_the_ledger_lock(tmp_path):
+    import fcntl
+
+    from cfbr.bets.real import update_real
+
+    path = tmp_path / "2026" / "bets_real.csv"
+    seen = {}
+
+    def change(df):
+        # While the change runs, another process can't take the lock.
+        with open(path.with_suffix(".csv.lock")) as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen["free"] = True
+            except BlockingIOError:
+                seen["free"] = False
+        return add_real(df, _bet())
+
+    assert update_real(path, change).height == 1 and seen == {"free": False}
+    assert read_real(path).height == 1
+
+
+def test_weekly_settles_real_bets_with_paper_bets_off(monkeypatch):
+    from types import SimpleNamespace
+
+    from cfbr import cli
+    from cfbr.bets import run
+
+    calls = []
+    monkeypatch.setattr(run, "run_bets", lambda *a: calls.append("paper"))
+    monkeypatch.setattr(run, "run_real_bets", lambda *a: calls.append("real"))
+    off = SimpleNamespace(bets=SimpleNamespace(enabled=False))
+    assert cli._bets_step(off, None, 2026, 6) is False and calls == ["real"]
+    calls.clear()
+    on = SimpleNamespace(bets=SimpleNamespace(enabled=True))
+    assert cli._bets_step(on, None, 2026, 6) is False and calls == ["paper", "real"]
+    # A paper failure doesn't stop real settlement, and either failure flags the run (exit 6).
+    monkeypatch.setattr(run, "run_bets", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
+    calls.clear()
+    assert cli._bets_step(on, None, 2026, 6) is True and calls == ["real"]
+
+
 def test_win_dollars():
     assert win_dollars(-110, 10) == pytest.approx(9.0909, abs=1e-4)
     assert win_dollars(-105, 10) == pytest.approx(9.5238, abs=1e-4)

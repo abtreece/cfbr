@@ -11,6 +11,10 @@ Stakes are dollars risked ("$10 at −110" risks $10 to win $9.09), not the pape
 
 from __future__ import annotations
 
+import fcntl
+import math
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -49,11 +53,34 @@ def read_real(path: Path) -> pl.DataFrame:
 
 
 def write_real(df: pl.DataFrame, path: Path) -> None:
-    """Temp file + rename, so a reader never sees a partial file."""
+    """Temp file + rename, so a reader never sees a partial file. Callers that read then write
+    hold :func:`locked` around both."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".csv.tmp")
     df.sort("kickoff_ts", "placed_at").write_csv(tmp)
     tmp.replace(path)
+
+
+@contextmanager
+def locked(path: Path) -> Iterator[None]:
+    """Exclusive lock on the ledger (``bets_real.csv.lock``) for one read-modify-write, so
+    ``cfbr real-bet`` and the weekly settlement can't overwrite each other's rows. Blocks; each
+    holder keeps it only for one read and one write."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(".csv.lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def update_real(path: Path, change: Callable[[pl.DataFrame], pl.DataFrame]) -> pl.DataFrame:
+    """Read, ``change``, write, all under :func:`locked`. Returns the written ledger."""
+    with locked(path):
+        df = change(read_real(path))
+        write_real(df, path)
+    return df
 
 
 def win_dollars(odds: int, risked: float) -> float:
@@ -86,9 +113,15 @@ def new_bet(game: dict, team: str, team_line: float, odds: int, risked: float, b
         raise RealBetError(f"placed at {placed_at:%Y-%m-%d %H:%M} UTC, at or after kickoff ({kickoff:%Y-%m-%d %H:%M} UTC)")
     if odds == 0 or -100 < odds < 100:
         raise RealBetError(f"{odds} is not an American price")
-    if risked <= 0:
-        raise RealBetError("stake must be positive")
-    side = "home" if norm_name(team) == norm_name(game["home_team"]) else "away"
+    if not math.isfinite(team_line):
+        raise RealBetError("line must be a number")
+    if not math.isfinite(risked) or risked <= 0:
+        raise RealBetError("stake must be a positive number")
+    # A mistyped --game-id must not quietly put the bet on the other team.
+    sides = {norm_name(game["home_team"] or ""): "home", norm_name(game["away_team"] or ""): "away"}
+    side = sides.get(norm_name(team))
+    if side is None:
+        raise RealBetError(f"{team!r} isn't in {game['away_team']} @ {game['home_team']}")
     return {"game_id": game["game_id"], "season": season, "week": week, "kickoff_ts": kickoff.isoformat(),
             "home_team": game["home_team"], "away_team": game["away_team"],
             "side": side, "team": game[f"{side}_team"], "line": team_line if side == "home" else -team_line,
@@ -96,10 +129,14 @@ def new_bet(game: dict, team: str, team_line: float, odds: int, risked: float, b
             "recorded_at": recorded_at.isoformat(), "status": "open"}
 
 
+TERMS = ["game_id", "side", "line", "odds", "risk_dollars", "book", "placed_at"]
+
+
 def add_real(ledger: pl.DataFrame, bet: dict) -> pl.DataFrame:
-    """Append ``bet``; refuse an exact repeat (same game, side and placed_at)."""
-    dup = ledger.filter((pl.col("game_id") == bet["game_id"]) & (pl.col("side") == bet["side"])
-                        & (pl.col("placed_at") == bet["placed_at"]))
+    """Append ``bet``; refuse only an exact repeat (every term the same), so two separate
+    wagers placed at the same moment (different book, price, line or stake) both record."""
+    dup = ledger.filter(pl.all_horizontal(
+        pl.col(c).is_null() if bet[c] is None else pl.col(c) == bet[c] for c in TERMS))
     if dup.height:
         raise RealBetError("this bet is already recorded")
     return pl.concat([ledger, pl.DataFrame([bet], schema=REAL_SCHEMA)])

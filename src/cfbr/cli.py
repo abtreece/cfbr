@@ -280,6 +280,27 @@ def check(config: ConfigOpt = None) -> None:
     typer.echo("ok")
 
 
+def _bets_step(cfg, ds, season: int, week: int) -> bool:
+    """Weekly betting step; True if any part failed. Each part is isolated so a failure can't
+    block the web refresh: paper bets (only when ``[bets].enabled``), then the owner's real
+    bets, which settle whether or not the paper tracker is on."""
+    from cfbr.bets.run import run_bets, run_real_bets
+
+    failed = False
+    if cfg.bets.enabled:
+        try:
+            run_bets(cfg, ds, season, week)
+        except Exception:
+            log.exception("paper-bet step failed; continuing")
+            failed = True
+    try:
+        run_real_bets(cfg, ds, season)
+    except Exception:
+        log.exception("real-bet settlement failed; continuing")
+        failed = True
+    return failed
+
+
 def _weekly_run(config: ConfigOpt = None) -> None:
     import fcntl
     import json
@@ -353,24 +374,7 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     append_accuracy(acc_path, season, week, m)
     log.info("season-to-date: %s", json.dumps({k: m.get(k) for k in ("n_games", "mae", "line_mae", "model_mae_lined",
                                                                      "ats_win_rate", "massey_mae")}, default=float))
-    # Paper bets are isolated so a failure here can't block the web refresh.
-    bets_failed = False
-    if cfg.bets.enabled:
-        from cfbr.bets.run import run_bets
-
-        try:
-            run_bets(cfg, ds, season, week)
-        except Exception:
-            log.exception("paper-bet step failed; continuing")
-            bets_failed = True
-        # The owner's real bets settle separately; a failure here leaves the paper ledger alone.
-        try:
-            from cfbr.bets.run import run_real_bets
-
-            run_real_bets(cfg, ds, season)
-        except Exception:
-            log.exception("real-bet settlement failed; continuing")
-            bets_failed = True
+    bets_failed = _bets_step(cfg, ds, season, week)
     # Shadow prior comparison: also isolated, never affects published output.
     shadow_failed = False
     try:
@@ -435,7 +439,7 @@ def real_bet(
     import polars as pl
 
     from cfbr.bets.closing import cached_games, cached_games_frame
-    from cfbr.bets.real import RealBetError, add_real, find_game, ledger_path, new_bet, read_real, write_real
+    from cfbr.bets.real import RealBetError, add_real, find_game, ledger_path, new_bet, update_real
     from cfbr.ingest.fetch import current_season
 
     cfg = _default_config(config)
@@ -455,7 +459,7 @@ def real_bet(
         week = next((g.get("week") for g in cached_games(cfg.paths.raw_dir, season) or [] if g["id"] == game["game_id"]), None)
         bet = new_bet(game, team, line, odds, stake, book, placed_at, datetime.now(UTC), season, week)
         path = ledger_path(cfg.paths.out_dir, season)
-        write_real(add_real(read_real(path), bet), path)
+        update_real(path, lambda df: add_real(df, bet))
     except RealBetError as e:
         raise typer.BadParameter(str(e)) from e
     sign = f"{line:+g}".replace("-", "−")
