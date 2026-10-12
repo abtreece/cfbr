@@ -19,7 +19,7 @@ from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly, what_if
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
-from cfbr.web.access import bets_access
+from cfbr.web.access import bets_access, owner_viewer
 from cfbr.web.store import Store
 
 # Betting data is per-viewer once the section is gated; never let a shared cache keep it.
@@ -141,7 +141,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         return season, (store.bets(season) if season is not None else None)
 
     @router.get("/bets", response_class=HTMLResponse, include_in_schema=False)
-    def bets_page(request: Request, season: int | None = None):
+    def bets_page(request: Request, season: int | None = None, owner: bool = Depends(owner_viewer)):
         season, ledger = pick(season)
         risked, to_win = risk(cfg.bets.odds, cfg.bets.stake)
         ctx = {"bet_seasons": store.bet_seasons(), "season": season, "rules": cfg.bets,
@@ -166,8 +166,10 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "show_cover": any(r.get("cover_prob") is not None for r in open_bets),
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
-        ctx["real"] = real_bets_ctx(store.real_bets(season) if season is not None else None, store.season(season)
-                                    if season is not None else None)
+        # The owner's real bets: only for the owner (owner_viewer), never for other viewers,
+        # premium or not, and never in /api/bets.
+        ctx["real"] = (real_bets_ctx(store.real_bets(season), store.season(season))
+                       if owner and season is not None else None)
         ctx["has_retro"] = season in store.retro_seasons()
         resp = render(request, "bets.html", **ctx)
         resp.headers.update(NO_STORE)
