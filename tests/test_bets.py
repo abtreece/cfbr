@@ -438,3 +438,61 @@ def test_cover_prob_is_a_shrunk_reporting_column():
     m = fit_cover_model(bets)
     assert bets.height > 0 and abs(m.predict(bets.select("abs_edge", "abs_line", "key").to_numpy()).mean() - 0.5) < 0.05
     assert FROZEN.n == 3202 and len(FROZEN.coef) == 3
+
+
+# -- moneyline vs spread pricing (market-only test) ------------------------------------
+
+def _ml_frame(rows):
+    return pl.DataFrame(rows, schema={"game_id": pl.Int64, "season": pl.Int32, "provider": pl.Utf8,
+                                      "home_ml": pl.Float64, "away_ml": pl.Float64, "spread": pl.Float64,
+                                      "spread_open": pl.Float64, "margin": pl.Float64,
+                                      "cons_close": pl.Float64, "cons_open": pl.Float64})
+
+
+def test_moneyline_prices_and_realized_returns():
+    from cfbr.bets.moneyline import game_sides, implied, payout
+
+    assert payout(-110) == pytest.approx(100 / 110) and payout(150) == 1.5
+    assert implied(-150) == pytest.approx(0.6) and implied(150) == pytest.approx(0.4)
+    t = _table()
+    # Home favored by 3, wins by 3: home moneyline wins, home -3 pushes; away loses both.
+    d = _ml_frame([{"game_id": 1, "season": 2024, "provider": "DK", "home_ml": -150, "away_ml": 130,
+                    "spread": -3.0, "spread_open": -3.0, "margin": 3.0, "cons_close": -3.0, "cons_open": -3.0}])
+    s = {r["side"]: r for r in game_sides(d, {2024: t}, use_open=False).iter_rows(named=True)}
+    assert s["home"]["ret_ml"] == pytest.approx(1 / 1.5) and s["home"]["ret_ats"] == 0.0
+    assert s["away"]["ret_ml"] == -1.0 and s["away"]["ret_ats"] == 0.0
+    assert s["home"]["real"] == pytest.approx(1 / 1.5)
+    # The table's favorite wins with every positive-margin mass; EVs come straight from it.
+    p_home = sum(p for k, p in t.margin_pmf(-3.0).items() if k > 0)
+    assert s["home"]["p_win"] == pytest.approx(p_home)
+    assert s["home"]["ev_ml"] == pytest.approx(p_home / 1.5 - (1 - p_home))
+    assert s["home"]["pred"] == pytest.approx(s["home"]["ev_ml"] - t.expected_value("home", -3.0, -110, -3.0))
+
+
+def test_moneyline_precheck_picks_the_line_the_prices_match():
+    from cfbr.bets.moneyline import implied, precheck
+    from cfbr.bets.pricing import PricingTable
+
+    # A table where the favorite's win probability grows with the line size.
+    pmf = {m: {1: 0.5 + m / 100, -1: 0.5 - m / 100} for m in range(36)}
+    t = PricingTable(seasons=[2023], n_games=1000, window=2.0, min_games=300, pmf=pmf)
+    # Line opened home -3 (P 0.53), closed home -10 (P 0.60); the moneyline is priced at the open.
+    rows = [{"game_id": i, "season": 2024, "provider": "DK", "home_ml": -125, "away_ml": 105,
+             "spread": -10.0, "spread_open": -3.0, "margin": 7.0, "cons_close": -10.0, "cons_open": -3.0}
+            for i in range(5)]
+    rows.append({**rows[0], "game_id": 99, "cons_open": -9.5})    # moved < 1.5: not judged
+    pre = precheck(_ml_frame(rows), {2024: t})
+    assert implied(-125) / (implied(-125) + implied(105)) == pytest.approx(0.53, abs=0.005)
+    assert pre["n_moved"] == 5 and pre["use_open"] and pre["gap_open"] < pre["gap_close"]
+
+
+def test_moneyline_bootstrap_resamples_whole_games():
+    from cfbr.bets.moneyline import cluster_bootstrap, primary
+
+    # Both sides of every game selected: returns cancel within a game, so the CI collapses to 0.
+    sides = pl.DataFrame({"game_id": [1, 1, 2, 2, 3, 3], "pred": [0.1] * 6,
+                          "real": [1.0, -1.0, 0.5, -0.5, 2.0, -2.0]})
+    assert cluster_bootstrap(sides) == pytest.approx((0.0, 0.0))
+    p = primary(sides.with_columns(real=pl.Series([0.2, 0.0, 0.3, 0.0, 0.25, 0.0])))
+    assert p["n_sel_games"] == 3 and p["ci95"][0] > 0 and p["adopt"]
+    assert not primary(sides.with_columns(pred=pl.lit(-0.1)))["adopt"]   # nothing selected

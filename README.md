@@ -36,6 +36,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
 | `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon |
 | `cfbr market-ratings --season 2026` | Diagnostic: invert the closing lines into market-implied ratings per slot and compare with the model's (`results/market_ratings_{season}.md`); no API calls |
+| `cfbr moneyline-eval` | Market-only test: is a side's moneyline a better buy than its spread at −110, both priced with the points-to-cents table (`results/moneyline_pricing.md`); no API calls |
 | `cfbr sim --season 2026 --week 6` | Simulate the rest of the season (win totals, conference titles, playoff odds) into `out/{season}/wNN/season_sim.*`; `cfbr weekly` runs it too |
 
 `rank` and `weekly` use `config/tuned.toml` when it exists. Pass `--config` to override.
