@@ -28,6 +28,18 @@
 </div>
 {% endif %}
 
+{% if alerts %}
+<div class="callout alerts">
+  <strong>Upset alerts</strong> <span class="muted">— the model takes the other side of the Vegas favorite, or differs from the closing line by {{ threshold|num(0) }}+ points.</span>
+  <ul>
+  {% for g in alerts %}
+    <li>{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ team_link(g.home_team, season, fbs_teams) }}:
+      <strong>{{ g.alert }}</strong> <span class="muted">(Vegas {{ g.vegas_pick }}, model {{ g.model_pick }}{% if g.completed and g.home_points is not none %}; final {{ g.away_points }}–{{ g.home_points }}{% endif %})</span></li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="table-wrap">
 <table class="data">
   <thead>
@@ -36,15 +48,15 @@
   </thead>
   <tbody>
   {% for g in rows %}
-    <tr {% if not g.completed %}class="upcoming"{% endif %}>
+    <tr {% if not g.completed %}class="upcoming{% if g.status != 'upcoming' %} stale{% endif %}"{% endif %}>
       <td>{{ g.kickoff_ts|kickoff }}</td>
-      <td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}</td>
+      <td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}{% if g.status in ("postponed", "cancelled") and not any_final %} <span class="badge">{{ g.status }}</span>{% endif %}</td>
       {% if not locked %}<td class="strong wrap">{{ g.model_pick }}</td>
       <td class="num">{{ g.fav_prob|pct(0) }}</td>{% endif %}
       <td class="wrap">{{ g.vegas_pick or "—" }}</td>
       {% if not locked %}<td class="wrap">{{ g.edge or "—" }}</td>{% endif %}
       {% if any_final %}
-      <td>{% if g.completed and g.home_points is not none %}{{ g.away_points }}–{{ g.home_points }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if g.completed and g.home_points is not none %}{{ g.away_points }}–{{ g.home_points }}{% else %}<span class="muted">{{ g.status if g.status != "upcoming" else "—" }}</span>{% endif %}</td>
       {% if not locked %}<td class="num">{{ g.model_err|num }}</td>{% endif %}
       <td class="num">{{ g.vegas_err|num }}</td>
       {% if not locked %}<td>{% if g.ats == "win" %}<span class="up">✓ win</span>{% elif g.ats == "loss" %}<span class="down">✗ loss</span>{% elif g.ats %}<span class="muted">{{ g.ats }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>{% endif %}

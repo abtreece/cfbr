@@ -209,7 +209,7 @@ def rank(
     typer.echo(f"wrote {out}")
 
 
-EXIT_MEANING = {3: "API quota nearly used up", 4: "another run held the lock",
+EXIT_MEANING = {3: "API quota nearly used up (ran on cached data)", 4: "another run held the lock",
                 6: "paper-bet step, a shadow comparison (prior, totals or calibration) or season simulation failed"}
 
 
@@ -256,6 +256,28 @@ def weekly(config: ConfigOpt = None) -> None:
             head = chain_head(cfg.paths.out_dir, current_season())
             send(cfg, f"cfbr weekly ok{' (exit 6)' if code == 6 else ''}",
                  head or "no paper-bet ledger yet", priority="min")
+            # Dead-man's switch: `cfbr check` alerts when this stamp goes stale in season.
+            from cfbr.ops import record_success
+
+            record_success(cfg, current_season(), code)
+
+
+@app.command()
+def check(config: ConfigOpt = None) -> None:
+    """Daily cron: alert when no successful `cfbr weekly` run is recorded since the last Sunday
+    during the season, or the backup is stale. Reads files only; no API calls."""
+    from cfbr.alerts import send
+    from cfbr.ingest.fetch import current_season
+    from cfbr.ops import daily_check
+
+    cfg = _default_config(config)
+    problems = daily_check(cfg, current_season())
+    if problems:
+        log.warning("daily check: %s", "; ".join(problems))
+        send(cfg, "cfbr check found problems", "; ".join(problems))
+        typer.echo("\n".join(problems))
+        raise typer.Exit(code=1)
+    typer.echo("ok")
 
 
 def _weekly_run(config: ConfigOpt = None) -> None:
@@ -284,18 +306,22 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     season = fetch.current_season()
     now = datetime.now(UTC)
     client = CFBDClient(cfg)
+    quota_hit = False
     try:
         cal = client.get("/calendar", {"year": season}, season, "season")
         started = [int(w["week"]) for w in cal if w["seasonType"] == "regular"
                    and datetime.fromisoformat(w["startDate"].replace("Z", "+00:00")) <= now]
         cal_week = max(started) if started else 1
         fetch.weekly(client, season, cal_week)
-        games = fetch.latest_cached(client, "/games", season) or []
     except QuotaExceeded as e:
-        log.error("%s", e)
-        raise typer.Exit(code=3)
+        # Keep going on whatever the cache holds (rankings for the last ingested week are
+        # still worth publishing), but exit 3 at the end so the quota alert fires.
+        log.error("%s; continuing on cached data", e)
+        quota_hit = True
+        cal_week = None
     finally:
         client.close()
+    games = fetch.latest_cached(client, "/games", season) or []
     log.info("ingest API calls: %d; this month: %d of %d", client.calls, client.calls_this_month(),
              cfg.ingest.monthly_quota)
     # Odds API snapshot for the paper bets, taken right after the CFBD line snapshot. A
@@ -313,9 +339,9 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     done = [wk for st, wk in fetch.completed_play_weeks(games) if st == "regular"]
     if not done:
         log.error("no completed weeks yet for %d", season)
-        raise typer.Exit(code=5)
+        raise typer.Exit(code=3 if quota_hit else 5)
     week = max(done)
-    log.info("season %d: calendar week %d, last completed week %d", season, cal_week, week)
+    log.info("season %d: calendar week %s, last completed week %d", season, cal_week, week)
 
     build_store(cfg.paths.raw_dir, cfg.paths.db_path)
     build_prep(cfg)
@@ -376,6 +402,8 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     # Last, so a web-data failure can't cost the rankings or the accuracy line.
     web_out = build_season(eng, season, web_dir(cfg))
     typer.echo(f"wrote {out}, {acc_path} and {web_out}")
+    if quota_hit:
+        raise typer.Exit(code=3)
     if bets_failed or shadow_failed or sim_failed:
         raise typer.Exit(code=6)
 

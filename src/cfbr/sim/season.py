@@ -27,11 +27,13 @@ approximations, labelled as such in every output:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import duckdb
 import numpy as np
 import polars as pl
 
+from cfbr.data import STALE_GAME
 from cfbr.model.calibrate import Calibration
 from cfbr.model.engine import Engine
 
@@ -102,9 +104,13 @@ def title_game_ids(games: pl.DataFrame, conf_ids: set[int]) -> set[int]:
     return out
 
 
-def build_inputs(eng: Engine, season: int, as_of, only_completed_later: bool = False) -> Inputs:
+def build_inputs(eng: Engine, season: int, as_of, only_completed_later: bool = False,
+                 now: datetime | None = None) -> Inputs:
     """``only_completed_later``: for historical tests, simulate only remaining games that
-    were eventually played (cancelled games had no result to compare against)."""
+    were eventually played (cancelled games had no result to compare against). Live mode
+    likewise skips games still not completed ``STALE_GAME`` after their kickoff (postponed
+    or cancelled; see cfbr.data): they are not games left to play."""
+    now = now or datetime.now(UTC)
     cal: Calibration = eng.calibration(season)
     snap = eng.snapshot(season, as_of)
     rating, _, _ = cal.rating(snap["o_ppa"], snap["d_ppa"], snap["o_sr"], snap["d_sr"])
@@ -131,6 +137,9 @@ def build_inputs(eng: Engine, season: int, as_of, only_completed_later: bool = F
     todo = g.filter(pl.col("kickoff_ts") >= as_of)
     if only_completed_later:
         todo = todo.filter(pl.col("completed") & pl.col("margin").is_not_null())
+    else:
+        stale = pl.lit(now - STALE_GAME).cast(g.schema["kickoff_ts"])
+        todo = todo.filter(pl.col("completed") | (pl.col("kickoff_ts") > stale))
 
     n = len(teams)
     w, l, cw, cl = (np.zeros(n) for _ in range(4))

@@ -13,6 +13,9 @@ from cfbr.ingest.store import POLL_SCHEMA
 from cfbr.prep.plays import FCS, apply_filters
 
 POSTSEASON_BUCKET_DAYS = 7
+# A game still not completed this long after its kickoff is treated as postponed or
+# cancelled: it no longer holds its week open or counts as a game left to play.
+STALE_GAME = timedelta(days=4)
 
 GAMES_SQL = """
 SELECT g.game_id, g.season, g.week, g.season_type, g.kickoff_ts, g.completed, g.neutral_site,

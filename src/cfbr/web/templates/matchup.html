@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, premium_notice %}
+{% block title %}{{ season }} matchup tool · CFB Ratings{% endblock %}
+{% block content %}
+<form class="filters" method="get" action="/matchup">
+  {{ season_select(seasons, season) }}
+  {% if not locked %}
+  <label>Ratings through
+    <select name="week" data-autosubmit>
+      {% for w in s.weeks|reverse %}<option value="{{ w }}" {% if w == week %}selected{% endif %}>{{ s.label(w) }}</option>{% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+
+<h1>Head to head <span class="muted">{{ season }} · {{ s.label(week) }}</span></h1>
+<p class="lede">Any two FBS teams on the ratings as of this point in the season: expected margin and win probability from the same points calibration the game predictions use.</p>
+
+{% if locked %}
+{{ premium_notice(season, "ratings") }}
+{% elif not cal %}
+<p class="callout">This season's data was built before the calibration was exported; rebuild it (<code>cfbr web build --seasons {{ season }}</code>) to enable the tool.</p>
+{% else %}
+<div class="h2h">
+  <div class="h2h-side">
+    <label>Home / first team
+      <select id="h2h-home">{% for t in teams %}<option value="{{ t.team }}">{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
+    </label>
+  </div>
+  <div class="h2h-side">
+    <label>Away / second team
+      <select id="h2h-away">{% for t in teams %}<option value="{{ t.team }}" {% if loop.index == 2 %}selected{% endif %}>{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
+    </label>
+  </div>
+  <label class="h2h-neutral"><input type="checkbox" id="h2h-neutral"> Neutral field</label>
+</div>
+<div class="tiles" id="h2h-out" aria-live="polite">
+  <div class="tile"><div class="tile-label">Expected margin</div><div class="tile-value" id="h2h-margin">—</div><div class="tile-sub" id="h2h-pick"></div></div>
+  <div class="tile"><div class="tile-label">Win probability</div><div class="tile-value" id="h2h-prob">—</div><div class="tile-sub" id="h2h-prob-sub"></div></div>
+  <div class="tile"><div class="tile-label">Ratings</div><div class="tile-value" id="h2h-ratings">—</div><div class="tile-sub" id="h2h-ratings-sub"></div></div>
+  <div class="tile"><div class="tile-label">Home edge</div><div class="tile-value">{{ cal.b_home|signed }}</div><div class="tile-sub">points, calibrated{% if cal.stage2 %} (plus stage-2 terms){% endif %}; σ = {{ cal.sigma|num }}</div></div>
+</div>
+<p class="note">Margin = rating difference + home edge (0 on a neutral field); win probability = Φ(margin / σ).
+  {% if cal.stage2 %}Calibration v2 then adjusts the margin by the prior-share and home terms fitted on past seasons, as the game predictions do.{% endif %}
+  Computed in your browser from the published ratings; nothing is fitted here.</p>
+<script id="h2h-data" type="application/json">{{ {"teams": teams, "cal": cal}|tojson }}</script>
+<script>
+(function () {
+  const data = JSON.parse(document.getElementById("h2h-data").textContent);
+  const byTeam = Object.fromEntries(data.teams.map((t) => [t.team, t]));
+  const cal = data.cal;
+  const home = document.getElementById("h2h-home"), away = document.getElementById("h2h-away"),
+        neutral = document.getElementById("h2h-neutral");
+  const erf = (x) => {  // Abramowitz & Stegun 7.1.26, |error| < 1.5e-7
+    const s = Math.sign(x); x = Math.abs(x);
+    const t = 1 / (1 + 0.3275911 * x);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return s * y;
+  };
+  const phi = (z) => 0.5 * (1 + erf(z / Math.SQRT2));
+  const sgn = (v, d) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+  function update() {
+    const h = byTeam[home.value], a = byTeam[away.value];
+    if (!h || !a) return;
+    const isHome = neutral.checked ? 0 : 1;
+    let m = h.rating - a.rating + isHome * cal.b_home;
+    if (cal.stage2) {
+      const ps = ((h.prior_share ?? 1) + (a.prior_share ?? 1)) / 2;
+      m += cal.stage2.pred * m + cal.stage2.pred_ps * m * ps + cal.stage2.home_ps * isHome * ps;
+    }
+    const p = phi(m / cal.sigma);
+    const fav = m >= 0 ? h.team : a.team;
+    document.getElementById("h2h-margin").textContent = sgn(m, 1);
+    document.getElementById("h2h-pick").textContent = Math.abs(m) < 0.05 ? "Toss-up" : `${fav} by ${Math.abs(m).toFixed(1)}`;
+    document.getElementById("h2h-prob").textContent = `${(100 * Math.max(p, 1 - p)).toFixed(0)}%`;
+    document.getElementById("h2h-prob-sub").textContent = `${fav} wins · ${h.team} ${(100 * p).toFixed(0)}%, ${a.team} ${(100 * (1 - p)).toFixed(0)}%`;
+    document.getElementById("h2h-ratings").textContent = `${sgn(h.rating, 1)} vs ${sgn(a.rating, 1)}`;
+    document.getElementById("h2h-ratings-sub").textContent = `${h.team} #${h.rank ?? "—"} · ${a.team} #${a.rank ?? "—"}`;
+  }
+  [home, away, neutral].forEach((el) => el.addEventListener("change", update));
+  update();
+})();
+</script>
+{% endif %}
+{% endblock %}

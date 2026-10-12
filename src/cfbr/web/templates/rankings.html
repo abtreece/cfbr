@@ -55,6 +55,7 @@
       <th data-sort="num" class="num opt" title="Defense component, points (higher is better)">Def</th>
       <th data-sort="num" class="num opt" title="Rating change since the previous table">Δ Rating</th>
       <th data-sort="num" data-first="asc" class="num opt" title="AP Top 25 rank">AP</th>
+      {% if show_ap %}<th data-sort="num" class="num opt" title="Model rank minus AP rank: positive means the poll has the team higher than the model">vs AP</th>{% endif %}
       <th data-sort="num" data-first="asc" class="num opt" title="Coaches Poll rank">Coaches</th>
       {% if show_cfp %}<th data-sort="num" data-first="asc" class="num opt" title="College Football Playoff committee rank">CFP</th>{% endif %}
       <th data-sort="num" class="num opt" title="How much of the rating still comes from the preseason prior">Prior</th>
@@ -74,6 +75,7 @@
       <td class="num opt" data-v="{{ r.defense }}">{{ r.defense|signed }}</td>
       <td class="num opt" data-v="{{ r.rating_change if r.rating_change is not none else 0 }}">{{ delta(r.rating_change) }}</td>
       {{ poll_cell(r.ap_rank, "opt") }}
+      {% if show_ap %}<td class="num opt" data-v="{{ r.vs_ap if r.vs_ap is not none else 0 }}">{{ delta(r.vs_ap, 0, good_up=False) if r.vs_ap is not none else '<span class="muted">—</span>'|safe }}</td>{% endif %}
       {{ poll_cell(r.coaches_rank, "opt") }}
       {% if show_cfp %}{{ poll_cell(r.cfp_rank, "opt") }}{% endif %}
       <td class="num opt" data-v="{{ r.prior_share }}">{{ r.prior_share|pct(0) }}</td>
@@ -86,11 +88,33 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="{{ 14 if show_cfp else 13 }}" class="muted">No teams.</td></tr>
+    <tr><td colspan="{{ 15 if show_cfp else 14 }}" class="muted">No teams.</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-<p class="note">Click a column header to sort. Prior share falls as a team's plays accumulate; by midseason most of a rating comes from this season's games.</p>
+<p class="note">Click a column header to sort. Prior share falls as a team's plays accumulate; by midseason most of a rating comes from this season's games.{% if show_ap %} "vs AP" is the model's rank minus the AP rank: ▼ means the model has the team higher than the poll.{% endif %}</p>
+
+{% if ap and (ap.over or ap.under or ap.unranked) %}
+<h2>Model vs. the AP poll</h2>
+<div class="ap-grid">
+  {% for key, title, hint in (("over", "Poll higher than the model", "AP rank well above the model's rank"),
+                              ("under", "Model higher than the poll", "model rank well above the AP rank"),
+                              ("unranked", "Model top 25, unranked by AP", "no AP vote")) %}
+  {% if ap[key] %}
+  <div class="tile">
+    <div class="tile-label">{{ title }} <span class="muted">· {{ hint }}</span></div>
+    <table class="mini">
+    {% for r in ap[key] %}
+      <tr><td><a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a></td>
+        <td class="num">model #{{ r.rank }}</td><td class="num">{{ "AP #" ~ r.ap_rank if r.ap_rank is not none else "AP —" }}</td>
+        <td class="num">{{ r.rating|signed }}</td></tr>
+    {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
 {% endif %}
 {% endblock %}

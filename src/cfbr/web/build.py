@@ -16,8 +16,9 @@ import polars as pl
 
 from cfbr.backtest.metrics import consensus_spread
 from cfbr.config import Config
-from cfbr.data import Dataset
+from cfbr.data import STALE_GAME, Dataset
 from cfbr.ingest.fetch import current_season
+from cfbr.model.calibrate import STAGE2_TERMS
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 from cfbr.report.roster_web import write_roster_web
@@ -28,9 +29,7 @@ log = logging.getLogger(__name__)
 
 PRESEASON = 0
 FINAL = 99
-# A game still not completed this long after kickoff is treated as cancelled,
-# so it doesn't hold its week out of the timeline forever.
-STALE_GAME = timedelta(days=4)
+# STALE_GAME is defined in cfbr.data (shared with the sim) and re-exported here for the app and tests.
 
 
 def web_dir(cfg: Config) -> Path:
@@ -41,9 +40,43 @@ def _stale_cutoff(games: pl.DataFrame, now: datetime) -> pl.Expr:
     return pl.lit(now - STALE_GAME).cast(games.schema["kickoff_ts"])
 
 
+def effective_week(g: pl.DataFrame, log_as: str | None = None) -> pl.DataFrame:
+    """``g`` (one season's regular-season games) with a ``week`` column that places a game
+    kicking off at or after a later week's first kickoff in that later week.
+
+    CFBD normally renumbers a rescheduled game; this covers the lag before it does, so a
+    makeup game doesn't hold its original week open. Historical slotting (``assign_slots``)
+    is deliberately untouched. Logs a warning naming the moved games when ``log_as`` is set.
+    """
+    if g.height == 0:
+        return g
+    first = g.group_by("week").agg(first_kick=pl.col("kickoff_ts").min()).sort("week")
+    weeks, kicks = first["week"].to_list(), first["first_kick"].to_list()
+    orig = g["week"].to_list()
+    moved = []
+    for w, k in zip(orig, g["kickoff_ts"].to_list()):
+        eff = w
+        for w2, k2 in zip(weeks, kicks):
+            if w2 > w and k2 is not None and k is not None and k >= k2:
+                eff = w2
+        moved.append(eff)
+    out = g.with_columns(week=pl.Series(moved, dtype=g.schema["week"]))
+    if log_as is not None:
+        changed = out.filter(pl.Series(orig) != pl.col("week"))
+        if changed.height:
+            log.warning("%s: %d game(s) kick off in a later week than CFBD's week number (not renumbered yet): %s",
+                        log_as, changed.height,
+                        "; ".join(f"{r['away_team']} @ {r['home_team']} week {o} -> {r['week']}"
+                                  for r, o in zip(changed.iter_rows(named=True),
+                                                  [o for o, n in zip(orig, moved) if o != n])))
+    return out
+
+
 def completed_weeks(eng: Engine, season: int, now: datetime) -> list[int]:
-    """Regular-season weeks whose games are all final (ignoring stale, never-completed games)."""
+    """Regular-season weeks whose games are all final (ignoring stale, never-completed games).
+    A game moved past a later week's first kickoff counts in that later week."""
     g = eng.games.filter((pl.col("season") == season) & (pl.col("season_type") == "regular"))
+    g = effective_week(g, log_as=f"web build {season}")
     wk = g.group_by("week").agg(
         done=pl.col("completed").sum(),
         pending=(~pl.col("completed") & (pl.col("kickoff_ts") > _stale_cutoff(g, now))).sum(),
@@ -172,6 +205,8 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
     ratings = season_ratings(eng, season, now)
     games = season_games(eng, season)
     # Write to temp names then rename, so a running server never reads a half-written file.
+    # meta.json goes last: its mtime is the server's reload signal, and the server treats a
+    # parquet newer than meta.json as a rebuild in progress (see cfbr.web.store).
     for name, df in (("ratings", ratings), ("games", games)):
         tmp = out / f".{name}.parquet.tmp"
         df.write_parquet(tmp)
@@ -182,11 +217,19 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
         write_roster_web(eng.cfg, eng.ds, season, out)
     except Exception:
         log.exception("roster web data for %d failed; continuing without it", season)
+    cal = eng.calibration(season)
     meta = {
         "season": season,
         "built_at": now.isoformat(timespec="seconds"),
         "config": eng.cfg.source,
         "live": not season_over(eng, season, now),
+        # Points calibration, so a page can price a hypothetical matchup from two ratings
+        # without the server fitting anything: margin = rating_h - rating_a + b_home (0 on a
+        # neutral field); win probability = Phi(margin / sigma). With calibration v2 the
+        # stage-2 terms apply on top (see cfbr.model.calibrate.stage2_design).
+        "calibration": {"b_home": cal.b_home, "b_ppa": cal.b_ppa, "b_sr": cal.b_sr, "sigma": cal.sigma,
+                        "stage2": (dict(zip(STAGE2_TERMS, (float(c) for c in eng.stage2(season))))
+                                   if eng.cfg.model.calibration_v2 else None)},
         "weeks": sorted(set(ratings["week"].to_list())),
         "labels": dict(ratings.select("week", "label").unique().sort("week").iter_rows()),
         # Poll week shown beside each table (int, "final", or null if not released yet).

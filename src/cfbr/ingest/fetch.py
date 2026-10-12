@@ -135,17 +135,51 @@ def fetch_departure_data(client: CFBDClient, year: int) -> None:
         client.get("/player/portal", {"year": year}, year, "season")
 
 
+def _kickoff(g: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat(g["startDate"].replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def effective_week(g: dict, first_kick: dict[tuple[str, int], datetime]) -> int:
+    """The week a game belongs to for completed-week purposes: its CFBD week, or a later
+    week of the same season type whose first kickoff it is at or past (a rescheduled game
+    CFBD hasn't renumbered yet)."""
+    week, kind, k = int(g["week"]), g["seasonType"], _kickoff(g)
+    if k is None:
+        return week
+    for (kind2, w2), k2 in first_kick.items():
+        if kind2 == kind and w2 > week and k >= k2:
+            week = max(week, w2)
+    return week
+
+
 def completed_play_weeks(games: list) -> list[tuple[str, int]]:
     """(seasonType, week) pairs in which every game involving an FBS team is
     completed. Fetching plays only for finished weeks keeps a mid-week run
-    from caching a partial week forever."""
-    status: dict[tuple[str, int], bool] = {}
-    for g in games:
-        if g["seasonType"] not in ("regular", "postseason"):
-            continue
-        if "fbs" not in (g.get("homeClassification"), g.get("awayClassification")):
-            continue
+    from caching a partial week forever.
+
+    A game kicking off at or past a later week's first kickoff counts in that later
+    week (logged: CFBD normally renumbers rescheduled games, so this means it hasn't
+    yet). Its plays are then fetched with whichever week CFBD files them under when
+    the week in question completes, never with the original week's cached file."""
+    fbs = [g for g in games if g["seasonType"] in ("regular", "postseason")
+           and "fbs" in (g.get("homeClassification"), g.get("awayClassification"))]
+    first_kick: dict[tuple[str, int], datetime] = {}
+    for g in fbs:
+        k = _kickoff(g)
         key = (g["seasonType"], int(g["week"]))
+        if k is not None and (key not in first_kick or k < first_kick[key]):
+            first_kick[key] = k
+    status: dict[tuple[str, int], bool] = {}
+    for g in fbs:
+        week = effective_week(g, first_kick)
+        if week != int(g["week"]):
+            log.warning("game %s (%s @ %s) kicks off in week %d but CFBD still files it under week %d; "
+                        "treating it as week %d", g.get("id"), g.get("awayTeam"), g.get("homeTeam"), week,
+                        int(g["week"]), week)
+        key = (g["seasonType"], week)
         status[key] = status.get(key, True) and bool(g.get("completed"))
     return sorted((k for k, done in status.items() if done), key=lambda k: (k[0] != "regular", k[1]))
 

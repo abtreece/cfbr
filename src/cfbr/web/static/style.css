@@ -199,3 +199,21 @@ details.rules li { margin: 3px 0; }
 .conf-card table.mini { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
 .conf-card table.mini td { padding: 2px 0; }
 .conf-card table.mini td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Team page: rating explanation tiles; rankings: model-vs-AP box; games: upset alerts. */
+.tiles.explain { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.ap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.ap-grid table.mini { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.ap-grid table.mini td { padding: 2px 4px 2px 0; }
+.ap-grid table.mini td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.callout.alerts ul { margin: 6px 0 0; padding-left: 20px; }
+.callout.alerts li { margin: 3px 0; }
+table.data tr.stale td { color: var(--muted); }
+footer.site .built { display: block; margin-top: 4px; }
+
+/* Matchup tool. */
+.h2h { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end; margin: 0 0 14px; }
+.h2h label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.h2h select { font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; min-height: 32px; min-width: 220px; }
+.h2h .h2h-neutral { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text-2); }

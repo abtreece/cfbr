@@ -1,7 +1,10 @@
 """Read-only access to the files the web app shows, reloaded when they change.
 
 ``cfbr weekly`` rewrites ``out/web/{season}/`` while the server is running;
-each season's ``meta.json`` is written last, so its mtime is the reload signal.
+each season's ``meta.json`` is written last, so its mtime is the reload signal. A
+parquet newer than its ``meta.json`` means a rebuild is in progress: the previous copy
+is kept (or, with nothing cached, the season is reported not ready) rather than pairing
+new ratings with old games.
 """
 
 from __future__ import annotations
@@ -62,6 +65,8 @@ class Store:
         self._retro: dict[int, tuple[float, pl.DataFrame]] = {}
         self._rosters: dict[int, tuple[float, Roster | None]] = {}
         self._sims: dict[tuple[int, int], tuple[float, tuple[pl.DataFrame, str]]] = {}
+        self._accuracy: dict[int, tuple[float, pl.DataFrame]] = {}
+        self._run_list: tuple[float, list[str], list[str]] | None = None  # (results mtime, run ids, pending dirs)
 
     def seasons(self) -> list[int]:
         if not self.web_root.is_dir():
@@ -69,6 +74,8 @@ class Store:
         return sorted(int(p.parent.name) for p in self.web_root.glob("*/meta.json") if p.parent.name.isdigit())
 
     def season(self, season: int) -> Season | None:
+        """The season's web data, or None when there is none (or it is mid-rebuild with
+        nothing cached yet; see :meth:`rebuilding`)."""
         meta_path = self.web_root / str(season) / "meta.json"
         try:
             mtime = meta_path.stat().st_mtime
@@ -79,31 +86,61 @@ class Store:
             if hit and hit[0] == mtime:
                 return hit[1]
             d = meta_path.parent
-            s = Season(json.loads(meta_path.read_text()),
-                       _ensure(pl.read_parquet(d / "ratings.parquet"), POLL_COLS),
-                       _ensure(pl.read_parquet(d / "games.parquet"),
-                               [f"{side}_{c}" for side in ("home", "away") for c in POLL_COLS]))
+            files = [d / "ratings.parquet", d / "games.parquet"]
+            try:
+                meta = json.loads(meta_path.read_text())
+                ratings, games = (pl.read_parquet(f) for f in files)
+                consistent = (all(f.stat().st_mtime <= mtime for f in files)
+                              and meta_path.stat().st_mtime == mtime)
+            except (OSError, ValueError, pl.exceptions.PolarsError):
+                consistent = False  # a file vanished or was half-written: a rebuild in progress
+            if not consistent:
+                return hit[1] if hit else None
+            s = Season(meta, _ensure(ratings, POLL_COLS),
+                       _ensure(games, [f"{side}_{c}" for side in ("home", "away") for c in POLL_COLS]))
             self._seasons[season] = (mtime, s)
             return s
+
+    def rebuilding(self, season: int) -> bool:
+        """True when the season's files exist but :meth:`season` can't serve a consistent set yet."""
+        return (self.web_root / str(season) / "meta.json").exists() and self.season(season) is None
 
     def latest(self) -> int | None:
         seasons = self.seasons()
         return seasons[-1] if seasons else None
 
     def runs(self) -> list[Run]:
-        """Backtest runs under results/, newest first."""
-        out = []
-        if not self.results_dir.is_dir():
+        """Backtest runs under results/, newest first. The directory is rescanned only when
+        its mtime changes (a run added or removed); a run directory without metrics.json
+        yet (in progress) is re-checked until the file lands. Each metrics.json is read once."""
+        try:
+            dir_mtime = self.results_dir.stat().st_mtime
+        except FileNotFoundError:
+            return []
+        with self._lock:
+            listing = self._run_list
+            if listing is None or listing[0] != dir_mtime:
+                dirs = sorted((p for p in self.results_dir.iterdir() if p.is_dir()), reverse=True)
+                ids = [p.name for p in dirs if (p / "metrics.json").exists()]
+                pending = [p.name for p in dirs if not (p / "metrics.json").exists()]
+                listing = self._run_list = (dir_mtime, ids, pending)
+            elif listing[2]:
+                landed = [n for n in listing[2] if (self.results_dir / n / "metrics.json").exists()]
+                if landed:
+                    ids = sorted(set(listing[1]) | set(landed), reverse=True)
+                    listing = self._run_list = (dir_mtime, ids, [n for n in listing[2] if n not in landed])
+            out = []
+            for run_id in listing[1]:
+                hit = self._runs.get(run_id)
+                if hit is None:
+                    path = self.results_dir / run_id / "metrics.json"
+                    try:
+                        hit = (path.stat().st_mtime, Run(run_id, json.loads(path.read_text())))
+                    except (OSError, ValueError):
+                        continue  # removed or half-written; picked up on the next rescan
+                    self._runs[run_id] = hit
+                out.append(hit[1])
             return out
-        for path in sorted(self.results_dir.glob("*/metrics.json"), reverse=True):
-            mtime = path.stat().st_mtime
-            with self._lock:
-                hit = self._runs.get(path.parent.name)
-                if not hit or hit[0] != mtime:
-                    hit = (mtime, Run(path.parent.name, json.loads(path.read_text())))
-                    self._runs[path.parent.name] = hit
-            out.append(hit[1])
-        return out
 
     def bet_seasons(self) -> list[int]:
         """Seasons with a paper-bet ledger (``out/{season}/bets.csv``)."""
@@ -195,17 +232,19 @@ class Store:
                 return hit[1] if hit else None
             md = path.with_suffix(".md")
             notes = []
-            if md.exists():
-                for line in md.read_text().splitlines():
-                    if line.startswith("|"):
-                        break
-                    if line.strip() and not line.startswith("#"):
-                        notes.append(line.strip())
+            try:
+                text = md.read_text() if md.exists() else ""
+            except OSError:  # being rewritten; the notes are optional
+                text = ""
+            for line in text.splitlines():
+                if line.startswith("|"):
+                    break
+                if line.strip() and not line.startswith("#"):
+                    notes.append(line.strip())
             value = (df, "\n".join(notes))
             self._sims[key] = (mtime, value)
             return value
 
     def accuracy_log(self, season: int) -> pl.DataFrame | None:
-        """Season-to-date lines appended by ``cfbr weekly``."""
-        path = self.out_dir / str(season) / "accuracy.csv"
-        return pl.read_csv(path) if path.exists() else None
+        """Season-to-date lines appended by ``cfbr weekly``, reloaded when the file changes."""
+        return self._cached_csv(self._accuracy, season, self.out_dir / str(season) / "accuracy.csv", pl.read_csv)

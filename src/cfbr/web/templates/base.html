@@ -16,6 +16,7 @@
       {% set path = request.url.path %}
       <a href="/rankings" {% if path.startswith('/rankings') or path.startswith('/team') %}aria-current="page"{% endif %}>Rankings</a>
       <a href="/games" {% if path.startswith('/games') %}aria-current="page"{% endif %}>Games</a>
+      <a href="/matchup" {% if path.startswith('/matchup') %}aria-current="page"{% endif %}>Matchup</a>
       <a href="/odds" {% if path.startswith('/odds') %}aria-current="page"{% endif %}>Odds</a>
       <a href="/accuracy" {% if path.startswith('/accuracy') %}aria-current="page"{% endif %}>Accuracy</a>
       <a href="/bets" {% if path.startswith('/bets') %}aria-current="page"{% endif %}>Bets</a>
@@ -28,6 +29,7 @@
   <footer class="site">
     Rating = expected point margin against an average FBS team on a neutral field.
     Closing lines are shown for comparison only; they are never model inputs.
+    {% if s is defined and s and s.meta.built_at %}<span class="built">{{ s.meta.season }} data built {{ s.meta.built_at|iso_ts }}.</span>{% endif %}
   </footer>
   <script src="{{ url_for('static', path='app.js') }}"></script>
 </body>

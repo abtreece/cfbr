@@ -32,6 +32,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
+| `cfbr check` | Daily dead-man's switch: alert when no successful `weekly` run is recorded since the last Sunday in season, or the backup is stale |
 | `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
 | `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon |
 | `cfbr market-ratings --season 2026` | Diagnostic: invert the closing lines into market-implied ratings per slot and compare with the model's (`results/market_ratings_{season}.md`); no API calls |
@@ -110,7 +111,16 @@ Data-only changes (a `cfbr weekly` run, new files under `out/`) need no restart.
 40 21,22 * * 0,1  [ "$(TZ=America/Chicago date +\%H)" = "16" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
 ```
 
-`weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted, 4 = another run in progress, 5 = no completed weeks yet. Failures (except 5) and post-run health-check problems send a push alert through ntfy: install the ntfy app and subscribe to the topic in `.keys` (`NTFY_TOPIC`). A successful run also sends a silent (priority `min`) "cfbr weekly ok" message carrying the paper-bet ledger's hash-chain head, which doubles as a heartbeat and as a timestamp for the ledger kept off this machine.
+`weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted (the run still completes on cached data, so rankings for the last ingested week are published), 4 = another run in progress, 5 = no completed weeks yet. Failures (except 5) and post-run health-check problems send a push alert through ntfy: install the ntfy app and subscribe to the topic in `.keys` (`NTFY_TOPIC`). A successful run also sends a silent (priority `min`) "cfbr weekly ok" message carrying the paper-bet ledger's hash-chain head, which doubles as a heartbeat and as a timestamp for the ledger kept off this machine.
+
+### Daily check (dead-man's switch) and log rotation
+
+`cfbr weekly` records each successful run in `out/last_success.json`. `cfbr check` alerts (ntfy) when, during the season, no success is recorded since the last Sunday window (6 PM Central), or when the backup is stale; outside the season it is quiet. The same cron line rotates `data/*.log` with `deploy/logrotate.conf` (weekly, 12 kept, compressed).
+
+```cron
+# Daily at 8 PM Central.
+0 1,2 * * *  [ "$(TZ=America/Chicago date +\%H)" = "20" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr check >> data/check.log 2>&1; /usr/sbin/logrotate -s /home/abtreece/cfb-ratings/data/.logrotate.state /home/abtreece/cfb-ratings/deploy/logrotate.conf
+```
 
 ## Backups
 

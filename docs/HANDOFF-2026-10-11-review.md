@@ -4,6 +4,8 @@ Implementation handoff from a full review of `cfbr`. Everything below was verifi
 
 *Revised 2026-10-11 after a second review: the M1 day-mode as-of rule fixed (the first draft leaked plays from games still in progress), the M1 shadow clarified, W1 downgraded (CFBD normally renumbers a rescheduled game's week), the M2 spec matched to what was measured, the O1 timestamp option corrected, the priority table aligned with the sections, line references fixed.*
 
+**Status (2026-10-11, end of day):** done and committed — O1, B1, B2, M2+M3 (shadow running), M1 (built as an eval path; ceiling check failed, dropped), M5, M4 (all four checks miss the threshold; `docs/m4-ceiling-checks-2026-10-11.md`), B3, B4 (no signal; reporting column only), B5, B6, W1–W4, O2, O3 (decision: cron paused, code and data kept). Results and rules are in `DECISIONS.md` under "(review Xn)". Not done: M6 (optional efficiency), and the crontab changes the README now documents (odds-snapshot extra lines, daily `cfbr check`, removing `cfbr news collect`) must be applied by hand.
+
 Read `CLAUDE.md` and `DECISIONS.md` first. Rules that bind every item:
 
 - **Pre-register before you look.** Any model or bet-rule change gets an evaluation rule written into `DECISIONS.md` *before* the result is computed, with the metric, the data window, and the adopt/reject threshold. Follow the pattern of DECISIONS lines 71–73 and 106–110.

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from cfbr.config import load_config
 from cfbr.web.app import create_app, default_slot, game_row, poll_note
 from cfbr.web.build import FINAL, build_season, timeline_polls, web_dir
-from cfbr.web.store import Store
+from cfbr.web.store import Season, Store, _ensure
 
 SEASON = 2026
 TEAMS = ["Texas A&M", "Hawai'i", "<b>Evil</b>", "Ohio State"]
@@ -95,19 +95,22 @@ def web_cfg(tmp_path):
     return cfg
 
 
+METRICS = {"seasons": [2015, 2021], "overall": {
+    "n_games": 10, "mae": 13.0, "line_mae": 12.0, "massey_mae": 15.0, "ats_n": 9, "ats_win_rate": 0.5,
+    "ats_ci95_low": 0.2, "ats_ci95_high": 0.8}, "diagnostics": {
+    "n_games": 10, "by_week": [{"bucket": "w01", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
+    "by_prior_share": [{"bucket": ">=0.9", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
+    "ats_by_edge": [{"bucket": "0-3", "n": 9, "wins": 4, "win_rate": 0.444, "ci95_low": 0.2, "ci95_high": 0.7}],
+    "blend": {"n": 9, "w_line": 0.95, "w_model": 0.05, "mae_line": 12.0, "mae_model": 13.0, "mae_blend": 12.0},
+    "reliability": [{"bin": "0.5-0.6", "n": 10, "predicted": 0.55, "observed": 0.5}]}}
+
+
 @pytest.fixture
 def client(web_cfg):
     _write_season(web_dir(web_cfg), datetime.now(UTC))
     run = web_cfg.paths.results_dir / "20260101T000000Z-test"
     run.mkdir(parents=True)
-    (run / "metrics.json").write_text(json.dumps({"seasons": [2015, 2021], "overall": {
-        "n_games": 10, "mae": 13.0, "line_mae": 12.0, "massey_mae": 15.0, "ats_n": 9, "ats_win_rate": 0.5,
-        "ats_ci95_low": 0.2, "ats_ci95_high": 0.8}, "diagnostics": {
-        "n_games": 10, "by_week": [{"bucket": "w01", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
-        "by_prior_share": [{"bucket": ">=0.9", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
-        "ats_by_edge": [{"bucket": "0-3", "n": 9, "wins": 4, "win_rate": 0.444, "ci95_low": 0.2, "ci95_high": 0.7}],
-        "blend": {"n": 9, "w_line": 0.95, "w_model": 0.05, "mae_line": 12.0, "mae_model": 13.0, "mae_blend": 12.0},
-        "reliability": [{"bin": "0.5-0.6", "n": 10, "predicted": 0.55, "observed": 0.5}]}}))
+    (run / "metrics.json").write_text(json.dumps(METRICS))
     return TestClient(create_app(web_cfg))
 
 
@@ -979,3 +982,306 @@ def test_last_qb_names_the_starter_and_where_he_went():
     old = deps.drop("prev_pass_plays")
     assert last_qb(players, old, {"qb_returns": 0.0})["name"] == "Not back"
     assert last_qb(players.clear(), old, None) == {"name": "—", "detail": None}
+
+
+# -- review W1/W2: postponed games, build atomicity, memoization, cache headers -------------
+
+def _games_df(rows):
+    return pl.DataFrame(rows, schema_overrides={"home_points": pl.Int64, "away_points": pl.Int64,
+                                                "margin": pl.Float64, "spread": pl.Float64})
+
+
+def test_completed_weeks_moves_a_postponed_game_to_its_kickoff_week(caplog):
+    """A week-2 game moved three weeks out (CFBD week number unchanged) must not hold week 2 open."""
+    from types import SimpleNamespace
+
+    from cfbr.web.build import completed_weeks, effective_week
+
+    now = T0 + timedelta(days=10)
+    rows = [_game(1, "r01", "Texas A&M", "Ohio State", T0, True, 31, 10),
+            _game(2, "r02", "Hawai'i", "Ohio State", T0 + timedelta(days=7), True, 17, 24),
+            _game(3, "r02", "Texas A&M", "Hawai'i", T0 + timedelta(days=21), False),  # moved to week 4's weekend
+            _game(4, "r03", "Ohio State", "Texas A&M", T0 + timedelta(days=14), False),
+            _game(5, "r04", "Hawai'i", "Texas A&M", T0 + timedelta(days=21), False)]
+    eng = SimpleNamespace(games=_games_df(rows))
+    with caplog.at_level("WARNING", logger="cfbr.web.build"):
+        assert completed_weeks(eng, SEASON, now) == [1, 2]
+    assert "not renumbered" in caplog.text
+    eff = effective_week(eng.games)
+    assert dict(zip(eff["game_id"].to_list(), eff["week"].to_list())) == {1: 1, 2: 2, 3: 4, 4: 3, 5: 4}
+    # Once the makeup is played, week 4 completes with it.
+    eng.games = eng.games.with_columns(completed=pl.col("game_id").is_in([3, 4, 5]) | pl.col("completed"))
+    assert completed_weeks(eng, SEASON, now + timedelta(days=30)) == [1, 2, 3, 4]
+
+
+def test_completed_play_weeks_moves_a_postponed_game(caplog):
+    from cfbr.ingest.fetch import completed_play_weeks
+
+    def raw(gid, week, start, completed):
+        return {"id": gid, "seasonType": "regular", "week": week, "startDate": start.isoformat().replace("+00:00", "Z"),
+                "completed": completed, "homeClassification": "fbs", "awayClassification": "fbs",
+                "homeTeam": "H", "awayTeam": "A"}
+    games = [raw(1, 1, T0, True), raw(2, 2, T0 + timedelta(days=7), True),
+             raw(3, 2, T0 + timedelta(days=21), False), raw(4, 3, T0 + timedelta(days=14), True),
+             raw(5, 4, T0 + timedelta(days=21), False)]
+    with caplog.at_level("WARNING", logger="cfbr.ingest.fetch"):
+        assert completed_play_weeks(games) == [("regular", 1), ("regular", 2), ("regular", 3)]
+    assert "week 2" in caplog.text and "week 4" in caplog.text
+
+
+def test_default_slot_skips_a_stale_game(web_cfg):
+    """A postponed/cancelled game (kickoff long past, never completed) doesn't pin the default slot."""
+    now = datetime.now(UTC)
+    root = web_dir(web_cfg)
+    d = _write_season(root, now)
+    g = _games(now).with_columns(kickoff_ts=pl.when(pl.col("game_id") == 3).then(pl.lit(now - timedelta(days=10)))
+                                 .otherwise(pl.col("kickoff_ts")))
+    g = pl.concat([g, _games_df([_game(5, "r03", "Ohio State", "Hawai'i", now + timedelta(days=9), False)])])
+    g.write_parquet(d / "games.parquet")
+    meta = d / "meta.json"
+    st = meta.stat()
+    os.utime(meta, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    s = Store(root, web_cfg.paths.results_dir, web_cfg.paths.out_dir).season(SEASON)
+    assert s is not None
+    assert default_slot(s, now) == "r02"  # game 4 (fresh, upcoming) still keeps r02 current
+    s2 = Season(s.meta, s.ratings, s.games.filter(pl.col("game_id") != 4))
+    assert default_slot(s2, now) == "r03"  # only the stale game left in r02: move on
+
+
+def test_game_status_labels_postponed_and_cancelled():
+    from cfbr.web.app import game_status
+
+    now = datetime.now(UTC)
+    stale = {"completed": False, "kickoff_ts": now - timedelta(days=10)}
+    assert game_status(stale, now, live=True) == "postponed"
+    assert game_status(stale, now, live=False) == "cancelled"
+    assert game_status({"completed": False, "kickoff_ts": now + timedelta(days=1)}, now, True) == "upcoming"
+    assert game_status({"completed": True, "kickoff_ts": now - timedelta(days=10)}, now, True) == "final"
+
+
+def test_pages_show_postponed_games(web_cfg):
+    now = datetime.now(UTC)
+    d = _write_season(web_dir(web_cfg), now)
+    g = _games(now).with_columns(kickoff_ts=pl.when(pl.col("game_id") == 3).then(pl.lit(now - timedelta(days=10)))
+                                 .otherwise(pl.col("kickoff_ts")))
+    g.write_parquet(d / "games.parquet")
+    meta = d / "meta.json"
+    st = meta.stat()
+    os.utime(meta, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    c = TestClient(create_app(web_cfg))
+    assert "postponed" in c.get("/games?season=2026&slot=r02").text
+    assert "postponed" in c.get("/team/2026/Ohio%20State").text
+
+
+def test_sim_skips_stale_games_in_live_mode(engine):
+    """A game still not completed days after kickoff is not a game left to simulate."""
+    from cfbr.sim.season import build_inputs
+
+    season = 2026
+    g = engine.games.filter((pl.col("season") == season) & (pl.col("season_type") == "regular"))
+    stale = g.filter(~pl.col("completed")).sort("kickoff_ts")
+    if stale.height == 0:
+        pytest.skip("no uncompleted 2026 games in the store")
+    as_of = stale["kickoff_ts"][0] - timedelta(hours=1)
+    far = stale["kickoff_ts"].max() + timedelta(days=30)
+    n_live = len(build_inputs(engine, season, as_of, now=far).g_mean)  # everything is stale from `far`
+    n_then = len(build_inputs(engine, season, as_of, now=as_of).g_mean)
+    assert n_live == 0 < n_then
+
+
+def test_store_refuses_a_season_mid_rebuild(web_cfg):
+    """ratings.parquet newer than meta.json means a rebuild is in progress: keep the old copy,
+    or with nothing cached report the season as not ready (503, not a 404 or mixed data)."""
+    root = web_dir(web_cfg)
+    d = _write_season(root, datetime.now(UTC))
+    store = Store(root, web_cfg.paths.results_dir, web_cfg.paths.out_dir)
+    assert store.season(SEASON).ratings["rating"].max() == 21.0
+    # Rebuild in progress: new parquet, old meta.
+    _ratings().with_columns(rating=pl.col("rating") + 100).write_parquet(d / "ratings.parquet")
+    meta = d / "meta.json"
+    st = meta.stat()
+    os.utime(d / "ratings.parquet", ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert store.season(SEASON).ratings["rating"].max() == 21.0  # warm cache: previous copy
+    cold = Store(root, web_cfg.paths.results_dir, web_cfg.paths.out_dir)
+    assert cold.season(SEASON) is None and cold.rebuilding(SEASON)
+    c = TestClient(create_app(web_cfg, cold))
+    assert c.get("/rankings?season=2026").status_code == 503
+    assert c.get("/api/seasons").status_code == 200 and c.get("/api/seasons").json() == []
+    # meta.json lands last: both stores pick up the new build.
+    os.utime(meta, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    assert store.season(SEASON).ratings["rating"].max() == 121.0
+    assert cold.season(SEASON).ratings["rating"].max() == 121.0 and not cold.rebuilding(SEASON)
+
+
+def test_api_seasons_skips_a_vanished_meta(web_cfg, monkeypatch):
+    now = datetime.now(UTC)
+    _write_finished(web_dir(web_cfg), now)
+    _write_season(web_dir(web_cfg), now)
+    store = Store(web_dir(web_cfg), web_cfg.paths.results_dir, web_cfg.paths.out_dir)
+    c = TestClient(create_app(web_cfg, store))
+    assert [m["season"] for m in c.get("/api/seasons").json()] == [2025, 2026]
+    real = store.season
+    monkeypatch.setattr(store, "seasons", lambda: [2025, 2026, 2027])  # listed, then gone
+    monkeypatch.setattr(store, "season", lambda y: None if y == 2027 else real(y))
+    assert [m["season"] for m in c.get("/api/seasons").json()] == [2025, 2026]
+
+
+def test_accuracy_log_and_runs_are_memoized(web_cfg, monkeypatch):
+    now = datetime.now(UTC)
+    _write_season(web_dir(web_cfg), now)
+    out = web_cfg.paths.out_dir / str(SEASON)
+    out.mkdir(parents=True, exist_ok=True)
+    hdr = "run_at,season,through_week,n_games,mae,line_mae,massey_mae,ats_win_rate\n"
+    (out / "accuracy.csv").write_text(hdr + "2026-10-05T15:00:00+00:00,2026,5,50,13.1,12.0,15.0,0.5\n")
+    results = web_cfg.paths.results_dir
+    run = results / "20260101T000000Z-a"
+    run.mkdir(parents=True)
+    (run / "metrics.json").write_text(json.dumps(METRICS))
+    store = Store(web_dir(web_cfg), results, web_cfg.paths.out_dir)
+
+    reads = {"csv": 0, "json": 0}
+    real_csv, real_json = pl.read_csv, json.loads
+    monkeypatch.setattr(pl, "read_csv", lambda *a, **k: (reads.__setitem__("csv", reads["csv"] + 1), real_csv(*a, **k))[1])
+    monkeypatch.setattr(json, "loads", lambda *a, **k: (reads.__setitem__("json", reads["json"] + 1), real_json(*a, **k))[1])
+    for _ in range(3):
+        assert store.accuracy_log(SEASON)["mae"][0] == 13.1
+        assert [r.run_id for r in store.runs()] == ["20260101T000000Z-a"]
+    assert reads["csv"] == 1 and reads["json"] == 1
+    # A change is picked up: a new line in the log, a new run directory.
+    (out / "accuracy.csv").write_text(hdr + "2026-10-05T15:00:00+00:00,2026,5,50,13.1,12.0,15.0,0.5\n"
+                                      "2026-10-12T15:00:00+00:00,2026,6,60,12.9,12.0,15.0,0.5\n")
+    st = (out / "accuracy.csv").stat()
+    os.utime(out / "accuracy.csv", ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert store.accuracy_log(SEASON).height == 2
+    run2 = results / "20260102T000000Z-b"
+    run2.mkdir()
+    st = results.stat()
+    os.utime(results, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert [r.run_id for r in store.runs()] == ["20260101T000000Z-a"]  # no metrics.json yet: pending
+    (run2 / "metrics.json").write_text(json.dumps(METRICS | {"seasons": [2022, 2025]}))
+    assert [r.run_id for r in store.runs()] == ["20260102T000000Z-b", "20260101T000000Z-a"]
+    assert reads["json"] == 2
+    # /accuracy computes each season's summary once per loaded Season.
+    from cfbr.web import app as app_mod
+
+    calls = {"n": 0}
+    real_sum = app_mod.summarize
+    monkeypatch.setattr(app_mod, "summarize", lambda df: (calls.__setitem__("n", calls["n"] + 1), real_sum(df))[1])
+    c = TestClient(create_app(web_cfg, store))
+    c.get("/accuracy")
+    c.get("/accuracy")
+    assert calls["n"] == 1
+
+
+def test_finished_season_pages_are_publicly_cacheable(web_cfg):
+    now = datetime.now(UTC)
+    _write_finished(web_dir(web_cfg), now)
+    _write_season(web_dir(web_cfg), now, live=True, polls=True)
+    c = TestClient(create_app(web_cfg))
+    for url in ("/rankings?season=2025", "/team/2025/Ohio%20State", "/games?season=2025&slot=r01",
+                "/api/rankings?season=2025", "/api/games?season=2025&slot=r01", "/matchup?season=2025",
+                "/accuracy?season=2025"):
+        r = c.get(url)
+        assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=3600", url
+    for url in ("/rankings?season=2026", "/team/2026/Ohio%20State", "/api/games?season=2026&slot=r01",
+                "/matchup?season=2026"):
+        assert c.get(url).headers["cache-control"] == "private, no-store", url
+    assert "cache-control" not in c.get("/accuracy?season=2026").headers
+    # The free landing page carries a live-season notice: viewer-specific, so never shared.
+    from cfbr.web.access import premium_viewer
+
+    app = create_app(web_cfg)
+    app.dependency_overrides[premium_viewer] = lambda: False
+    r = TestClient(app).get("/rankings")
+    assert "2026 ratings and rankings are for subscribers" in r.text
+    assert r.headers["cache-control"] == "private, no-store"
+
+
+# -- review W3: visitor features ---------------------------------------------------------
+
+def test_explain_tiles_and_resume_on_team_page(poll_client):
+    html = " ".join(poll_client.get("/team/2026/Texas%20A%26M").text.split())
+    assert "Explain the rating" in html and "Offense: points per play" in html and "percentile" in html
+    assert "Schedule and résumé" in html and "Best win" in html and "Record vs. top 25" in html
+
+
+def test_explain_rating_percentiles():
+    from cfbr.web.app import explain_rating, resume
+    from cfbr.web.store import Season
+
+    r = _ratings().with_columns(o_ppa=pl.col("rating") / 100)  # ranks 1..4 -> distinct values
+    s = Season({"season": SEASON, "live": False, "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}},
+               _ensure(r, ["ap_rank", "coaches_rank", "cfp_rank"]),
+               _ensure(_games(T0), [f"{x}_{c}" for x in ("home", "away") for c in ("ap_rank", "coaches_rank", "cfp_rank")]))
+    e = {x["label"]: x for x in explain_rating(s, "Texas A&M", 1)}
+    assert e["Offense: points per play"]["pct"] == 1.0 and "100th percentile" in e["Offense: points per play"]["sub"]
+    e = {x["label"]: x for x in explain_rating(s, "Ohio State", 1)}
+    assert e["Offense: points per play"]["pct"] == 0.25
+    res = resume(s, "Texas A&M", 1)
+    assert res["best_win"]["opponent"] == "<b>Evil</b>" and res["worst_loss"] is None
+    assert 1 <= res["sos_rank"] <= 4 and res["top25_w"] == 1
+
+
+def test_rankings_vs_ap_column_and_box(poll_client):
+    html = " ".join(poll_client.get("/rankings?season=2026&week=1").text.split())
+    assert "vs AP" in html and "Model vs. the AP poll" in html
+    # Texas A&M: model #1, AP #3 -> poll lower than model (model higher): vs_ap = -2.
+    from cfbr.web.app import ap_disagreements, rankings_rows
+
+    rows = [{"team": "A", "rank": 1, "ap_rank": 3, "vs_ap": -2}, {"team": "B", "rank": 9, "ap_rank": 2, "vs_ap": 7},
+            {"team": "C", "rank": 20, "ap_rank": None, "vs_ap": None}]
+    box = ap_disagreements(rows)
+    assert [r["team"] for r in box["over"]] == ["B"] and [r["team"] for r in box["under"]] == ["A"]
+    assert [r["team"] for r in box["unranked"]] == ["C"]
+    api = poll_client.get("/api/rankings?season=2026&week=1").json()["teams"]
+    assert {t["team"]: t["vs_ap"] for t in api}["Texas A&M"] == -2
+
+
+def test_upset_alerts_on_games_page(client):
+    html = " ".join(client.get("/games?season=2026&slot=r01").text.split())
+    # Game 1: model Texas A&M by 10, line Texas A&M -7: 3-point edge -> alert at the bet threshold.
+    assert "Upset alerts" in html and "by 3.0 more than the line" in html
+    r = game_row({"home_team": "H", "away_team": "A", "pred_margin": -2.0, "win_prob": 0.42, "spread": -3.0,
+                  "margin": None, "completed": False})
+    assert r["alert"] == "A to win outright (58%)"
+    r = game_row({"home_team": "H", "away_team": "A", "pred_margin": 4.0, "win_prob": 0.6, "spread": -3.0,
+                  "margin": None, "completed": False})
+    assert r["alert"] is None
+
+
+def test_upset_alerts_withheld_from_free_viewers(free_client):
+    html = free_client.get("/games?season=2026&slot=r01").text
+    assert "Upset alerts" not in html
+
+
+def test_matchup_page(web_cfg):
+    now = datetime.now(UTC)
+    d = _write_season(web_dir(web_cfg), now, live=False)
+    meta = json.loads((d / "meta.json").read_text())
+    meta["calibration"] = {"b_home": 2.5, "b_ppa": 30.0, "b_sr": 40.0, "sigma": 16.0, "stage2": None}
+    (d / "meta.json").write_text(json.dumps(meta))
+    c = TestClient(create_app(web_cfg))
+    html = c.get("/matchup?season=2026").text
+    assert "Head to head" in html and 'id="h2h-home"' in html and '"b_home": 2.5' in html
+    assert "cdn" not in html.lower()  # no external assets
+    # Free viewers on a live season see no ratings in the page.
+    from cfbr.web.access import premium_viewer
+
+    meta["live"] = True
+    (d / "meta.json").write_text(json.dumps(meta))
+    app = create_app(web_cfg)
+    app.dependency_overrides[premium_viewer] = lambda: False
+    r = TestClient(app).get("/matchup?season=2026")
+    assert r.status_code == 200 and "for subscribers" in r.text and "h2h-data" not in r.text
+    for leak in MODEL_STRINGS:
+        assert leak not in r.text
+
+
+def test_footer_shows_build_time(client):
+    assert "data built" in client.get("/rankings").text
+
+
+def test_build_exports_calibration(engine, tmp_path):
+    build_season(engine, 2023, tmp_path, now=datetime.now(UTC))
+    cal = json.loads((tmp_path / "2023" / "meta.json").read_text())["calibration"]
+    assert cal["b_home"] == pytest.approx(engine.calibration(2023).b_home) and cal["sigma"] > 0

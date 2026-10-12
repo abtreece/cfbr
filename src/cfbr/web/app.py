@@ -7,6 +7,7 @@ backtest results under ``results/``, and ``out/{season}/accuracy.csv``.
 from __future__ import annotations
 
 import math
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -22,6 +23,9 @@ from cfbr.backtest.metrics import summarize
 from cfbr.config import Config
 from cfbr.web.access import premium_viewer
 from cfbr.web.bets import NO_STORE, price_str, spread_str
+
+# Finished seasons never change (a rebuild reproduces them), so shared caches may keep them an hour.
+PUBLIC_HOUR = {"Cache-Control": "public, max-age=3600"}
 from cfbr.web.bets import make_router as bets_router
 from cfbr.web.build import FINAL, STALE_GAME, web_dir
 from cfbr.web.odds import make_router as odds_router
@@ -73,6 +77,17 @@ def short_ts(ts: datetime | None) -> str:
         return "—"
     local = ts.astimezone(DISPLAY_TZ)
     return f"{local:%b} {local.day}, {local:%I:%M %p}".replace(" 0", " ")
+
+
+def iso_ts(s: str | None) -> str:
+    """An ISO timestamp from meta.json (e.g. ``built_at``) in display time."""
+    if not s:
+        return "—"
+    try:
+        ts = datetime.fromisoformat(s)
+    except ValueError:
+        return s
+    return short_ts(ts if ts.tzinfo else ts.replace(tzinfo=UTC)) + f" {DISPLAY_TZ_LABEL}"
 
 
 def slot_label(slot: str) -> str:
@@ -150,7 +165,91 @@ def rankings_rows(s: Season, week: int, conference: str | None = None) -> list[d
         cur = cur.filter(pl.col("rank") <= 25)
     elif conference:
         cur = cur.filter(pl.col("conference") == conference)
+    # Model rank minus AP rank: positive means the poll has the team higher than the model does.
+    if "ap_rank" in cur.columns:
+        cur = cur.with_columns(vs_ap=(pl.col("rank") - pl.col("ap_rank")).cast(pl.Int32))
     return cur.join(trend, on="team", how="left").sort("rank").to_dicts()
+
+
+def ap_disagreements(rows: list[dict], n: int = 3) -> dict:
+    """Where the model and the AP poll differ most: ``over`` (AP rank well above the model's),
+    ``under`` (model well above the AP rank) and ``unranked`` (model top 25, no AP vote)."""
+    ranked = [r for r in rows if r.get("ap_rank") is not None and r.get("vs_ap") is not None]
+    over = sorted((r for r in ranked if r["vs_ap"] > 0), key=lambda r: (-r["vs_ap"], r["ap_rank"]))[:n]
+    under = sorted((r for r in ranked if r["vs_ap"] < 0), key=lambda r: (r["vs_ap"], r["rank"]))[:n]
+    unranked = [r for r in rows if r.get("ap_rank") is None and r.get("rank") is not None and r["rank"] <= 25][:n]
+    return {"over": over, "under": under, "unranked": unranked}
+
+
+EXPLAIN = (("o_ppa", "Offense: points per play", "opponent-adjusted PPA, {} in FBS"),
+           ("d_ppa", "Defense: points per play", "opponent-adjusted PPA allowed, {} in FBS"),
+           ("o_sr", "Offense: success rate", "opponent-adjusted, {} in FBS"),
+           ("d_sr", "Defense: success rate", "opponent-adjusted, {} in FBS"))
+
+
+def explain_rating(s: Season, team: str, week: int) -> list[dict]:
+    """The four efficiency terms behind a rating with the team's league percentile for each.
+    All four are signed deviations from the FBS average, where higher is better (defense
+    is already from the defending team's side)."""
+    fbs = s.ratings.filter(pl.col("fbs") & (pl.col("week") == week))
+    me = s.ratings.filter((pl.col("team") == team) & (pl.col("week") == week))
+    if me.height == 0 or fbs.height == 0:
+        return []
+    out = []
+    for col, label, sub in EXPLAIN:
+        v = me[col][0]
+        if _missing(v):
+            return []  # withheld (free viewer on a live season)
+        pct_rank = float((fbs[col] <= v).mean())
+        out.append({"label": label, "value": v, "pct": pct_rank, "kind": "ppa" if col.endswith("ppa") else "sr",
+                    "sub": sub.format(ordinal(int(round(100 * pct_rank))) + " percentile")})
+    return out
+
+
+def ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def schedule_strength(s: Season, week: int) -> pl.DataFrame:
+    """Per FBS team: mean opponent rating (at ``week``) over the full schedule and over the
+    games played, with the schedule rank (1 = hardest). Pooled FCS opponents use their pool's rating."""
+    r = s.ratings.filter(pl.col("week") == week).select("team", "rating", "rank")
+    fbs = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
+    g = s.games
+    sides = pl.concat([
+        g.select(team=pl.col("home_team"), opp=pl.col("away"), done=pl.col("completed")),
+        g.select(team=pl.col("away_team"), opp=pl.col("home"), done=pl.col("completed")),
+    ]).filter(pl.col("team").is_in(list(fbs)))
+    sides = sides.join(r.rename({"team": "opp", "rating": "opp_rating"}).select("opp", "opp_rating"), on="opp", how="left")
+    out = sides.group_by("team").agg(
+        sos=pl.col("opp_rating").mean(),
+        sos_played=pl.col("opp_rating").filter(pl.col("done")).mean(),
+        n_games=pl.len(),
+    )
+    return out.with_columns(sos_rank=pl.col("sos").rank("ordinal", descending=True).cast(pl.Int32))
+
+
+def resume(s: Season, team: str, week: int) -> dict | None:
+    """Strength of schedule and résumé facts for the team page: SOS rank, best win, worst
+    loss and the record against the model's top 25 as of ``week``. None when withheld."""
+    sos = schedule_strength(s, week)
+    me = sos.filter(pl.col("team") == team)
+    if me.height == 0 or _missing(me["sos"][0]):
+        return None
+    r = s.ratings.filter(pl.col("week") == week).select("team", "rating", "rank")
+    g = (team_games(s, team).filter(pl.col("completed") & pl.col("t_margin").is_not_null())
+         .join(r.rename({"team": "opp_entity", "rating": "opp_rating", "rank": "opp_rank"}), on="opp_entity", how="left"))
+    wins = g.filter(pl.col("t_margin") > 0).sort("opp_rating", descending=True, nulls_last=True)
+    losses = g.filter(pl.col("t_margin") < 0).sort("opp_rating", nulls_last=True)
+    top = g.filter(pl.col("opp_rank") <= 25)
+    row = me.row(0, named=True)
+    return {
+        "sos": row["sos"], "sos_played": row["sos_played"], "sos_rank": row["sos_rank"], "n_fbs": sos.height,
+        "best_win": wins.row(0, named=True) if wins.height else None,
+        "worst_loss": losses.row(0, named=True) if losses.height else None,
+        "top25_w": int((top["t_margin"] > 0).sum()), "top25_l": int((top["t_margin"] < 0).sum()),
+    }
 
 
 def team_games(s: Season, team: str) -> pl.DataFrame:
@@ -172,14 +271,28 @@ def team_games(s: Season, team: str) -> pl.DataFrame:
     ).sort("kickoff_ts")
 
 
-def game_row(g: dict) -> dict:
+def game_status(g: dict, now: datetime | None, live: bool) -> str:
+    """``final``, ``upcoming``, or for a game still not completed STALE_GAME after its
+    kickoff: ``postponed`` while the season is in progress (it may still be made up),
+    ``cancelled`` once the season is over."""
+    if g.get("completed"):
+        return "final"
+    ts = g.get("kickoff_ts")
+    if now is not None and ts is not None and ts < now - STALE_GAME:
+        return "postponed" if live else "cancelled"
+    return "upcoming"
+
+
+def game_row(g: dict, now: datetime | None = None, live: bool = True, threshold: float = 3.0) -> dict:
     """Display fields for one game (home perspective in the data). Model fields
-    are None when the prediction is withheld (see :func:`public_view`)."""
+    are None when the prediction is withheld (see :func:`public_view`). ``alert`` names
+    an upset alert: the model takes the other side of the Vegas favorite, or differs from
+    the closing line by ``threshold`` points or more (the paper-bet threshold)."""
     pred, margin, spread = g["pred_margin"], g["margin"], g["spread"]
     home, away = g["home_team"], g["away_team"]
     has_pred = not _missing(pred)
     row = {**g, "model_pick": None, "fav_prob": None, "vegas_pick": None, "edge": None, "ats": None,
-           "model_err": None, "vegas_err": None}
+           "model_err": None, "vegas_err": None, "status": game_status(g, now, live), "alert": None}
     if has_pred:
         fav = home if pred >= 0 else away
         row["model_pick"] = f"{fav} by {abs(pred):.1f}" if abs(pred) >= 0.05 else "Toss-up"
@@ -194,6 +307,13 @@ def game_row(g: dict) -> dict:
         if has_pred:
             diff = pred - vegas_home
             row["edge"] = (f"{abs(diff):.1f} toward {home if diff > 0 else away}") if abs(diff) >= 0.05 else "agrees"
+            win_prob = g.get("win_prob")
+            fav_prob = None if _missing(win_prob) else (win_prob if vegas_home > 0 else 1 - win_prob)
+            if vegas_home != 0 and fav_prob is not None and fav_prob < 0.5:
+                dog = away if vegas_home > 0 else home
+                row["alert"] = f"{dog} to win outright ({100 * (1 - fav_prob):.0f}%)"
+            elif abs(diff) >= threshold:
+                row["alert"] = f"{home if diff > 0 else away} by {abs(diff):.1f} more than the line"
     if g["completed"] and not _missing(margin):
         if not _missing(spread):
             row["vegas_err"] = abs(-spread - margin)
@@ -261,8 +381,25 @@ def accuracy_by_slot(s: Season) -> pl.DataFrame:
     ).sort("slot_order"))
 
 
+_SUMMARIES: dict[int, tuple[Season, dict]] = {}
+_SUMMARIES_LOCK = threading.Lock()
+
+
 def season_summary(s: Season) -> dict:
-    return summarize(s.games.filter(pl.col("completed")))
+    """Aggregate accuracy for a season's completed games, computed once per loaded Season
+    (the Store hands out the same object until the files change)."""
+    key = id(s)
+    with _SUMMARIES_LOCK:
+        hit = _SUMMARIES.get(key)
+        if hit is not None and hit[0] is s:
+            return hit[1]
+    out = summarize(s.games.filter(pl.col("completed")))
+    with _SUMMARIES_LOCK:
+        _SUMMARIES[key] = (s, out)
+        if len(_SUMMARIES) > 64:  # keep the cache bounded; entries for dropped Seasons are just stale ids
+            for k in list(_SUMMARIES)[:-32]:
+                del _SUMMARIES[k]
+    return out
 
 
 # -- app --------------------------------------------------------------------------
@@ -279,6 +416,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     env.auto_reload = False
     app.state.templates = templates
     env.filters |= {"num": num, "signed": signed, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
+                    "iso_ts": iso_ts,
                     "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL, "prob": prob}
@@ -289,6 +427,8 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         if s is None:
             if not store.seasons():
                 raise HTTPException(503, "No web data yet. Run `cfbr web build` first.")
+            if season and store.rebuilding(season):
+                raise HTTPException(503, f"Season {season} is being rebuilt; try again in a moment.")
             raise HTTPException(404, f"No data for season {season}.")
         return s
 
@@ -300,10 +440,13 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         locked = bool(s.meta.get("live")) and not premium
         return (public_view(s) if locked else s), locked
 
-    def private(resp: Response, s: Season) -> Response:
+    def private(resp: Response, s: Season, shared: bool = True) -> Response:
         # A live season's pages differ for free and premium viewers; never let a shared cache mix them.
-        if s.meta.get("live"):
+        # A finished season's pages are the same for everyone and change only on a rebuild.
+        if s.meta.get("live") or not shared:
             resp.headers.update(NO_STORE)
+        else:
+            resp.headers.update(PUBLIC_HOUR)
         return resp
 
     def latest_free_season() -> int | None:
@@ -351,11 +494,14 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         lo, hi = fbs["rating"].min(), fbs["rating"].max()
         as_of = fbs.filter(pl.col("week") == week)["as_of"][0]
         show_cfp = fbs.filter(pl.col("week") == week)["cfp_rank"].is_not_null().any()
+        show_ap = fbs.filter(pl.col("week") == week)["ap_rank"].is_not_null().any()
         resp = render(request, "rankings.html", s=s, season=s.meta["season"], week=week, conf=conf, rows=rows,
-                      polls=poll_note(s, week), show_cfp=show_cfp,
+                      polls=poll_note(s, week), show_cfp=show_cfp, show_ap=show_ap,
+                      ap=ap_disagreements(rows if not conf else rankings_rows(s, week)) if show_ap else None,
                       conferences=conferences, lo=lo, hi=hi, as_of=as_of, kind=season_kind(cfg, s.meta["season"]),
                       live_season=live_season)
-        return private(resp, s)
+        # The landing page with a live-season notice is viewer-specific (free viewers only see it).
+        return private(resp, s, shared=live_season is None)
 
     @app.get("/team/{season}/{team:path}", response_class=HTMLResponse, include_in_schema=False)
     def team_page(request: Request, season: int, team: str, premium: bool = Depends(premium_viewer)):
@@ -364,9 +510,11 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         if hist.height == 0:
             raise HTTPException(404, f"No team named {team!r} in {season}.")
         fbs_teams = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
-        games = [game_row(g) for g in team_games(s, team).to_dicts()]
+        now, live = datetime.now(UTC), bool(s.meta.get("live"))
+        games = [game_row(g, now, live, cfg.bets.threshold) for g in team_games(s, team).to_dicts()]
         team_seasons = [y for y in store.seasons()
                         if (other := store.season(y)) is not None and other.ratings["team"].is_in([team]).any()]
+        last_week = hist["week"][-1]
         chart = {
             "signed": True,
             "x": [s.label(w) for w in hist["week"].to_list()],
@@ -377,6 +525,8 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                       latest=hist.to_dicts()[-1], games=games, fbs_teams=fbs_teams, team_seasons=team_seasons,
                       show_cfp=hist["cfp_rank"].is_not_null().any(), polls=poll_note(s, hist["week"][-1]),
                       chart=None if locked else clean(chart), is_fbs=team in fbs_teams, locked=locked,
+                      explain=[] if locked else explain_rating(s, team, last_week),
+                      resume=None if locked or team not in fbs_teams else resume(s, team, last_week),
                       roster=roster_card(store.roster(season), team))
         return private(resp, s)
 
@@ -389,12 +539,31 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         if slot not in order:
             raise HTTPException(404, f"No games in slot {slot!r} of {s.meta['season']}.")
         g = s.games.filter(pl.col("slot") == slot)
-        rows = [game_row(r) for r in g.to_dicts()]
+        now = datetime.now(UTC)
+        rows = [game_row(r, now, bool(s.meta.get("live")), cfg.bets.threshold) for r in g.to_dicts()]
         done = g.filter(pl.col("completed"))
         summary = summarize(done) if done.height and not locked else None
         fbs_teams = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
         resp = render(request, "games.html", s=s, season=s.meta["season"], slot=slot, slot_order=order, rows=rows,
-                      summary=summary, fbs_teams=fbs_teams, any_final=done.height > 0, locked=locked)
+                      summary=summary, fbs_teams=fbs_teams, any_final=done.height > 0, locked=locked,
+                      alerts=[] if locked else [r for r in rows if r["alert"]], threshold=cfg.bets.threshold)
+        return private(resp, s)
+
+    @app.get("/matchup", response_class=HTMLResponse, include_in_schema=False)
+    def matchup_page(request: Request, season: int | None = None, week: int | None = None,
+                     premium: bool = Depends(premium_viewer)):
+        """Head-to-head tool: two ratings plus the calibrated home edge, priced in the browser
+        from numbers already in the build (meta.calibration); the server fits nothing."""
+        s, locked = view(get_season(season), premium)
+        week = pick_week(s, week)
+        cal = s.meta.get("calibration")
+        teams = []
+        if not locked:
+            fbs = s.ratings.filter(pl.col("fbs") & (pl.col("week") == week)).sort("team")
+            teams = fbs.select("team", "conference", "rating", "rank", "prior_share").to_dicts()
+        resp = render(request, "matchup.html", s=s, season=s.meta["season"], week=week, locked=locked,
+                      cal=clean(cal) if cal else None, teams=clean(teams),
+                      kind=season_kind(cfg, s.meta["season"]))
         return private(resp, s)
 
     @app.get("/accuracy", response_class=HTMLResponse, include_in_schema=False)
@@ -416,15 +585,18 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
             other = store.season(y)
             if other is not None:
                 per_season.append({"season": y, "kind": season_kind(cfg, y), **season_summary(other)})
-        return render(request, "accuracy.html", s=s, season=season, kind=season_kind(cfg, season),
+        resp = render(request, "accuracy.html", s=s, season=season, kind=season_kind(cfg, season),
                       summary=season_summary(s), chart=clean(chart), by_slot=by_slot.to_dicts(),
                       per_season=per_season, runs=store.runs(), log=store.accuracy_log(season), cfg=cfg)
+        # Aggregate only, the same for every viewer; a finished season's page may be cached.
+        return private(resp, s) if not s.meta.get("live") else resp
 
     # -- JSON API ---------------------------------------------------------------
 
     @app.get("/api/seasons")
     def api_seasons():
-        return [clean(store.season(y).meta) for y in store.seasons()]
+        # A season can vanish (or be mid-rebuild) between the listing and the read: skip it.
+        return [clean(s.meta) for y in store.seasons() if (s := store.season(y)) is not None]
 
     @app.get("/api/rankings")
     def api_rankings(response: Response, season: int | None = None, week: int | None = None, conf: str | None = None,

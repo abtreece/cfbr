@@ -32,6 +32,26 @@
 </div>
 {% if is_fbs and polls %}<p class="note poll-note">Polls — {{ polls|join(" · ") }}.</p>{% endif %}
 
+{% if explain %}
+<h2>Explain the rating</h2>
+<p class="note">The four play-efficiency terms behind the rating, each adjusted for opponents and shown as a deviation from the FBS average (higher is better on both sides of the ball). The rating converts them to points.</p>
+<div class="tiles explain">
+  {% for e in explain %}
+  {{ tile(e.label, (e.value|signed(3)) if e.kind == "ppa" else ((100 * e.value)|signed(1) ~ " pp"), e.sub) }}
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if resume %}
+<h2>Schedule and résumé</h2>
+<div class="tiles">
+  {{ tile("Schedule strength", "#" ~ resume.sos_rank ~ " of " ~ resume.n_fbs, "avg. opponent rating " ~ resume.sos|signed ~ (" · played " ~ resume.sos_played|signed if resume.sos_played is not none else "")) }}
+  {{ tile("Record vs. top 25", resume.top25_w ~ "–" ~ resume.top25_l, "by the model's ratings, " ~ latest.label|lower) }}
+  {% if resume.best_win %}{{ tile("Best win", resume.best_win.opponent, (resume.best_win.opp_rating|signed) ~ (" · #" ~ resume.best_win.opp_rank if resume.best_win.opp_rank is not none else "") ~ " · " ~ resume.best_win.team_points ~ "–" ~ resume.best_win.opp_points) }}{% endif %}
+  {% if resume.worst_loss %}{{ tile("Worst loss", resume.worst_loss.opponent, (resume.worst_loss.opp_rating|signed) ~ (" · #" ~ resume.worst_loss.opp_rank if resume.worst_loss.opp_rank is not none else "") ~ " · " ~ resume.worst_loss.team_points ~ "–" ~ resume.worst_loss.opp_points) }}{% endif %}
+</div>
+{% endif %}
+
 {% if not locked %}
 {{ line_chart("team-chart", chart, "Rating, offense and defense through the season", "points") }}
 
@@ -80,14 +100,14 @@
   </thead>
   <tbody>
   {% for g in games %}
-    <tr {% if not g.completed %}class="upcoming"{% endif %}>
+    <tr {% if not g.completed %}class="upcoming{% if g.status != 'upcoming' %} stale{% endif %}"{% endif %}>
       <td>{{ g.kickoff_ts|kickoff }}</td>
       <td>{{ g.slot|slot_label }}</td>
       <td>{{ "vs" if g.neutral_site else ("" if g.is_home else "@") }} {{ poll_rank(g.opp_ap_rank) }}{{ team_link(g.opponent, season, fbs_teams) }}</td>
       <td>{% if g.completed and g.t_margin is not none %}
             <span class="{{ 'up' if g.t_margin > 0 else 'down' }}">{{ "W" if g.t_margin > 0 else ("L" if g.t_margin < 0 else "T") }}</span>
             {{ g.team_points }}–{{ g.opp_points }}
-          {% else %}<span class="muted">upcoming</span>{% endif %}</td>
+          {% else %}<span class="muted">{{ g.status }}</span>{% endif %}</td>
       {% if not locked %}<td class="num strong">{{ g.t_pred|signed }}</td>
       <td class="num">{{ g.t_win_prob|pct(0) }}</td>{% endif %}
       <td class="num">{{ g.t_vegas|signed }}</td>

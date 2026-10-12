@@ -39,8 +39,13 @@ def run_sim(eng: Engine, season: int, week: int) -> Path:
     s = summary(inp, out)
     d = cfg.paths.out_dir / str(season) / f"w{week:02d}"
     d.mkdir(parents=True, exist_ok=True)
-    s.write_csv(d / "season_sim.csv")
-    (d / "season_sim.md").write_text(markdown(s, cfg, season, week, len(inp.g_mean)))
+    # Temp name then rename: the web app reads these while they are being rewritten.
+    tmp = d / ".season_sim.csv.tmp"
+    s.write_csv(tmp)
+    tmp.replace(d / "season_sim.csv")
+    tmp = d / ".season_sim.md.tmp"
+    tmp.write_text(markdown(s, cfg, season, week, len(inp.g_mean)))
+    tmp.replace(d / "season_sim.md")
     log.info("season sim: %d simulations, %d games left, %s", cfg.sim.n_sims, len(inp.g_mean), d / "season_sim.csv")
     return d / "season_sim.csv"
 
