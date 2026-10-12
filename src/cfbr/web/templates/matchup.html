@@ -2,7 +2,7 @@
 {% from "macros.html" import season_select, premium_notice, tabs %}
 {% block title %}{{ season }} matchup tool · CFB Ratings{% endblock %}
 {% block content %}
-{{ tabs([("/games?season=" ~ season, "This week", false), ("/matchup?season=" ~ season, "Any matchup", true)], "Games") }}
+{{ tabs([("/games?season=" ~ season, "Games by week", false), ("/matchup?season=" ~ season, "Any matchup", true)], "Games") }}
 <form class="filters" method="get" action="/matchup">
   {{ season_select(seasons, season) }}
   {% if not locked %}
@@ -94,6 +94,12 @@
     if (qa) qa.value = away.value;
     if (qn) qn.disabled = !neutral.checked;
   }
+  // A team can't play itself: picking the other side's team swaps the two.
+  let prev = {home: home.value, away: away.value};
+  [[home, away, "home"], [away, home, "away"]].forEach(([el, other, side]) => el.addEventListener("change", () => {
+    if (el.value === other.value) other.value = prev[side];
+    prev = {home: home.value, away: away.value};
+  }));
   [home, away, neutral].forEach((el) => el.addEventListener("change", () => { update(); sync(); }));
   update();
 })();

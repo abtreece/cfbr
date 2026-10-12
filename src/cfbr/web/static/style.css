@@ -78,12 +78,15 @@ header nav a { color: var(--text-2); padding: 6px 10px; border-radius: 6px; }
 header nav a:hover { background: var(--hover); text-decoration: none; }
 header nav a[aria-current="page"] { color: var(--text); background: var(--hover); font-weight: 600; }
 
+/* Text for screen readers only. */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
 /* Skip link: off-screen until focused. */
 .skip { position: absolute; left: 8px; top: -40px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
 .skip:focus { top: 8px; }
 main:focus { outline: none; }
 
-/* Section tabs (Games: This week | Any matchup; Bets: Live | Replay; Team: Overview | Roster). */
+/* Section tabs (Games: Games by week | Any matchup; Bets: Live | Replay; Team: Overview | Roster). */
 nav.tabs { display: flex; gap: 2px; margin: 0 0 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 nav.tabs a { color: var(--text-2); padding: 8px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; white-space: nowrap; }
 nav.tabs a:hover { color: var(--text); text-decoration: none; }
@@ -121,7 +124,7 @@ h2 { font-size: 19px; margin: 32px 0 8px; font-weight: 620; }
 .tile-value { font-size: 22px; font-weight: 620; margin-top: 2px; }
 .tile-sub { font-size: 12px; color: var(--muted); }
 
-.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.table-wrap { position: relative; overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 table.data { border-collapse: collapse; width: 100%; font-size: 14px; }
 table.data th, table.data td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--grid); }
 table.data th { font-size: 12px; font-weight: 600; color: var(--text-2); position: sticky; top: 0; background: var(--surface); }

@@ -63,6 +63,22 @@ def bet_rows(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
     return out
 
 
+def with_line_now(rows: list[dict], s, threshold: float) -> list[dict]:
+    """Add the current line (the one /games shows, ``games.spread``) to open bets, from the
+    side bet on, and whether the model is still ``threshold``+ points off it. A bet's own
+    line never changes; this only explains why /games may no longer flag the game."""
+    # The ledger stores game ids as text; the season's games as integers.
+    spreads = {} if s is None else {str(k): v for k, v in s.games.select("game_id", "spread").iter_rows()}
+    out = []
+    for r in rows:
+        spread = spreads.get(str(r["game_id"]))
+        now = None if spread is None or spread != spread else (spread if r["side"] == "home" else -spread)
+        edge_now = None if now is None else r["model_team"] + now
+        out.append(r | {"line_now": now, "edge_now": edge_now,
+                        "below_threshold": edge_now is not None and edge_now < threshold})
+    return out
+
+
 def breakdown(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
     """Same slices as ``bets.md``'s top table: all (consensus, best line), by side."""
     groups = [("All bets", ledger),
@@ -117,12 +133,13 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             s = store.season(season)
             if s is not None:
                 fbs = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
-            open_bets = [r for r in rows if r["status"] == "open"]
+            open_bets = with_line_now([r for r in rows if r["status"] == "open"], s, cfg.bets.threshold)
             ctx |= {"summary": summarize(ledger, cfg.bets), "best": summarize(ledger, cfg.bets, "best"),
                     "breakdown": breakdown(ledger, cfg), "weeks": weeks, "tiers": by_tier(ledger, cfg.bets),
                     "tests": tracked_tests(ledger, cfg.bets),
                     "what_if": (wi := what_if(ledger, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll),
                     "open_bets": open_bets,
+                    "n_below": sum(1 for r in open_bets if r["below_threshold"]),
                     # Older ledgers predate these columns; don't show a column of dashes.
                     "show_cents": any(r.get("edge_cents") is not None for r in open_bets),
                     "show_cover": any(r.get("cover_prob") is not None for r in open_bets),
@@ -201,17 +218,22 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
     return router
 
 
+# Visitor-facing names for the retro models; the ledger and reports keep the internal ones
+# (cfbr.bets.retro.MODELS: "published model (v1 prior)", "roster-prior shadow model").
+RETRO_LABELS = {"v1": "Published model", "roster": "Experimental roster model"}
+
+
 def retro_models(led: pl.DataFrame, cfg: Config) -> list[dict]:
     """Per-model record, week-by-week, tiers and bet rows for the retro page (models in a fixed order)."""
     from cfbr.bets.retro import MODELS
 
     out = []
-    for model, label in MODELS.items():
+    for model in MODELS:
         d = led.filter(pl.col("model") == model)
         if d.height == 0:
             continue
         weeks = weekly(d, cfg.bets)
-        out.append({"model": model, "label": label[:1].upper() + label[1:], "summary": summarize(d, cfg.bets),
+        out.append({"model": model, "label": RETRO_LABELS.get(model, model), "summary": summarize(d, cfg.bets),
                     "best": summarize(d, cfg.bets, "best"), "weeks": weeks, "tiers": by_tier(d, cfg.bets),
                     "chart": money_chart(weeks, cfg.bets.bankroll), "rows": list(reversed(bet_rows(d, cfg))),
                     "what_if": (wi := what_if(d, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll)})

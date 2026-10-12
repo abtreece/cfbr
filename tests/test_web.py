@@ -210,8 +210,7 @@ def test_lab_lists_backtest_runs_and_track_record_does_not(client):
     assert "20260101T000000Z-test" in html
     assert "Model MAE" in html
     acc = client.get("/accuracy").text
-    assert "20260101T000000Z-test" not in acc and '<a href="/lab?season=2026">' in acc
-    assert "/lab" not in client.get("/accuracy").text.split("<main")[0]  # not in the nav
+    assert "20260101T000000Z-test" not in acc and 'href="/lab' not in acc  # linked from nowhere
 
 
 # -- polls ------------------------------------------------------------------------
@@ -520,7 +519,8 @@ def test_retro_bets_page_and_api(web_cfg):
     assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
     html = " ".join(r.text.split())
     assert "Retroactive, not live." in html and "<strong>opening</strong> line" in html and "point-in-time" in html
-    assert "Published model (v1 prior)" in html and "Roster-prior shadow model" in html
+    assert "Published model" in html and "Experimental roster model" in html
+    assert "v1 prior" not in html and "shadow" not in html  # internal names stay off the page
     # Each model: week 1 went 1-1 (+$10 - $11), week 2 won: bankroll $1,000 -> $999 -> $1,009.
     assert "Week 1" in html and "−$1" in html and "$1,009" in html and "Retro U −7" in html
     assert "3 in common, 3 on the same side" in html
@@ -585,6 +585,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
     r = c.get("/api/bets")
     assert r.status_code == 402 and r.json()["detail"] == "Subscription required."
     assert c.get("/bets/retro").status_code == 402 and c.get("/api/bets/retro").status_code == 402
+    assert c.get("/lab").status_code == 402  # edge-vs-close research sits with the bets
     for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/method", "/team/2026/Ohio%20State",
                 "/api/rankings", "/api/games?slot=r02", "/api/team/2026/Ohio%20State", "/api/seasons"):
         r = c.get(url)
@@ -902,7 +903,7 @@ def test_odds_page_for_premium_viewers(odds_client):
     r = odds_client.get("/odds")
     assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
     html = " ".join(r.text.split())
-    assert "2026 season odds <span class=\"muted\">through week 1</span>" in html
+    assert "2026 projections <span class=\"muted\">through week 1</span>" in html
     assert "Probabilities, not predictions." in html
     # Notes come from the .md (escaped, with **bold**), and stop before its table.
     assert "<strong>Approximations:</strong> pairings use win % &lt;then&gt; strength." in html and "| team |" not in html
@@ -1268,11 +1269,45 @@ def test_bad_week_error_hides_slot_ids(client):
     assert r.status_code == 404 and "No such week in 2026" in r.text and "r6" not in r.text
 
 
+def test_malformed_params_get_the_error_page_not_json(client):
+    r = client.get("/rankings?week=abc")
+    assert r.status_code == 400 and "text/html" in r.headers["content-type"]
+    assert "Bad link" in r.text and "invalid week" in r.text
+    # The API keeps FastAPI's validation detail.
+    r = client.get("/api/rankings?week=abc")
+    assert r.status_code == 422 and r.json()["detail"][0]["loc"][-1] == "week"
+
+
+def test_games_sort_and_conference_filter(client):
+    html = client.get("/games?season=2026&slot=r01").text
+    assert '<table class="data sortable" id="games">' in html and 'data-sort="num" title="Points between' in html
+    assert "<option >SEC</option>" in html and '<option value="top25"' in html
+    sec = client.get("/games?season=2026&slot=r01&conf=SEC").text
+    assert "<option selected>SEC</option>" in sec
+    # A conference with no games this week is ignored rather than emptying the table.
+    assert client.get("/games?season=2026&slot=r01&conf=Nope").status_code == 200
+    # Kickoff cells drop the time zone; the header carries it.
+    assert "Kickoff (CT)" in html and " PM CT</td>" not in html and " AM CT</td>" not in html
+
+
+def test_bets_show_the_line_now(bets_client):
+    from cfbr.web.bets import with_line_now
+
+    html = bets_client.get("/bets").text
+    assert ">Line now</th>" in html and ">Best available</th>" in html  # Best available no longer phone-hidden
+    s = type("S", (), {"games": pl.DataFrame({"game_id": [7], "spread": [-1.0]})})()
+    row = {"game_id": "7", "side": "away", "model_team": 4.0}
+    out = with_line_now([row], s, 3.0)[0]
+    # Home −1 is away +1; model has the away side winning by 4 -> 5 points off, still past the threshold.
+    assert out["line_now"] == 1.0 and out["edge_now"] == 5.0 and not out["below_threshold"]
+    assert with_line_now([row | {"side": "home", "model_team": 3.0}], s, 3.0)[0]["below_threshold"]
+
+
 def test_flagged_games_are_highlighted_and_filterable(client):
     html = " ".join(client.get("/games?season=2026&slot=r01").text.split())
     # Game 1: model Texas A&M by 10, line Texas A&M -7: 3-point edge -> flagged at the bet threshold.
     assert 'class="flagged"' in html and "Upset alerts" not in html
-    assert '<span class="badge">3+ off line</span>' in html  # a text marker, not just the row tint
+    assert "(flagged: 3+ off the line)" in html  # a text marker, not just the row tint
     assert 'show=flagged" title=' in html and "Flagged <span class=\"muted\">1</span>" in html
     only = " ".join(client.get("/games?season=2026&slot=r01&show=flagged").text.split())
     assert only.count('class="flagged"') == only.count("<tr class") == 1

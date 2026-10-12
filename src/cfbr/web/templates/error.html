@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ status }} · CFB Ratings{% endblock %}
 {% block content %}
-<h1>{{ "Not found" if status == 404 else "Unavailable" if status == 503 else "Error" }}</h1>
+<h1>{{ "Not found" if status == 404 else "Unavailable" if status == 503 else "Bad link" if status == 400 else "Error" }}</h1>
 <p class="lede">{{ detail }}</p>
 <p><a href="/rankings">Back to rankings</a></p>
 {% endblock %}
