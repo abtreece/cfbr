@@ -16,7 +16,7 @@
     <nav aria-label="Sections">
       {% set path = request.url.path %}
       {# Labels, not routes, changed with the reorganization: old links and bookmarks keep working. #}
-      <a href="/rankings" {% if path.startswith(('/rankings', '/team', '/roster', '/player', '/accuracy', '/lab')) %}aria-current="page"{% endif %}>Ratings</a>
+      <a href="/rankings" {% if path.startswith(('/rankings', '/team', '/roster', '/player', '/accuracy', '/lab')) %}aria-current="page"{% endif %}>Rankings</a>
       <a href="/games" {% if path.startswith(('/games', '/matchup')) %}aria-current="page"{% endif %}>Games</a>
       <a href="/odds" {% if path.startswith('/odds') %}aria-current="page"{% endif %}>Projections</a>
       <a href="/bets" {% if path.startswith('/bets') %}aria-current="page"{% endif %}>Bets</a>

@@ -19,7 +19,7 @@
   {{ season_select(seasons, season) }}
   <noscript><button type="submit">Show</button></noscript>
 </form>
-<h1>{{ season }} ratings</h1>
+<h1>{{ season }} rankings</h1>
 {{ premium_notice(season, "ratings and rankings") }}
 {% if free_season %}<p><a href="/rankings?season={{ free_season }}">See the final {{ free_season }} ratings →</a></p>{% endif %}
 {% else %}
@@ -43,7 +43,7 @@
   <noscript><button type="submit">Show</button></noscript>
 </form>
 
-<h1>{{ season }} ratings · {{ s.label(week) }}{% if conf %} · {{ "Top 25" if conf == "top25" else conf }}{% endif %}</h1>
+<h1>{{ season }} rankings · {{ s.label(week) }}{% if conf %} · {{ "Top 25" if conf == "top25" else conf }}{% endif %}</h1>
 <p class="lede">
   {% if week == 0 %}Preseason prior, before any {{ season }} games.
   {% elif week == FINAL %}After all {{ season }} games, including the postseason.
