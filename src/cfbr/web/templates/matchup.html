@@ -1,7 +1,8 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, premium_notice %}
+{% from "macros.html" import season_select, premium_notice, tabs %}
 {% block title %}{{ season }} matchup tool · CFB Ratings{% endblock %}
 {% block content %}
+{{ tabs([("/games?season=" ~ season, "This week", false), ("/matchup?season=" ~ season, "Any matchup", true)], "Games") }}
 <form class="filters" method="get" action="/matchup">
   {{ season_select(seasons, season) }}
   {% if not locked %}
@@ -10,12 +11,16 @@
       {% for w in s.weeks|reverse %}<option value="{{ w }}" {% if w == week %}selected{% endif %}>{{ s.label(w) }}</option>{% endfor %}
     </select>
   </label>
+  {# The current picks ride along when the season or week changes (kept in step by sync() below). #}
+  {% if home %}<input type="hidden" name="home" id="h2h-q-home" value="{{ home }}">{% endif %}
+  {% if away %}<input type="hidden" name="away" id="h2h-q-away" value="{{ away }}">{% endif %}
+  <input type="hidden" name="neutral" id="h2h-q-neutral" value="1"{% if not neutral %} disabled{% endif %}>
   {% endif %}
   <noscript><button type="submit">Show</button></noscript>
 </form>
 
 <h1>Head to head <span class="muted">{{ season }} · {{ s.label(week) }}</span></h1>
-<p class="lede">Any two FBS teams on the ratings as of this point in the season: expected margin and win probability from the same points calibration the game predictions use.</p>
+<p class="lede">Any two FBS teams on the ratings as of this point in the season. The link updates as you pick, so you can share it.</p>
 
 {% if locked %}
 {{ premium_notice(season, "ratings") }}
@@ -26,15 +31,15 @@
 <div class="h2h">
   <div class="h2h-side">
     <label>Home / first team
-      <select id="h2h-home">{% for t in teams %}<option value="{{ t.team }}">{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
+      <select id="h2h-home">{% for t in teams %}<option value="{{ t.team }}" {% if t.team == home %}selected{% endif %}>{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
     </label>
   </div>
   <div class="h2h-side">
     <label>Away / second team
-      <select id="h2h-away">{% for t in teams %}<option value="{{ t.team }}" {% if loop.index == 2 %}selected{% endif %}>{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
+      <select id="h2h-away">{% for t in teams %}<option value="{{ t.team }}" {% if t.team == away %}selected{% endif %}>{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
     </label>
   </div>
-  <label class="h2h-neutral"><input type="checkbox" id="h2h-neutral"> Neutral field</label>
+  <label class="h2h-neutral"><input type="checkbox" id="h2h-neutral"{% if neutral %} checked{% endif %}> Neutral field</label>
 </div>
 <div class="tiles" id="h2h-out" aria-live="polite">
   <div class="tile"><div class="tile-label">Expected margin</div><div class="tile-value" id="h2h-margin">—</div><div class="tile-sub" id="h2h-pick"></div></div>
@@ -77,7 +82,19 @@
     document.getElementById("h2h-ratings").textContent = `${sgn(h.rating, 1)} vs ${sgn(a.rating, 1)}`;
     document.getElementById("h2h-ratings-sub").textContent = `${h.team} #${h.rank ?? "—"} · ${a.team} #${a.rank ?? "—"}`;
   }
-  [home, away, neutral].forEach((el) => el.addEventListener("change", update));
+  // Keep the URL in step with the picks so the matchup can be shared or bookmarked.
+  function sync() {
+    const q = new URLSearchParams(location.search);
+    q.set("home", home.value); q.set("away", away.value);
+    if (neutral.checked) q.set("neutral", "1"); else q.delete("neutral");
+    history.replaceState(null, "", `${location.pathname}?${q}`);
+    const qh = document.getElementById("h2h-q-home"), qa = document.getElementById("h2h-q-away"),
+          qn = document.getElementById("h2h-q-neutral");
+    if (qh) qh.value = home.value;
+    if (qa) qa.value = away.value;
+    if (qn) qn.disabled = !neutral.checked;
+  }
+  [home, away, neutral].forEach((el) => el.addEventListener("change", () => { update(); sync(); }));
   update();
 })();
 </script>

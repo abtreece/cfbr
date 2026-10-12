@@ -231,6 +231,16 @@ def schedule_strength(s: Season, week: int) -> pl.DataFrame:
     return out.with_columns(sos_rank=pl.col("sos").rank("ordinal", descending=True).cast(pl.Int32))
 
 
+def team_projection(store: Store, season: int, team: str) -> dict | None:
+    """The team's row from the season's newest simulation (what /odds shows), or None."""
+    weeks = store.sim_weeks(season)
+    sim = store.season_sim(season, weeks[-1]) if weeks else None
+    if sim is None:
+        return None
+    row = sim[0].filter(pl.col("team") == team)
+    return row.to_dicts()[0] | {"week": weeks[-1]} if row.height else None
+
+
 def resume(s: Season, team: str, week: int) -> dict | None:
     """Strength of schedule and résumé facts for the team page: SOS rank, best win, worst
     loss and the record against the model's top 25 as of ``week``. None when withheld."""
@@ -293,7 +303,7 @@ def game_row(g: dict, now: datetime | None = None, live: bool = True, threshold:
     home, away = g["home_team"], g["away_team"]
     has_pred = not _missing(pred)
     row = {**g, "model_pick": None, "fav_prob": None, "vegas_pick": None, "edge": None, "ats": None,
-           "model_err": None, "vegas_err": None, "status": game_status(g, now, live), "alert": None}
+           "model_err": None, "vegas_err": None, "status": game_status(g, now, live), "alert": None, "flag": None}
     if has_pred:
         fav = home if pred >= 0 else away
         row["model_pick"] = f"{fav} by {abs(pred):.1f}" if abs(pred) >= 0.05 else "Toss-up"
@@ -313,8 +323,10 @@ def game_row(g: dict, now: datetime | None = None, live: bool = True, threshold:
             if vegas_home != 0 and fav_prob is not None and fav_prob < 0.5:
                 dog = away if vegas_home > 0 else home
                 row["alert"] = f"{dog} to win outright ({100 * (1 - fav_prob):.0f}%)"
+                row["flag"] = "upset"
             elif abs(diff) >= threshold:
                 row["alert"] = f"{home if diff > 0 else away} by {abs(diff):.1f} more than the line"
+                row["flag"] = "edge"
     if g["completed"] and not _missing(margin):
         if not _missing(spread):
             row["vegas_err"] = abs(-spread - margin)
@@ -526,11 +538,12 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                       chart=None if locked else clean(chart), is_fbs=team in fbs_teams, locked=locked,
                       explain=[] if locked else explain_rating(s, team, last_week),
                       resume=None if locked or team not in fbs_teams else resume(s, team, last_week),
-                      roster=roster_card(store.roster(season), team))
+                      roster=roster_card(store.roster(season), team),
+                      projection=None if locked else team_projection(store, season, team))
         return private(resp, s)
 
     @app.get("/games", response_class=HTMLResponse, include_in_schema=False)
-    def games_page(request: Request, season: int | None = None, slot: str | None = None,
+    def games_page(request: Request, season: int | None = None, slot: str | None = None, show: str | None = None,
                    premium: bool = Depends(premium_viewer)):
         s, locked = view(get_season(season), premium)
         order = slots(s)
@@ -540,16 +553,26 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         g = s.games.filter(pl.col("slot") == slot)
         now = datetime.now(UTC)
         rows = [game_row(r, now, bool(s.meta.get("live")), cfg.bets.threshold) for r in g.to_dicts()]
+        # "Flagged" games (model picks the underdog, or is threshold+ points off the line) are
+        # highlighted in place; ?show=flagged / ?show=upsets narrows the table to them.
+        counts = {"all": len(rows), "flagged": sum(1 for r in rows if r["flag"]),
+                  "upsets": sum(1 for r in rows if r["flag"] == "upset")}
+        show = show if show in ("flagged", "upsets") and not locked else "all"
+        if show == "flagged":
+            rows = [r for r in rows if r["flag"]]
+        elif show == "upsets":
+            rows = [r for r in rows if r["flag"] == "upset"]
         done = g.filter(pl.col("completed"))
         summary = summarize(done) if done.height and not locked else None
         fbs_teams = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
         resp = render(request, "games.html", s=s, season=s.meta["season"], slot=slot, slot_order=order, rows=rows,
                       summary=summary, fbs_teams=fbs_teams, any_final=done.height > 0, locked=locked,
-                      alerts=[] if locked else [r for r in rows if r["alert"]], threshold=cfg.bets.threshold)
+                      show=show, counts=counts, threshold=cfg.bets.threshold)
         return private(resp, s)
 
     @app.get("/matchup", response_class=HTMLResponse, include_in_schema=False)
     def matchup_page(request: Request, season: int | None = None, week: int | None = None,
+                     home: str | None = None, away: str | None = None, neutral: bool = False,
                      premium: bool = Depends(premium_viewer)):
         """Head-to-head tool: two ratings plus the calibrated home edge, priced in the browser
         from numbers already in the build (meta.calibration); the server fits nothing."""
@@ -560,8 +583,12 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         if not locked:
             fbs = s.ratings.filter(pl.col("fbs") & (pl.col("week") == week)).sort("team")
             teams = fbs.select("team", "conference", "rating", "rank", "prior_share").to_dicts()
+        # ?home=&away=&neutral=1 makes a matchup shareable; unknown names fall back to the defaults.
+        names = [t["team"] for t in teams]
+        home = home if home in names else (names[0] if names else None)
+        away = away if away in names and away != home else next((n for n in names if n != home), None)
         resp = render(request, "matchup.html", s=s, season=s.meta["season"], week=week, locked=locked,
-                      cal=clean(cal) if cal else None, teams=clean(teams),
+                      cal=clean(cal) if cal else None, teams=clean(teams), home=home, away=away, neutral=neutral,
                       kind=season_kind(cfg, s.meta["season"]))
         return private(resp, s)
 
@@ -586,9 +613,19 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                 per_season.append({"season": y, "kind": season_kind(cfg, y), **season_summary(other)})
         resp = render(request, "accuracy.html", s=s, season=season, kind=season_kind(cfg, season),
                       summary=season_summary(s), chart=clean(chart), by_slot=by_slot.to_dicts(),
-                      per_season=per_season, runs=store.runs(), log=store.accuracy_log(season), cfg=cfg)
+                      per_season=per_season, cfg=cfg)
         # Aggregate only, the same for every viewer; a finished season's page may be cached.
         return private(resp, s) if not s.meta.get("live") else resp
+
+    @app.get("/lab", response_class=HTMLResponse, include_in_schema=False)
+    def lab_page(request: Request, season: int | None = None):
+        # Operator view: the weekly run log, backtest runs and their diagnostics. Aggregate
+        # only, like /accuracy, so it needs no gate; it just isn't in the nav.
+        s = get_season(season)
+        season = s.meta["season"]
+        resp = render(request, "lab.html", s=s, season=season, runs=store.runs(), log=store.accuracy_log(season))
+        resp.headers.update(NO_STORE)
+        return resp
 
     @app.get("/method", response_class=HTMLResponse, include_in_schema=False)
     def method_page(request: Request):

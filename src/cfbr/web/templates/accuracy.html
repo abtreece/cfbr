@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% from "macros.html" import season_select, tile, line_chart %}
-{% block title %}{{ season }} accuracy · CFB Ratings{% endblock %}
+{% block title %}{{ season }} track record · CFB Ratings{% endblock %}
 {% block content %}
 <form class="filters" method="get" action="/accuracy">
   {{ season_select(seasons, season) }}
   <noscript><button type="submit">Show</button></noscript>
 </form>
 
-<h1>{{ season }} accuracy</h1>
+<h1>{{ season }} track record</h1>
 <p class="lede">
   {% if kind == "tuning" %}<span class="badge">Tuning season</span> Slightly optimistic: the model was tuned on these seasons.
   {% elif kind == "holdout" %}<span class="badge">Holdout season</span> Never used for tuning.
@@ -47,24 +47,6 @@
 <p class="muted">No completed games yet.</p>
 {% endif %}
 
-{% if log is not none and log.height %}
-<h2>Weekly run log</h2>
-<p class="note">One line per <code>cfbr weekly</code> run: season-to-date accuracy through that week.</p>
-<div class="table-wrap">
-<table class="data">
-  <thead><tr><th>Through</th><th>Run at</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Vegas MAE</th>
-    <th class="num">Massey MAE</th><th class="num">ATS</th></tr></thead>
-  <tbody>
-  {% for r in log.iter_rows(named=True) %}
-    <tr><td>Week {{ r.through_week }}</td><td>{{ r.run_at }}</td><td class="num">{{ r.n_games }}</td>
-      <td class="num strong">{{ r.mae|num(2) }}</td><td class="num">{{ r.line_mae|num(2) }}</td>
-      <td class="num">{{ r.massey_mae|num(2) }}</td><td class="num">{{ r.ats_win_rate|pct(1) }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-{% endif %}
-
 <h2>All seasons</h2>
 <p class="note">Same model and config for every season. Vegas and model MAE in the "same games" columns use only games with a closing line.</p>
 <div class="table-wrap">
@@ -86,52 +68,5 @@
 </table>
 </div>
 
-{% if runs %}
-<h2>Backtest runs</h2>
-<p class="note">From <code>results/</code>. Each run records its own config; runs before tuning used <code>config/default.toml</code>.</p>
-<div class="table-wrap">
-<table class="data">
-  <thead><tr><th>Run</th><th>Seasons</th><th class="num">Games</th><th class="num">Model MAE</th><th class="num">Vegas</th>
-    <th class="num">Massey</th><th class="num">ATS [95% CI]</th></tr></thead>
-  <tbody>
-  {% for run in runs %}{% set o = run.metrics.overall %}
-    <tr><td><code>{{ run.run_id }}</code></td>
-      <td>{{ run.metrics.seasons[0] }}–{{ run.metrics.seasons[-1] }}</td><td class="num">{{ o.n_games }}</td>
-      <td class="num strong">{{ o.mae|num(2) }}</td><td class="num">{{ o.line_mae|num(2) }}</td><td class="num">{{ o.massey_mae|num(2) }}</td>
-      <td class="num">{% if o.ats_n %}{{ o.ats_win_rate|pct(1) }} [{{ o.ats_ci95_low|pct(1) }}, {{ o.ats_ci95_high|pct(1) }}]{% else %}—{% endif %}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-{% if runs|selectattr("metrics.diagnostics")|list %}
-<p class="note">In the diagnostics: Bias = actual − predicted home margin. Slope = OLS slope of actual on predicted (above 1: predictions too timid, below 1: too bold).
-  Blend = actual margin fit on line and model; the model weight is the information it carries beyond the closing line.</p>
-{% endif %}
-{% for run in runs %}{% set d = run.metrics.diagnostics %}{% if d and d.n_games %}
-<details class="table-view">
-  <summary>Diagnostics · <code>{{ run.run_id }}</code> ({{ run.metrics.seasons[0] }}–{{ run.metrics.seasons[-1] }}, {{ d.n_games }} games)</summary>
-  {% if d.blend %}<p class="note">Blend: actual ≈ {{ d.blend.w_line|num(3) }}·line + {{ d.blend.w_model|num(3) }}·model over {{ d.blend.n }} lined games
-  (MAE line {{ d.blend.mae_line|num(2) }}, model {{ d.blend.mae_model|num(2) }}, blend {{ d.blend.mae_blend|num(2) }}).</p>{% endif %}
-  <div class="diag-grid">
-  <div class="table-wrap"><table class="data">
-    <thead><tr><th>Week</th><th class="num">Games</th><th class="num">Bias</th><th class="num">Slope</th><th class="num">MAE</th></tr></thead>
-    <tbody>{% for r in d.by_week %}<tr><td>{{ r.bucket }}</td><td class="num">{{ r.n }}</td><td class="num">{{ r.bias|num(2) }}</td><td class="num">{{ r.slope|num(2) }}</td><td class="num">{{ r.mae|num(2) }}</td></tr>{% endfor %}</tbody>
-  </table></div>
-  {% if d.by_prior_share %}<div class="table-wrap"><table class="data">
-    <thead><tr><th>Prior share</th><th class="num">Games</th><th class="num">Bias</th><th class="num">Slope</th><th class="num">MAE</th></tr></thead>
-    <tbody>{% for r in d.by_prior_share %}<tr><td>{{ r.bucket }}</td><td class="num">{{ r.n }}</td><td class="num">{{ r.bias|num(2) }}</td><td class="num">{{ r.slope|num(2) }}</td><td class="num">{{ r.mae|num(2) }}</td></tr>{% endfor %}</tbody>
-  </table></div>{% endif %}
-  {% if d.ats_by_edge %}<div class="table-wrap"><table class="data">
-    <thead><tr><th>|Edge| vs close</th><th class="num">Games</th><th class="num">ATS [95% CI]</th></tr></thead>
-    <tbody>{% for r in d.ats_by_edge %}<tr><td>{{ r.bucket }}</td><td class="num">{{ r.n }}</td>
-      <td class="num">{% if r.n %}{{ r.win_rate|pct(1) }} [{{ r.ci95_low|pct(1) }}, {{ r.ci95_high|pct(1) }}]{% else %}—{% endif %}</td></tr>{% endfor %}</tbody>
-  </table></div>{% endif %}
-  {% if d.reliability %}<div class="table-wrap"><table class="data">
-    <thead><tr><th>Home win prob.</th><th class="num">Games</th><th class="num">Predicted</th><th class="num">Observed</th></tr></thead>
-    <tbody>{% for r in d.reliability %}<tr><td>{{ r.bin }}</td><td class="num">{{ r.n }}</td><td class="num">{{ r.predicted|pct(1) }}</td><td class="num">{{ r.observed|pct(1) }}</td></tr>{% endfor %}</tbody>
-  </table></div>{% endif %}
-  </div>
-</details>
-{% endif %}{% endfor %}
-{% endif %}
+<p class="note muted">Weekly run log and backtest diagnostics: <a href="/lab?season={{ season }}">lab →</a></p>
 {% endblock %}

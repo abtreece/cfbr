@@ -116,8 +116,8 @@ def client(web_cfg):
 
 # -- pages ------------------------------------------------------------------------
 
-def test_accuracy_shows_run_diagnostics(client):
-    html = client.get("/accuracy").text
+def test_lab_shows_run_diagnostics(client):
+    html = client.get("/lab").text
     assert "Diagnostics" in html and "0.950·line + 0.050·model" in html and "w01" in html
 
 
@@ -205,10 +205,13 @@ def test_no_data_is_503(web_cfg):
     assert r.status_code == 503 and "cfbr web build" in r.text
 
 
-def test_accuracy_lists_backtest_runs(client):
-    html = client.get("/accuracy").text
+def test_lab_lists_backtest_runs_and_track_record_does_not(client):
+    html = client.get("/lab").text
     assert "20260101T000000Z-test" in html
     assert "Model MAE" in html
+    acc = client.get("/accuracy").text
+    assert "20260101T000000Z-test" not in acc and '<a href="/lab?season=2026">' in acc
+    assert "/lab" not in client.get("/accuracy").text.split("<main")[0]  # not in the nav
 
 
 # -- polls ------------------------------------------------------------------------
@@ -759,7 +762,7 @@ def test_roster_page(roster_client):
     r = roster_client.get("/roster/2026/Texas%20A%26M")
     assert r.status_code == 200
     html = " ".join(r.text.split())
-    assert 'Texas A&amp;M <span class="muted">2026 roster</span>' in html
+    assert 'Texas A&amp;M <span class="muted">2026</span>' in html and 'aria-current="page">Roster</a>' in html
     assert "Sam Starter" in html and "Returner" in html and "No prior stats" in html
     assert 'Transfer from <a href="/team/2025/Hawai%27i">Hawai&#39;i</a>' in html
     assert "&lt;i&gt;Fresh&lt;/i&gt; Man" in html and "<i>Fresh</i>" not in html  # names are escaped
@@ -880,6 +883,13 @@ def odds_client(web_cfg):
     _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
     _write_sim(web_cfg)
     return TestClient(create_app(web_cfg))
+
+
+def test_team_page_shows_its_projection(odds_client):
+    html = " ".join(odds_client.get("/team/2026/Texas%20A%26M").text.split())
+    assert "Season outlook" in html and "Expected wins</div><div class=\"tile-value\">10.4" in html
+    # The link filters /odds to the team's conference in the ratings (Big Ten in this fixture).
+    assert "/odds?season=2026&amp;week=1&amp;conf=Big%20Ten" in html
 
 
 def test_prob_formatting():
@@ -1258,21 +1268,30 @@ def test_bad_week_error_hides_slot_ids(client):
     assert r.status_code == 404 and "No such week in 2026" in r.text and "r6" not in r.text
 
 
-def test_upset_alerts_on_games_page(client):
+def test_flagged_games_are_highlighted_and_filterable(client):
     html = " ".join(client.get("/games?season=2026&slot=r01").text.split())
-    # Game 1: model Texas A&M by 10, line Texas A&M -7: 3-point edge -> alert at the bet threshold.
-    assert "Upset alerts" in html and "by 3.0 more than the line" in html
+    # Game 1: model Texas A&M by 10, line Texas A&M -7: 3-point edge -> flagged at the bet threshold.
+    assert 'class="flagged"' in html and "Upset alerts" not in html
+    assert '<span class="badge">3+ off line</span>' in html  # a text marker, not just the row tint
+    assert 'show=flagged" title=' in html and "Flagged <span class=\"muted\">1</span>" in html
+    only = " ".join(client.get("/games?season=2026&slot=r01&show=flagged").text.split())
+    assert only.count('class="flagged"') == only.count("<tr class") == 1
+    # An unknown filter falls back to all games.
+    assert client.get("/games?season=2026&slot=r01&show=bogus").status_code == 200
     r = game_row({"home_team": "H", "away_team": "A", "pred_margin": -2.0, "win_prob": 0.42, "spread": -3.0,
                   "margin": None, "completed": False})
-    assert r["alert"] == "A to win outright (58%)"
+    assert r["alert"] == "A to win outright (58%)" and r["flag"] == "upset"
     r = game_row({"home_team": "H", "away_team": "A", "pred_margin": 4.0, "win_prob": 0.6, "spread": -3.0,
                   "margin": None, "completed": False})
-    assert r["alert"] is None
+    assert r["alert"] is None and r["flag"] is None
 
 
-def test_upset_alerts_withheld_from_free_viewers(free_client):
+def test_flags_withheld_from_free_viewers(free_client):
+    # A flag reveals the model's side, so free viewers get neither highlighting nor the filter.
     html = free_client.get("/games?season=2026&slot=r01").text
-    assert "Upset alerts" not in html
+    assert 'class="flagged"' not in html and "show=flagged" not in html
+    html = free_client.get("/games?season=2026&slot=r01&show=flagged").text
+    assert 'class="flagged"' not in html
 
 
 def test_matchup_page(web_cfg):
@@ -1285,6 +1304,19 @@ def test_matchup_page(web_cfg):
     html = c.get("/matchup?season=2026").text
     assert "Head to head" in html and 'id="h2h-home"' in html and '"b_home": 2.5' in html
     assert "cdn" not in html.lower()  # no external assets
+    # A shared link preselects both teams and the neutral box; unknown names fall back.
+    html = c.get("/matchup?season=2026&home=Ohio%20State&away=Texas%20A%26M&neutral=1").text
+    assert '<option value="Ohio State" selected>' in html and '<option value="Texas A&amp;M" selected>' in html
+    assert 'id="h2h-neutral" checked' in html
+    # The season/week form carries the picks, so changing the week keeps the matchup.
+    form = html[html.index('<form class="filters"'):html.index("</form>")]
+    assert 'name="home" id="h2h-q-home" value="Ohio State"' in form
+    assert 'name="away" id="h2h-q-away" value="Texas A&amp;M"' in form
+    assert 'name="neutral" id="h2h-q-neutral" value="1">' in form  # enabled, so it submits
+    html = c.get("/matchup?season=2026&home=Nobody&away=Nobody").text
+    assert html.count(" selected>") >= 2  # still two different teams picked
+    # Matchup lives under Games in the nav, as the second tab.
+    assert 'href="/games" aria-current="page">Games</a>' in html and 'aria-current="page">Any matchup</a>' in html
     # Free viewers on a live season see no ratings in the page.
     from cfbr.web.access import premium_viewer
 
@@ -1321,6 +1353,26 @@ def test_bets_hide_columns_the_ledger_never_filled(bets_client):
     # The synthetic ledger predates Edge ¢ and Cover %, so those columns are left out, not shown as dashes.
     html = bets_client.get("/bets").text
     assert ">Edge ¢</th>" not in html and ">Cover %</th>" not in html
+
+
+def test_bets_lead_with_open_bets(bets_client):
+    html = bets_client.get("/bets").text
+    # Open bets come before the rules and the results.
+    assert html.index("<h2>Open bets</h2>") < html.index('id="how"') < html.index("<h2>Results</h2>")
+    # With settled bets, results show in full rather than collapsed.
+    assert "no settled bets yet" not in html
+
+
+def test_nav_and_skip_link(client):
+    html = client.get("/rankings").text
+    nav = html[html.index('<nav aria-label="Sections">'):html.index("</nav>")]
+    assert [s.split("</a>")[0].split(">")[-1] for s in nav.split("<a ")[1:]] == \
+        ["Ratings", "Games", "Projections", "Bets", "Track record"]
+    assert '<a class="skip" href="#main">' in html and '<main id="main"' in html
+    # Old routes still work under the new labels.
+    for url, label in (("/odds", None), ("/accuracy", "Track record"), ("/matchup", "Games")):
+        if label:
+            assert f'aria-current="page">{label}</a>' in client.get(url).text, url
 
 
 def test_build_exports_calibration(engine, tmp_path):
