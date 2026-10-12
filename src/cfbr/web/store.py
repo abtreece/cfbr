@@ -168,7 +168,7 @@ class Store:
             return None
         try:
             return PricingTable.load(path)
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError, TypeError, AttributeError, OSError) as e:
             log.warning("pricing table at %s unreadable (%s); shortlist picks by points then price", path, e)
             return None
 
