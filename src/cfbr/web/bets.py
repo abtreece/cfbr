@@ -19,7 +19,7 @@ from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly, what_if
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
-from cfbr.web.access import bets_access
+from cfbr.web.access import bets_access, owner_viewer
 from cfbr.web.store import Store
 
 # Betting data is per-viewer once the section is gated; never let a shared cache keep it.
@@ -132,19 +132,25 @@ def clean_summary(m: dict) -> dict:
 def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) -> APIRouter:
     router = APIRouter(dependencies=[Depends(bets_access)])
 
-    def pick(season: int | None) -> tuple[int | None, pl.DataFrame | None]:
-        seasons = store.bet_seasons()
+    def pick(season: int | None, seasons: list[int] | None = None) -> tuple[int | None, pl.DataFrame | None]:
+        """The season to show (default: newest of ``seasons``, the paper-ledger seasons unless
+        given) and its paper ledger (None when that season has only real bets)."""
+        seasons = store.bet_seasons() if seasons is None else seasons
         if season is None:
             season = seasons[-1] if seasons else None
         elif season not in seasons:
             raise HTTPException(404, f"No paper bets for {season}.")
-        return season, (store.bets(season) if season is not None else None)
+        has_paper = season is not None and season in store.bet_seasons()
+        return season, (store.bets(season) if has_paper else None)
 
     @router.get("/bets", response_class=HTMLResponse, include_in_schema=False)
-    def bets_page(request: Request, season: int | None = None):
-        season, ledger = pick(season)
+    def bets_page(request: Request, season: int | None = None, owner: bool = Depends(owner_viewer)):
+        # The owner also reaches seasons that have only real bets; everyone else (and the API)
+        # sees paper-ledger seasons only.
+        seasons = sorted(set(store.bet_seasons()) | set(store.real_seasons())) if owner else store.bet_seasons()
+        season, ledger = pick(season, seasons)
         risked, to_win = risk(cfg.bets.odds, cfg.bets.stake)
-        ctx = {"bet_seasons": store.bet_seasons(), "season": season, "rules": cfg.bets,
+        ctx = {"bet_seasons": seasons, "season": season, "rules": cfg.bets,
                "close_max_age": cfg.odds.closing_max_age_hours,
                "unit_risk": risked * cfg.bets.unit_value, "unit_win": to_win * cfg.bets.unit_value}
         if ledger is not None:
@@ -166,8 +172,10 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "show_cover": any(r.get("cover_prob") is not None for r in open_bets),
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
-        ctx["real"] = real_bets_ctx(store.real_bets(season) if season is not None else None, store.season(season)
-                                    if season is not None else None)
+        # The owner's real bets: only for the owner (owner_viewer), never for other viewers,
+        # premium or not, and never in /api/bets.
+        ctx["real"] = (real_bets_ctx(store.real_bets(season), store.season(season))
+                       if owner and season is not None else None)
         ctx["has_retro"] = season in store.retro_seasons()
         resp = render(request, "bets.html", **ctx)
         resp.headers.update(NO_STORE)

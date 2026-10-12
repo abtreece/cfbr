@@ -155,6 +155,12 @@ class Store:
 
         return self._cached_csv(self._bets, season, self.out_dir / str(season) / "bets.csv", read_ledger)
 
+    def real_seasons(self) -> list[int]:
+        """Seasons with real bets (``out/{season}/bets_real.csv``); used only for the owner's view."""
+        if not self.out_dir.is_dir():
+            return []
+        return sorted(int(p.parent.name) for p in self.out_dir.glob("*/bets_real.csv") if p.parent.name.isdigit())
+
     def real_bets(self, season: int) -> pl.DataFrame | None:
         """The owner's real bets (``out/{season}/bets_real.csv``, from ``cfbr real-bet``), reloaded
         when rewritten. Read only by the gated betting section (web.bets)."""
