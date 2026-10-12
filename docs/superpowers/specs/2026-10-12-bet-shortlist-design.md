@@ -30,13 +30,13 @@ Membership uses only capture-time data, so it's fixed once recorded.
 
 - `parse_books(books: str | None) -> list[BookLine]`: `BookLine(book, home_spread, home_price, away_price, offshore, pricing_only)`. It reuses the `_BOOK` regex, which moves from `web/bets.py` into this module, and `web/bets.py` imports it back. Unparseable entries are skipped.
 - `shortlist(ledger, books: frozenset[str], cfg, table=None) -> pl.DataFrame`: the ledger rows on the shortlist, plus `bet_at`, `bet_at_book` and `bet_at_odds` (team perspective). Book names match through `ledger.book_key` (so "BetOnline.ag" matches "BetOnline").
-- `in_shortlist(ledger, cfg, table=None) -> pl.Series[bool]`: membership under `cfg.bets.pricing_books`, for T3.
+- `shortlist_ids(ledger, cfg) -> list[int]`: game ids on the list under `cfg.pricing_books`, for T3. T3's rule becomes `game_id.is_in(...)`, and `Test.rule` gains a `cfg` argument.
 
 It depends on `experiments.with_helpers` and `_core` and on `ledger.book_key`, and it has no web imports.
 
 ### `bets/experiments.py`
 
-Add `T3 · Shortlist` to `TESTS`, with its rule from `in_shortlist`. Its labels and decision text come from DECISIONS. `DECISION_POINT` and `MIN_CLV_BETS` stay shared with T1/T2.
+Add `T3 · Shortlist` to `TESTS`, with its rule from `shortlist_ids`. Its labels and decision text come from DECISIONS. `DECISION_POINT` and `MIN_CLV_BETS` stay shared with T1/T2.
 
 `Test.rule` takes the ledger with helpers. T3 needs the pricing table to pick `bet_at`, but not for membership: membership only asks whether *any* allowed book reaches the line. So T3's rule doesn't need the table.
 
@@ -47,7 +47,7 @@ Add `bets.selectable_books: list[str]`. Its default is the non-offshore books ob
 ### `web/access.py`
 
 - `BOOKS_COOKIE = "cfbr_books"`.
-- `viewer_books(request) -> frozenset[str]`: a FastAPI dependency. It reads the cookie (comma-separated) and keeps only names in `selectable_books`, compared by `book_key`. If that leaves nothing, it falls back to `pricing_books`. This is the seam: accounts would replace only this function's body.
+- `viewer_books(request, bets) -> frozenset[str]`: called by the routes, which hold `cfg`. It reads the cookie (book keys joined with `.`, which is cookie-safe; names like "Bally Bet" contain spaces) through `choose_books`. `choose_books` keeps only names in `selectable_books`, compared by `book_key`, and falls back to `pricing_books` when that leaves nothing. This is the seam: accounts would replace only this function's body.
 
 The cookie is a preference, not a credential: HttpOnly, SameSite=Lax, 1 year, path `/`.
 
@@ -82,7 +82,7 @@ No other route or response gets shortlist or ledger data, which keeps the existi
   - `book_key` aliasing;
   - null `books`;
   - `bet_at` choice with and without a table;
-  - the default set equals `in_shortlist`.
+  - the default set equals `shortlist_ids`.
 - `tests/test_web.py`:
   - the cookie round-trip;
   - an invalid cookie falls back;
