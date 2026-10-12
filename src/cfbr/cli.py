@@ -440,6 +440,19 @@ def market_ratings_cmd(
     typer.echo(f"wrote {path} and {path.with_suffix('.md')}")
 
 
+@app.command("moneyline-eval")
+def moneyline_eval(config: ConfigOpt = None) -> None:
+    """Market-only test: is a side's moneyline a better buy than its spread at -110, both priced
+    with the points-to-cents table at the consensus? Writes results/moneyline_pricing.*
+    The model never enters. No API calls."""
+    from cfbr.bets.moneyline import run_moneyline_eval
+    from cfbr.data import Dataset
+
+    cfg = _default_config(config)
+    path = run_moneyline_eval(Dataset.load(cfg), cfg)
+    typer.echo(f"wrote {path} and {path.with_suffix('.md')}")
+
+
 @app.command("odds-snapshot")
 def odds_snapshot(
     season: Annotated[Optional[int], typer.Option(help="Defaults to the current season")] = None,
