@@ -1474,7 +1474,7 @@ def test_bets_show_the_line_now(bets_client):
 
     html = bets_client.get("/bets").text
     assert ">Line now</th>" in html and ">Best available</th>" in html  # Best available no longer phone-hidden
-    s = type("S", (), {"games": pl.DataFrame({"game_id": [7], "spread": [-1.0]})})()
+    s = type("S", (), {"games": pl.DataFrame({"game_id": [7], "spread": [-1.0]}), "meta": {}})()
     row = {"game_id": "7", "side": "away", "model_team": 4.0}
     out = with_line_now([row], s, 3.0)[0]
     # Home −1 is away +1; model has the away side winning by 4 -> 5 points off, still past the threshold.
@@ -2025,3 +2025,46 @@ def test_shortlist_book_picker_names_the_empty_reference_set(shortlist_client, w
     c.cookies.set("cfbr_books", "betmgm")
     html = " ".join(c.get("/bets/shortlist").text.split())
     assert "Use default (any non-offshore book)" in html
+
+
+def test_shortlist_names_the_open_week_and_how_old_line_now_is(shortlist_client, web_cfg):
+    from cfbr.web.app import iso_ts
+
+    html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
+    assert "<h2>Week 7 picks</h2>" in html and "<h2>Open picks</h2>" not in html
+    assert "<strong>Line now</strong> is the consensus on Games." in html   # no lines_as_of in meta yet
+    d = web_dir(web_cfg) / str(SEASON)
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-14T21:00:00+00:00"}))
+    html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
+    assert f"is the consensus on Games, as of {iso_ts('2026-10-14T21:00:00+00:00')}." in html
+    # No open picks at the viewer's books: the heading falls back and the note goes with the table.
+    shortlist_client.cookies.set("cfbr_books", "betrivers")
+    html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
+    assert "<h2>Open picks</h2>" in html and "consensus on Games" not in html
+
+
+def test_line_now_stars_a_line_older_than_the_page(shortlist_client, web_cfg):
+    # Games keeps CFBD's line when the newest odds snapshot has none for a game; /bets and the
+    # shortlist must not present that line as current "as of" the newer snapshot.
+    from cfbr.web.app import iso_ts
+
+    d = web_dir(web_cfg) / str(SEASON)
+    games = pl.read_parquet(d / "games.parquet")
+    new, old = "2026-10-14T21:00:00+00:00", "2026-10-11T20:00:11+00:00"
+    games.with_columns(line_source=pl.when(pl.col("game_id") == 1).then(pl.lit("cfbd")).otherwise(pl.lit("odds")),
+                       line_as_of=pl.when(pl.col("game_id") == 1).then(pl.lit(old)).otherwise(pl.lit(new))
+                       ).write_parquet(d / "games.parquet")
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": new}))
+    star = f'<sup class="muted" title="Older line: as of {iso_ts(old)}">*</sup>'
+    for url in ("/bets/shortlist", "/bets"):
+        html = " ".join(shortlist_client.get(url).text.split())
+        assert html.count(star) == 1, url                       # game 1 only; the odds-sourced lines aren't starred
+        assert "Lines marked * are older" in html, url
+    # The same line from the newest snapshot gets no star and no caveat (rewriting meta.json
+    # last is what tells the store to reload, as web build and refresh_lines do).
+    games.with_columns(line_source=pl.lit("odds"), line_as_of=pl.lit(new)).write_parquet(d / "games.parquet")
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": new, "rebuilt": 1}))
+    html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
+    assert "Older line" not in html and "Lines marked * are older" not in html
