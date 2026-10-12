@@ -29,12 +29,17 @@ document.getElementById("theme-toggle")?.addEventListener("click", () => {
 });
 
 // -- links to a collapsed <details> (e.g. "How it works ↑") open it ------------------
-function openTarget() {
-  const el = location.hash && document.getElementById(location.hash.slice(1));
+function openDetails(hash) {
+  const el = hash && document.getElementById(hash.slice(1));
   if (el && el.tagName === "DETAILS") el.open = true;
 }
-window.addEventListener("hashchange", openTarget);
-openTarget();
+window.addEventListener("hashchange", () => openDetails(location.hash));
+// hashchange doesn't fire when the link's fragment is already the current one.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest('a[href*="#"]');
+  if (a && a.pathname === location.pathname) openDetails(a.hash);
+});
+openDetails(location.hash);
 
 // -- sortable tables ------------------------------------------------------------------
 document.querySelectorAll("table.sortable").forEach((table) => {

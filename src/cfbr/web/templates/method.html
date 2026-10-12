@@ -41,7 +41,9 @@
 <p>Each week's season odds come from simulating the rest of the season many times on the ratings available after that week, then the conference title games and the playoff. They are probabilities, not predictions. Bowl means 6+ wins; Bye means a top-4 playoff seed; &lt;1% means it happened in at least one simulated season but under 1 in 100. The odds page lists the simplifications each simulation makes.</p>
 
 <h2 id="matchup">Matchup tool</h2>
-<p>Expected margin = rating difference + home edge (0 on a neutral field); win probability = Φ(margin / σ), using the same points calibration as the game predictions. It runs in your browser on the published ratings.</p>
+<p>Expected margin = rating difference + home edge (0 on a neutral field); win probability = Φ(margin / σ), using the same points calibration as the game predictions.
+  {% if cfg.model.calibration_v2 %}Calibration v2 then adjusts the margin by the prior-share and home terms fitted on past seasons, as the game predictions do.{% endif %}
+  It runs in your browser on the published ratings; nothing is fitted there.</p>
 
 <h2 id="rosters">Rosters</h2>
 <ul>

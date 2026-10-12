@@ -235,6 +235,7 @@ def test_team_page_poll_tiles_and_opponent_rank(poll_client):
     assert '<span class="pr">#3</span><a href="/team/2026/Texas%20A%26M">' in html  # upcoming opponent
     html = " ".join(poll_client.get("/team/2026/Hawai%27i").text.split())
     assert "AP poll</div><div class=\"tile-value\">Unranked" in html
+    assert "Coaches unranked" in html  # a released poll without the team still says so
 
 
 def test_games_show_ap_rank_before_names(poll_client):

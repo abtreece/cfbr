@@ -22,9 +22,9 @@
   {% endif %}
   {{ tile("Record", latest.w ~ "–" ~ latest.l) }}
   {% if is_fbs %}
-  {% set others = [] %}
-  {% if latest.coaches_rank is not none %}{% set _ = others.append("Coaches #" ~ latest.coaches_rank) %}{% endif %}
-  {% if show_cfp and latest.cfp_rank is not none %}{% set _ = others.append("CFP #" ~ latest.cfp_rank) %}{% endif %}
+  {# Same states the separate Coaches/CFP tiles had: a rank, or "unranked". #}
+  {% set others = ["Coaches " ~ ("#" ~ latest.coaches_rank if latest.coaches_rank is not none else "unranked")] %}
+  {% if show_cfp %}{% set _ = others.append("CFP " ~ ("#" ~ latest.cfp_rank if latest.cfp_rank is not none else "unranked")) %}{% endif %}
   {{ tile("AP poll", "#" ~ latest.ap_rank if latest.ap_rank is not none else "Unranked", others|join(" · ")) }}
   {% endif %}
 </div>
