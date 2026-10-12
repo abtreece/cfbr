@@ -22,6 +22,7 @@ from cfbr.model.calibrate import STAGE2_TERMS
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 from cfbr.report.roster_web import write_roster_web
+from cfbr.web.lines import apply_lines, odds_consensus
 
 ROSTER_FILES = ("roster_players", "roster_departures", "roster_summary")
 
@@ -216,6 +217,11 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
     out.mkdir(parents=True, exist_ok=True)
     ratings = season_ratings(eng, season, now)
     games = season_games(eng, season)
+    # Display lines: CFBD's (kept as cfbd_spread), with the newest Odds API consensus on unplayed
+    # games, so a rebuild never rolls the site back to older lines (see cfbr.web.lines).
+    cfbd_as_of = lines_as_of(eng.cfg.paths.raw_dir, season)
+    fresh = odds_consensus(eng.cfg.paths.raw_dir, season, games)
+    games = apply_lines(games.rename({"spread": "cfbd_spread"}), fresh, cfbd_as_of)
     # Write to temp names then rename, so a running server never reads a half-written file.
     # meta.json goes last: its mtime is the server's reload signal, and the server treats a
     # parquet newer than meta.json as a rebuild in progress (see cfbr.web.store).
@@ -235,10 +241,11 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
         "built_at": now.isoformat(timespec="seconds"),
         "config": eng.cfg.source,
         "live": not season_over(eng, season, now),
-        # When the lines behind "Vegas" for unplayed games were fetched (the newest CFBD lines
-        # snapshot), so pages can say how old they are. A rebuild from cache (e.g. a deploy)
-        # doesn't move it; only a fetch does.
-        "lines_as_of": lines_as_of(eng.cfg.paths.raw_dir, season),
+        # When the lines behind "Vegas" for unplayed games were fetched: the newest Odds API
+        # snapshot when one supplied lines, else the newest CFBD lines snapshot. Per-game
+        # line_source/line_as_of say which each game shows. A rebuild from cache doesn't move it.
+        "lines_as_of": fresh[0].isoformat() if fresh is not None else cfbd_as_of,
+        "cfbd_lines_as_of": cfbd_as_of,
         # Points calibration, so a page can price a hypothetical matchup from two ratings
         # without the server fitting anything: margin = rating_h - rating_a + b_home (0 on a
         # neutral field); win probability = Phi(margin / sigma). With calibration v2 the

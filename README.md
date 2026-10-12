@@ -106,7 +106,7 @@ On macOS, `tests/test_backup.py` needs GNU rsync (`brew install rsync`); the sys
 0 20,21 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "15" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 ```
 
-`odds-snapshot` pulls the pre-kickoff Odds API snapshot that grades paper-bet CLV. It reads kickoffs from the cached CFBD games file (no CFBD call) and exits without spending credits unless a game kicks off within 6 h, so the Sunday and Monday runs cost nothing on a normal week; about 14–18 credits a week in all.
+`odds-snapshot` pulls the pre-kickoff Odds API snapshot that grades paper-bet CLV. It reads kickoffs from the cached CFBD games file (no CFBD call) and exits without spending credits unless a game kicks off within 6 h, so the Sunday and Monday runs cost nothing on a normal week; about 14–18 credits a week in all. After saving a snapshot it also refreshes the site's Vegas lines for unplayed games from that snapshot (the median across books), patching `out/web/{season}/games.parquet` and rewriting `meta.json` last; it skips the refresh while `cfbr weekly` or a deploy holds the lock, and a refresh failure alerts but never loses the snapshot. Finished games keep CFBD's closing line. No restart is needed: the server reloads on the new `meta.json`.
 
 ```cron
 # Odds API closing snapshots (Central): Tue-Fri 4:40 PM, Fri 9 PM, Sat 10:40 AM, 2:10 PM, 6:10 PM, 9:30 PM,
