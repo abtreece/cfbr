@@ -15,6 +15,7 @@ monthly_quota = 1000
 # Refuse to start a command if fewer than this many calls would remain.
 quota_reserve = 50
 
+# Thresholds are Bill Connelly's (SP+) garbage-time definition. tuned.toml disables the filter.
 [prep.garbage_time]
 enabled = true
 q2 = 38
