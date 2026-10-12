@@ -227,7 +227,7 @@ def test_rankings_show_poll_columns_and_note(poll_client):
     assert ">AP</th>" in html and ">Coaches</th>" in html
     assert ">CFP</th>" not in html  # no CFP rankings released yet
     assert '<span class="pr m-only">#3</span><a href="/team/2026/Texas%20A%26M">' in html
-    assert "AP: week 2 poll · Coaches: week 1 poll (week 2 not released yet)" in html
+    assert "AP: week 2 poll; Coaches: week 1 poll (week 2 not released yet)." in html
     assert 'data-v="999"' in html  # unranked teams sort last
 
 
@@ -249,7 +249,7 @@ def test_games_show_ap_rank_before_names(poll_client):
 def test_pages_render_without_poll_columns(client):
     # The default fixture predates polls; the store fills the columns with nulls.
     html = client.get("/rankings").text
-    assert ">AP</th>" in html and "Polls:" not in html
+    assert ">AP</th>" in html and "poll-note" not in html
     assert client.get("/api/rankings").json()["teams"][0]["ap_rank"] is None
 
 
@@ -1259,11 +1259,45 @@ def test_delta_shows_no_arrow_for_a_rounded_zero(client):
     assert "▲ 0.1" in tmpl.render(x=0.06) and "▼ 1.0" in tmpl.render(x=-1.0)
 
 
+def test_poll_line_names_matching_polls_together():
+    from cfbr.web.app import poll_line
+
+    assert poll_line(["AP: week 7 poll", "Coaches: week 7 poll"]) == "AP and Coaches: week 7 polls."
+    assert poll_line(["AP: week 7 poll", "Coaches: week 7 poll", "CFP: week 7 poll"]) == "AP, Coaches and CFP: week 7 polls."
+    assert poll_line(["AP: final poll", "Coaches: final poll"]) == "AP and Coaches: final polls."
+    assert poll_line(["AP: week 2 poll", "Coaches: week 1 poll (week 2 not released yet)"]) == \
+        "AP: week 2 poll; Coaches: week 1 poll (week 2 not released yet)."
+    assert poll_line([]) == ""
+
+
+def test_unplayed_lines_say_when_they_were_fetched(web_cfg, tmp_path):
+    from cfbr.web.build import lines_as_of
+
+    raw = tmp_path / "raw"
+    assert lines_as_of(raw, 2026) is None
+    (raw / "lines" / "2026" / "snapshots").mkdir(parents=True)
+    for stem in ("20261011T162408Z", "20261011T200011Z"):
+        (raw / "lines" / "2026" / "snapshots" / f"{stem}.json").write_text("[]")
+    assert lines_as_of(raw, 2026) == "2026-10-11T20:00:11+00:00"  # the newest snapshot
+
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    meta = json.loads((d / "meta.json").read_text())
+    c = TestClient(create_app(web_cfg))
+    # Week 2 has unplayed games; no snapshot recorded -> no claim about freshness.
+    assert "lines-as-of" not in c.get("/games?season=2026&slot=r02").text
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    c = TestClient(create_app(web_cfg))
+    html = c.get("/games?season=2026&slot=r02").text
+    assert "Vegas lines for games not yet played are as of Oct 11, 3:00 PM CT" in html
+    # A week that's all final doesn't need it.
+    assert "lines-as-of" not in c.get("/games?season=2026&slot=r01").text
+
+
 def test_games_and_bets_label_their_line_sources(client, bets_client):
     games = client.get("/games?season=2026&slot=r01").text
-    assert "the latest line for games not yet played, the closing line once final" in games and ">Edge</th>" in games
+    assert "for games not yet played, the closing line once final" in games and ">Edge</th>" in games
     team = client.get("/team/2026/Texas%20A%26M").text
-    assert "the latest line for games not yet played, the closing line once final" in team
+    assert "for games not yet played, the closing line once final" in team
     bets = bets_client.get("/bets").text
     assert ">Bet (line at bet)</th>" in bets and "wins by" in bets
 
@@ -1524,6 +1558,19 @@ def test_single_book_bets_are_explained_only_when_present(web_cfg):
                      .otherwise(pl.col("n_providers")).cast(pl.Int32)).write_csv(path)
     html = " ".join(c.get("/bets").text.split())
     assert "2 bets were recorded when only one book's line was available (Books = 1)" in html
+
+
+def test_open_bets_hide_secondary_columns_by_default(bets_client):
+    html = bets_client.get("/bets").text
+    table = html[html.index('id="open-bets"'):]
+    table = table[:table.index("</table>")]
+    assert 'data-target="open-bets"' in html  # the "More columns" toggle
+    # Kept by default: what a bettor acts on.
+    for th in (">Game</th>", ">Bet (line at bet)</th>", ">Edge</th>", ">Best available</th>"):
+        assert th in table and f'extra">{th[1:]}' not in table, th
+    # Behind "More columns".
+    for th in ("Tier", "Risk / to win", "Books", "Edge now"):
+        assert f'extra">{th}</th>' in table, th
 
 
 def test_bets_lead_with_open_bets(bets_client):
