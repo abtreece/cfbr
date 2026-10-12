@@ -1512,6 +1512,20 @@ def test_no_owner_key_means_no_owner(web_cfg, monkeypatch):
     assert 'id="mine"' not in c.get("/bets").text
 
 
+def test_single_book_bets_are_explained_only_when_present(web_cfg):
+    from cfbr.bets.ledger import read_ledger
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    path = _write_ledger(web_cfg)  # every fixture bet has 3 books
+    c = TestClient(create_app(web_cfg))
+    assert "only one book" not in c.get("/bets").text
+    led = read_ledger(path)
+    led.with_columns(n_providers=pl.when(pl.col("game_id").is_in([1, 2])).then(1)
+                     .otherwise(pl.col("n_providers")).cast(pl.Int32)).write_csv(path)
+    html = " ".join(c.get("/bets").text.split())
+    assert "2 bets were recorded when only one book's line was available (Books = 1)" in html
+
+
 def test_bets_lead_with_open_bets(bets_client):
     html = bets_client.get("/bets").text
     # Open bets come before the rules and the results.
