@@ -59,7 +59,7 @@
 {%- endmacro %}
 
 {% macro ratings_tabs(season, current) -%}
-{{ tabs([("/rankings?season=" ~ season, "Rankings", current == "rankings"), ("/accuracy?season=" ~ season, "Track record", current == "accuracy")], "Ratings") }}
+{{ tabs([("/rankings?season=" ~ season, "Rankings", current == "rankings"), ("/accuracy?season=" ~ season, "Track record", current == "accuracy")], "Rankings") }}
 {%- endmacro %}
 
 {% macro tabs(items, label) -%}

@@ -139,7 +139,7 @@ def test_index_redirects_to_rankings(client):
 
 def test_rankings_default_to_latest_week_and_link_teams(client):
     html = client.get("/rankings").text
-    assert "2026 ratings · Week 1" in html
+    assert "2026 rankings · Week 1" in html
     assert 'href="/team/2026/Texas%20A%26M"' in html
     assert 'href="/team/2026/Hawai%27i"' in html
     assert "FCS:Big Sky" not in html  # pooled FCS entities are not ranked
@@ -164,7 +164,7 @@ def test_top25_filter():
 def test_top25_option_on_rankings_page(client):
     html = " ".join(client.get("/rankings?season=2026&week=1&conf=top25").text.split())
     assert '<option value="top25" selected>Top 25</option>' in html
-    assert "2026 ratings · Week 1 · Top 25" in html
+    assert "2026 rankings · Week 1 · Top 25" in html
     assert client.get("/api/rankings?season=2026&week=1&conf=top25").status_code == 200
 
 
@@ -656,7 +656,7 @@ def test_free_viewers_keep_public_live_data(free_client):
 
 def test_free_viewers_land_on_finished_season(free_client):
     html = " ".join(free_client.get("/rankings").text.split())
-    assert "2025 ratings · Week 1" in html and "+21.0" in html  # finished season is fully free
+    assert "2025 rankings · Week 1" in html and "+21.0" in html  # finished season is fully free
     assert "2026 ratings and rankings are for subscribers" in html
 
 
@@ -1526,7 +1526,7 @@ def test_track_record_is_a_ratings_tab(client):
     rankings = client.get("/rankings?season=2026&week=1").text
     accuracy = client.get("/accuracy?season=2026").text
     for html, here in ((rankings, "Rankings"), (accuracy, "Track record")):
-        tabs = html[html.index('<nav class="tabs" aria-label="Ratings">'):]
+        tabs = html[html.index('<nav class="tabs" aria-label="Rankings">'):]
         tabs = tabs[:tabs.index("</nav>")]
         assert ">Rankings</a>" in tabs and ">Track record</a>" in tabs
         assert f'aria-current="page">{here}</a>' in tabs
@@ -1625,10 +1625,10 @@ def test_nav_and_skip_link(client):
     html = client.get("/rankings").text
     nav = html[html.index('<nav aria-label="Sections">'):html.index("</nav>")]
     assert [s.split("</a>")[0].split(">")[-1] for s in nav.split("<a ")[1:]] == \
-        ["Ratings", "Games", "Projections", "Bets"]
+        ["Rankings", "Games", "Projections", "Bets"]
     assert '<a class="skip" href="#main">' in html and '<main id="main"' in html
     # Old routes still work under the new labels.
-    for url, label in (("/odds", None), ("/accuracy", "Ratings"), ("/matchup", "Games")):
+    for url, label in (("/odds", None), ("/accuracy", "Rankings"), ("/matchup", "Games")):
         if label:
             assert f'aria-current="page">{label}</a>' in client.get(url).text, url
 
