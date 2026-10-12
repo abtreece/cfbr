@@ -1,7 +1,9 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, tile, team_link, line_chart %}
+{% from "macros.html" import season_select, tile, team_link, line_chart, tabs %}
 {% block title %}{% if season %}{{ season }} {% endif %}retroactive paper bets · CFB Ratings{% endblock %}
 {% block content %}
+{% set q = "?season=" ~ season if season else "" %}
+{{ tabs([("/bets" ~ q, "Live", false), ("/bets/retro" ~ q, "Replay", true)], "Paper bets") }}
 {% if retro_seasons|length > 1 %}
 <form class="filters" method="get" action="/bets/retro">
   {{ season_select(retro_seasons, season) }}
@@ -9,7 +11,6 @@
 </form>
 {% endif %}
 
-<p class="note"><a href="/bets{% if season %}?season={{ season }}{% endif %}">← Live paper bets</a></p>
 <h1>{% if season %}{{ season }} {% endif %}retroactive paper bets{% if through_week %}, weeks 1–{{ through_week }}{% endif %}</h1>
 <p class="lede">What the live betting rules would have done on games already played, replayed after the fact.
   Nothing is wagered, and this is not betting advice.</p>

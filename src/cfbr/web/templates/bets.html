@@ -1,7 +1,8 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, tile, team_link, line_chart %}
+{% from "macros.html" import season_select, tile, team_link, line_chart, tabs %}
 {% block title %}{% if season %}{{ season }} {% endif %}paper bets · CFB Ratings{% endblock %}
 {% block content %}
+{% if has_retro %}{{ tabs([("/bets?season=" ~ season, "Live", true), ("/bets/retro?season=" ~ season, "Replay", false)], "Paper bets") }}{% endif %}
 {% if bet_seasons|length > 1 %}
 <form class="filters" method="get" action="/bets">
   {{ season_select(bet_seasons, season) }}
@@ -35,8 +36,35 @@
   {{ tile("Open bets", summary.open, summary.open_risk_dollars|money(false) ~ " at risk") }}
 </div>
 
-{% if has_retro %}
-<p class="note"><a href="/bets/retro?season={{ season }}">Retroactive replay of earlier weeks →</a></p>
+<h2>Open bets</h2>
+{% if open_bets %}
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th title="Consensus line when the bet was recorded; it can differ from the line on Games, which keeps moving until kickoff">Bet (line at bet)</th><th class="num opt">Model</th><th class="num">Edge</th>{% if show_cents %}<th class="num opt">Edge ¢</th>{% endif %}{% if show_cover %}<th class="num opt">Cover %</th>{% endif %}<th>Tier</th><th class="num opt">Risk / to win</th>
+    <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded ({{ tz_label }})</th></tr></thead>
+  <tbody>
+  {% for b in open_bets %}
+    <tr>
+      <td class="opt">{{ b.kickoff|kickoff }}</td>
+      <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
+      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
+      <td class="num opt" title="Model's expected margin for {{ b.team }}" data-v="{{ b.model_team }}">{{ b.model_team|margin }}</td>
+      <td class="num">{{ b.edge_pts|num }}</td>
+      {% if show_cents %}<td class="num opt">{{ b.edge_cents|signed(0) if b.edge_cents is not none else "—" }}</td>{% endif %}
+      {% if show_cover %}<td class="num opt">{{ b.cover_prob|pct(0) if b.cover_prob is not none else "—" }}</td>{% endif %}
+      <td>{{ b.tier }}</td>
+      <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
+      <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_odds is not none %} ({{ b.best_odds|price }}){% endif %}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
+      <td class="num opt" {% if b.books %}title="{{ b.books }}"{% endif %}>{{ b.n_providers }}</td>
+      <td class="opt">{{ b.placed|short_ts }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Hover over Books to see each book's line. <a href="#how">How it works ↓</a></p>
+{% else %}
+<p class="muted">No open bets.</p>
 {% endif %}
 
 <details class="rules" id="how">
@@ -65,37 +93,8 @@
 {{ line_chart("units-chart", chart, "Bankroll by week", "dollars") }}
 {% endif %}
 
-<h2>Open bets</h2>
-{% if open_bets %}
-<div class="table-wrap">
-<table class="data">
-  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th title="Consensus line when the bet was recorded; it can differ from the line on Games, which keeps moving until kickoff">Bet (line at bet)</th><th class="num opt">Model</th><th class="num">Edge</th>{% if show_cents %}<th class="num opt">Edge ¢</th>{% endif %}{% if show_cover %}<th class="num opt">Cover %</th>{% endif %}<th>Tier</th><th class="num opt">Risk / to win</th>
-    <th class="opt">Best available</th><th class="num opt">Books</th><th class="opt">Recorded ({{ tz_label }})</th></tr></thead>
-  <tbody>
-  {% for b in open_bets %}
-    <tr>
-      <td class="opt">{{ b.kickoff|kickoff }}</td>
-      <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
-      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
-      <td class="num opt" title="Model's expected margin for {{ b.team }}" data-v="{{ b.model_team }}">{{ b.model_team|margin }}</td>
-      <td class="num">{{ b.edge_pts|num }}</td>
-      {% if show_cents %}<td class="num opt">{{ b.edge_cents|signed(0) if b.edge_cents is not none else "—" }}</td>{% endif %}
-      {% if show_cover %}<td class="num opt">{{ b.cover_prob|pct(0) if b.cover_prob is not none else "—" }}</td>{% endif %}
-      <td>{{ b.tier }}</td>
-      <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
-      <td class="opt">{% if b.best is not none %}{{ b.best|spread }}{% if b.best_odds is not none %} ({{ b.best_odds|price }}){% endif %}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
-      <td class="num opt" {% if b.books %}title="{{ b.books }}"{% endif %}>{{ b.n_providers }}</td>
-      <td class="opt">{{ b.placed|short_ts }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-<p class="note">Hover over Books to see each book's line. <a href="#how">How it works ↑</a></p>
-{% else %}
-<p class="muted">No open bets.</p>
-{% endif %}
-
+{# Until something settles these tables are all zeros: keep them collapsed. #}
+{% if not summary.settled %}<details class="section"><summary>Results, tiers and tracked tests <span class="muted">· no settled bets yet</span></summary>{% endif %}
 <h2>Results</h2>
 <div class="table-wrap">
 <table class="data">
@@ -190,6 +189,8 @@
   <br>Decision rule: {{ t.decision }}
 </p>
 {% endfor %}
+
+{% if not summary.settled %}</details>{% endif %}
 
 {% if settled %}
 <h2>Settled bets</h2>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import tile, team_link %}
+{% from "macros.html" import tile, team_link, tabs %}
 {% block title %}{{ team }} {{ season }} roster · CFB Ratings{% endblock %}
 {% block content %}
 <form class="filters" method="get" onsubmit="location.href='/roster/'+this.season.value+'/{{ team|q }}'; return false;">
@@ -13,7 +13,8 @@
   <a class="back" href="/team/{{ season }}/{{ team|q }}">← {{ team }} {{ season }}</a>
 </form>
 
-<h1>{{ team }} <span class="muted">{{ season }} roster</span></h1>
+<h1>{{ team }} <span class="muted">{{ season }}</span></h1>
+{{ tabs([("/team/" ~ season ~ "/" ~ team|q, "Overview", false), ("/roster/" ~ season ~ "/" ~ team|q, "Roster", true)], team) }}
 {% if as_of %}<p class="lede">Roster as of {{ as_of|short_ts }} {{ tz_label }}.</p>{% endif %}
 
 {% if card %}

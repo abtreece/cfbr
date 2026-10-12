@@ -10,20 +10,21 @@
   </script>
 </head>
 <body>
+  <a class="skip" href="#main">Skip to content</a>
   <header class="site">
     <a class="brand" href="/rankings">CFB Ratings</a>
-    <nav>
+    <nav aria-label="Sections">
       {% set path = request.url.path %}
-      <a href="/rankings" {% if path.startswith(('/rankings', '/team', '/roster', '/player')) %}aria-current="page"{% endif %}>Rankings</a>
-      <a href="/games" {% if path.startswith('/games') %}aria-current="page"{% endif %}>Games</a>
-      <a href="/matchup" {% if path.startswith('/matchup') %}aria-current="page"{% endif %}>Matchup</a>
-      <a href="/odds" {% if path.startswith('/odds') %}aria-current="page"{% endif %}>Odds</a>
-      <a href="/accuracy" {% if path.startswith('/accuracy') %}aria-current="page"{% endif %}>Accuracy</a>
+      {# Labels, not routes, changed with the reorganization: old links and bookmarks keep working. #}
+      <a href="/rankings" {% if path.startswith(('/rankings', '/team', '/roster', '/player')) %}aria-current="page"{% endif %}>Ratings</a>
+      <a href="/games" {% if path.startswith(('/games', '/matchup')) %}aria-current="page"{% endif %}>Games</a>
+      <a href="/odds" {% if path.startswith('/odds') %}aria-current="page"{% endif %}>Projections</a>
       <a href="/bets" {% if path.startswith('/bets') %}aria-current="page"{% endif %}>Bets</a>
+      <a href="/accuracy" {% if path.startswith(('/accuracy', '/lab')) %}aria-current="page"{% endif %}>Track record</a>
     </nav>
     <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark theme">◐</button>
   </header>
-  <main>
+  <main id="main" tabindex="-1">
     {% block content %}{% endblock %}
   </main>
   <footer class="site">

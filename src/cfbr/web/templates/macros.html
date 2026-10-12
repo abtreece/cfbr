@@ -46,3 +46,11 @@
   <script type="application/json">{{ chart|tojson }}</script>
 </figure>
 {%- endmacro %}
+
+{# Sub-navigation inside a section, e.g. Games: "This week | Any matchup".
+   items: (href, label, is_current) tuples. #}
+{% macro tabs(items, label) -%}
+<nav class="tabs" aria-label="{{ label }}">
+  {% for href, text, current in items %}<a href="{{ href }}"{% if current %} aria-current="page"{% endif %}>{{ text }}</a>{% endfor %}
+</nav>
+{%- endmacro %}

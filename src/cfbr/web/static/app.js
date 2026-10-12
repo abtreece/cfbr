@@ -17,6 +17,25 @@ document.querySelectorAll("select[data-row-filter]").forEach((sel) => {
   });
 });
 
+// -- "More columns": <button data-toggle-class="more" data-target="tableId"> toggles a class,
+//    remembered per table in this browser --------------------------------------------
+document.querySelectorAll("button[data-toggle-class]").forEach((btn) => {
+  const target = document.getElementById(btn.dataset.target);
+  if (!target) return;
+  const cls = btn.dataset.toggleClass, key = `cfbr-${btn.dataset.target}-${cls}`;
+  const set = (on) => {
+    target.classList.toggle(cls, on);
+    btn.setAttribute("aria-pressed", String(on));
+    btn.textContent = on ? "Fewer columns" : "More columns";
+  };
+  try { set(localStorage.getItem(key) === "1"); } catch (e) { /* storage unavailable */ }
+  btn.addEventListener("click", () => {
+    const on = !target.classList.contains(cls);
+    set(on);
+    try { localStorage.setItem(key, on ? "1" : "0"); } catch (e) { /* storage unavailable */ }
+  });
+});
+
 // -- theme toggle --------------------------------------------------------------------
 document.getElementById("theme-toggle")?.addEventListener("click", () => {
   const root = document.documentElement;

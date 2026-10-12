@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import tile, delta, line_chart, team_link, poll_rank, poll_cell, premium_notice %}
+{% from "macros.html" import tile, delta, line_chart, team_link, poll_rank, poll_cell, premium_notice, tabs %}
 {% block title %}{{ team }} {{ season }} · CFB Ratings{% endblock %}
 {% block content %}
 <form class="filters" method="get" onsubmit="location.href='/team/'+this.season.value+'/{{ team|q }}'; return false;">
@@ -12,6 +12,7 @@
 </form>
 
 <h1>{{ team }} <span class="muted">{{ season }}</span></h1>
+{% if roster %}{{ tabs([("/team/" ~ season ~ "/" ~ team|q, "Overview", true), ("/roster/" ~ season ~ "/" ~ team|q, "Roster", false)], team) }}{% endif %}
 <p class="lede">{{ latest.conference or ("Pooled FCS opponents" if not is_fbs else "") }} · {{ latest.label }}</p>
 
 {% if locked %}{{ premium_notice(season, "ratings and predictions") }}{% endif %}
@@ -38,6 +39,17 @@
   {{ tile(e.label, (e.value|signed(3)) if e.kind == "ppa" else ((100 * e.value)|signed(1) ~ " pp"), e.sub) }}
   {% endfor %}
 </div>
+{% endif %}
+
+{% if projection %}
+<h2>Season outlook <span class="muted">through week {{ projection.week }}</span></h2>
+<div class="tiles">
+  {{ tile("Expected wins", projection.exp_wins|num, "80% range " ~ projection.wins_p10 ~ "–" ~ projection.wins_p90) }}
+  {{ tile("Conference title", prob(projection.p_conf_title)) }}
+  {{ tile("Playoff", prob(projection.p_playoff), "bye " ~ prob(projection.p_bye)) }}
+  {{ tile("Champion", prob(projection.p_champion)) }}
+</div>
+<p class="note"><a href="/odds?season={{ season }}&amp;week={{ projection.week }}{% if latest.conference %}&amp;conf={{ latest.conference|q }}{% endif %}">All projections →</a></p>
 {% endif %}
 
 {% if resume %}

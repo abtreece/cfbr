@@ -41,6 +41,7 @@
 </p>
 {% if polls %}<p class="note poll-note">Polls: {{ polls|join(" · ") }}.</p>{% endif %}
 
+<div class="table-tools"><button type="button" class="link" data-toggle-class="more" data-target="rankings" aria-pressed="false">More columns</button></div>
 <div class="table-wrap">
 <table class="data sortable" id="rankings">
   <thead>
@@ -48,17 +49,17 @@
       <th data-sort="num" class="num">Rk</th>
       <th data-sort="num" class="num" title="Rank change since the previous table">±</th>
       <th data-sort="text">Team</th>
-      <th data-sort="text" class="opt">Conf</th>
+      <th data-sort="text" class="opt extra">Conf</th>
       <th data-sort="num" class="num">Record</th>
       <th data-sort="num" class="num" title="Expected margin vs. an average FBS team, neutral field">Rating</th>
-      <th data-sort="num" class="num opt" title="Offense component, points">Off</th>
-      <th data-sort="num" class="num opt" title="Defense component, points (higher is better)">Def</th>
+      <th data-sort="num" class="num opt extra" title="Offense component, points">Off</th>
+      <th data-sort="num" class="num opt extra" title="Defense component, points (higher is better)">Def</th>
       <th data-sort="num" class="num opt" title="Rating change since the previous table">Δ Rating</th>
       <th data-sort="num" data-first="asc" class="num opt" title="AP Top 25 rank">AP</th>
       {% if show_ap %}<th data-sort="num" class="num opt" title="Places the model ranks the team above (▲) or below (▼) the AP poll">vs AP</th>{% endif %}
-      <th data-sort="num" data-first="asc" class="num opt" title="Coaches Poll rank">Coaches</th>
-      {% if show_cfp %}<th data-sort="num" data-first="asc" class="num opt" title="College Football Playoff committee rank">CFP</th>{% endif %}
-      <th data-sort="num" class="num opt" title="How much of the rating still comes from the preseason prior">Prior</th>
+      <th data-sort="num" data-first="asc" class="num opt extra" title="Coaches Poll rank">Coaches</th>
+      {% if show_cfp %}<th data-sort="num" data-first="asc" class="num opt extra" title="College Football Playoff committee rank">CFP</th>{% endif %}
+      <th data-sort="num" class="num opt extra" title="How much of the rating still comes from the preseason prior">Prior</th>
       <th class="opt" aria-label="Rating trend this season">Trend</th>
     </tr>
   </thead>
@@ -68,17 +69,17 @@
       <td class="num" data-v="{{ r.rank }}">{{ r.rank }}</td>
       <td class="num" data-v="{{ r.rank_change if r.rank_change is not none else 0 }}">{{ delta(r.rank_change, 0) }}</td>
       <td class="team">{% if r.ap_rank is not none %}<span class="pr m-only">#{{ r.ap_rank }}</span>{% endif %}<a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a></td>
-      <td class="opt">{{ r.conference or "—" }}</td>
+      <td class="opt extra">{{ r.conference or "—" }}</td>
       <td class="num" data-v="{{ r.w - r.l }}">{{ r.w }}–{{ r.l }}</td>
       <td class="num strong" data-v="{{ r.rating }}">{{ r.rating|signed }}</td>
-      <td class="num opt" data-v="{{ r.offense }}">{{ r.offense|signed }}</td>
-      <td class="num opt" data-v="{{ r.defense }}">{{ r.defense|signed }}</td>
+      <td class="num opt extra" data-v="{{ r.offense }}">{{ r.offense|signed }}</td>
+      <td class="num opt extra" data-v="{{ r.defense }}">{{ r.defense|signed }}</td>
       <td class="num opt" data-v="{{ r.rating_change if r.rating_change is not none else 0 }}">{{ delta(r.rating_change) }}</td>
       {{ poll_cell(r.ap_rank, "opt") }}
       {% if show_ap %}<td class="num opt" data-v="{{ -r.vs_ap if r.vs_ap is not none else 0 }}">{{ delta(-r.vs_ap, 0) if r.vs_ap is not none else '<span class="muted">—</span>'|safe }}</td>{% endif %}
-      {{ poll_cell(r.coaches_rank, "opt") }}
-      {% if show_cfp %}{{ poll_cell(r.cfp_rank, "opt") }}{% endif %}
-      <td class="num opt" data-v="{{ r.prior_share }}">{{ r.prior_share|pct(0) }}</td>
+      {{ poll_cell(r.coaches_rank, "opt extra") }}
+      {% if show_cfp %}{{ poll_cell(r.cfp_rank, "opt extra") }}{% endif %}
+      <td class="num opt extra" data-v="{{ r.prior_share }}">{{ r.prior_share|pct(0) }}</td>
       <td class="spark opt">
         {% set pts = sparkline(r.trend or [], lo, hi) %}
         {% if pts %}<svg width="72" height="18" viewBox="-2 -2 76 22" role="img"
