@@ -4,7 +4,7 @@
 {% set col_defs = [
   (MODEL, (MODEL) ~ "'s pick and expected margin (CFB ratings model; see Method)"),
   ("Win %", "Win probability of the team " ~ (MODEL) ~ " favors"),
-  ("Vegas", "Median spread across sportsbooks: the latest line for games not yet played, the closing line once final"),
+  ("Vegas", "Median spread across sportsbooks: the latest line fetched (see the as-of time above the table) for games not yet played, the closing line once final"),
   ("Edge", "Points between " ~ (MODEL) ~ "'s margin and the Vegas line, and toward which team")] %}{% set col = dict(col_defs) %}
 {# Free viewers on a live season don't see the model's columns, so don't define them either. #}
 {% if locked %}{% set col_defs = col_defs|rejectattr("0", "in", [MODEL, "Win %", "Edge"])|list %}{% endif %}
@@ -32,6 +32,7 @@
 
 <h1>{{ season }} · {{ slot|slot_label }}</h1>
 {% if slot.startswith('p') %}<p class="lede">Postseason weeks are 7-day windows from the first bowl game.</p>{% endif %}
+{% if s.meta.lines_as_of and s.meta.live and rows|selectattr("completed", "false")|list %}<p class="note lines-as-of">Vegas lines for games not yet played are as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.</p>{% endif %}
 
 {% if locked %}{{ premium_notice(season, "predictions") }}{% endif %}
 {% if summary and summary.n_games %}
@@ -87,5 +88,5 @@
 </table>
 </div>
 {{ col_legend(col_defs) }}
-<p class="note">#N is the AP rank going into the game; finals are away–home.{% if not locked %}{% endif %} <a href="/method#lines">Column definitions →</a></p>
+<p class="note">#N is the AP rank going into the game; finals are away–home.{% if not locked %}{% endif %} <a href="/method#lines">Column definitions</a></p>
 {% endblock %}

@@ -48,11 +48,11 @@
   {% if week == 0 %}Preseason prior, before any {{ season }} games.
   {% elif week == FINAL %}After all {{ season }} games, including the postseason.
   {% else %}Every game through week {{ week }}.{% endif %}
-  {{ MODEL }} ratings: each team's expected margin against an average FBS team on a neutral field. <a href="/accuracy?season={{ season }}">How accurate is {{ MODEL }}? →</a>
+  {{ MODEL }} ratings: each team's expected margin against an average FBS team on a neutral field. <a href="/accuracy?season={{ season }}">How accurate is {{ MODEL }}?</a>
   {% if kind == "live" and s.meta.live %}<span class="badge">Live season</span>{% endif %}
   {% if kind == "tuning" %}<span class="badge">Tuning season</span>{% elif kind == "holdout" %}<span class="badge">Holdout season</span>{% endif %}
 </p>
-{% if polls %}<p class="note poll-note">Polls: {{ polls|join(" · ") }}.</p>{% endif %}
+{% if polls %}<p class="note poll-note">{{ polls|poll_line }}</p>{% endif %}
 
 <div class="table-tools"><button type="button" class="link" data-toggle-class="more" data-target="rankings" aria-pressed="false">More columns</button></div>
 <div class="table-wrap">

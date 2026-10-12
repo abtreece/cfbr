@@ -38,11 +38,12 @@
 
 <h2>Open bets</h2>
 {% if open_bets %}
+<div class="table-tools"><button type="button" class="link" data-toggle-class="more" data-target="open-bets" aria-pressed="false">More columns</button></div>
 <div class="table-wrap">
-<table class="data">
+<table class="data" id="open-bets">
   <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet (line at bet)</th><th class="num opt">{{ MODEL }}</th><th class="num">Edge</th>
-    <th class="num opt">Line now</th><th class="num opt">Edge now</th>{% if show_cents %}<th class="num opt">Edge ¢</th>{% endif %}{% if show_cover %}<th class="num opt">Cover %</th>{% endif %}<th class="opt">Tier</th><th class="num opt">Risk / to win</th>
-    <th>Best available</th><th class="num opt">Books</th><th class="opt">Recorded ({{ tz_label }})</th></tr></thead>
+    <th class="num opt">Line now</th><th class="num opt extra">Edge now</th>{% if show_cents %}<th class="num opt extra">Edge ¢</th>{% endif %}{% if show_cover %}<th class="num opt extra">Cover %</th>{% endif %}<th class="opt extra">Tier</th><th class="num opt extra">Risk / to win</th>
+    <th>Best available</th><th class="num opt extra">Books</th><th class="opt extra">Recorded ({{ tz_label }})</th></tr></thead>
   <tbody>
   {% for b in open_bets %}
     <tr>
@@ -52,22 +53,22 @@
       <td class="num opt" title="{{ MODEL }}'s expected margin for {{ b.team }}" data-v="{{ b.model_team }}">{{ b.model_team|margin }}</td>
       <td class="num">{{ b.edge_pts|num }}</td>
       <td class="num opt">{{ b.line_now|spread }}</td>
-      <td class="num opt">{% if b.edge_now is not none %}<span class="{{ 'muted' if b.below_threshold else '' }}">{{ b.edge_now|num }}</span>{% else %}—{% endif %}</td>
-      {% if show_cents %}<td class="num opt">{{ b.edge_cents|signed(0) if b.edge_cents is not none else "—" }}</td>{% endif %}
-      {% if show_cover %}<td class="num opt">{{ b.cover_prob|pct(0) if b.cover_prob is not none else "—" }}</td>{% endif %}
-      <td class="opt">{{ b.tier }}</td>
-      <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
+      <td class="num opt extra">{% if b.edge_now is not none %}<span class="{{ 'muted' if b.below_threshold else '' }}">{{ b.edge_now|num }}</span>{% else %}—{% endif %}</td>
+      {% if show_cents %}<td class="num opt extra">{{ b.edge_cents|signed(0) if b.edge_cents is not none else "—" }}</td>{% endif %}
+      {% if show_cover %}<td class="num opt extra">{{ b.cover_prob|pct(0) if b.cover_prob is not none else "—" }}</td>{% endif %}
+      <td class="opt extra">{{ b.tier }}</td>
+      <td class="num opt extra">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
       <td>{% if b.best is not none %}{{ b.best|spread }}{% if b.best_odds is not none %} ({{ b.best_odds|price }}){% endif %}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
-      <td class="num opt" {% if b.books_side %}title="{{ b.books_side }}"{% endif %}>{{ b.n_providers }}</td>
-      <td class="opt">{{ b.placed|short_ts }}</td>
+      <td class="num opt extra" {% if b.books_side %}title="{{ b.books_side }}"{% endif %}>{{ b.n_providers }}</td>
+      <td class="opt extra">{{ b.placed|short_ts }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-<p class="note"><strong>Line at bet</strong> is fixed when the bet is recorded; <strong>Line now</strong> is the line on Games, which keeps moving until kickoff.
+<p class="note"><strong>Line at bet</strong> is fixed when the bet is recorded; <strong>Line now</strong> is the line on Games{% if lines_as_of %}, as of {{ lines_as_of|iso_ts }}{% endif %}.
   {% if n_below %}{{ n_below }} of {{ open_bets|length }} bets are no longer {{ rules.threshold|num(0) }}+ off the current line, so Games doesn't flag them; the bet stands as recorded.{% endif %}
-  Books is how many sportsbooks set the consensus. <a href="#how">How it works ↓</a></p>
+  "More columns" adds Edge now,{% if show_cents %} Edge ¢,{% endif %}{% if show_cover %} Cover %,{% endif %} Tier, stake, the number of books in the consensus (hover for each book's line) and when each bet was recorded. <a href="#how">How it works ↓</a></p>
 {% else %}
 <p class="muted">No open bets.</p>
 {% endif %}

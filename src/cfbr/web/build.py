@@ -162,6 +162,7 @@ def game_polls(polls: pl.DataFrame, season: int, games: pl.DataFrame) -> pl.Data
 
 def season_ratings(eng: Engine, season: int, now: datetime) -> pl.DataFrame:
     cal = eng.calibration(season)
+    live = not season_over(eng, season, now)
     fbs = eng.fbs(season)
     conf = eng.ds.team_status.filter(pl.col("season") == season).select("team", "conference")
     parts = []
@@ -198,6 +199,18 @@ def season_games(eng: Engine, season: int) -> pl.DataFrame:
     return g.join(game_polls(eng.ds.polls, season, g), on="game_id", how="left").sort("kickoff_ts", "game_id")
 
 
+def lines_as_of(raw_dir: Path, season: int) -> str | None:
+    """ISO time of the season's newest CFBD lines snapshot (data/raw/lines/{season}/snapshots/),
+    or None (finished seasons, or before any live fetch). Reads file names only."""
+    snaps = sorted((raw_dir / "lines" / str(season) / "snapshots").glob("*.json"))
+    if not snaps:
+        return None
+    try:
+        return datetime.strptime(snaps[-1].stem, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC).isoformat()
+    except ValueError:
+        return None
+
+
 def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None = None) -> Path:
     now = now or datetime.now(UTC)
     out = out_root / str(season)
@@ -218,11 +231,17 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
     except Exception:
         log.exception("roster web data for %d failed; continuing without it", season)
     cal = eng.calibration(season)
+    live = not season_over(eng, season, now)
     meta = {
         "season": season,
         "built_at": now.isoformat(timespec="seconds"),
         "config": eng.cfg.source,
-        "live": not season_over(eng, season, now),
+        "live": live,
+        # When the lines behind "Vegas" for unplayed games were fetched (the newest CFBD lines
+        # snapshot), so pages can say how old they are. A rebuild from cache (e.g. a deploy)
+        # doesn't move it; only a fetch does. Only for a live season: a finished season's
+        # leftover uncompleted rows (cancelled games) aren't "not yet played".
+        "lines_as_of": lines_as_of(eng.cfg.paths.raw_dir, season) if live else None,
         # Points calibration, so a page can price a hypothetical matchup from two ratings
         # without the server fitting anything: margin = rating_h - rating_a + b_home (0 on a
         # neutral field); win probability = Phi(margin / sigma). With calibration v2 the
