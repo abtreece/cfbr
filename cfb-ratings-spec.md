@@ -116,7 +116,7 @@ DoD: given `(season, week)`, the model returns a ratings table for all FBS teams
 For each season `s`, build each team's prior O and D values from features that were known before week 1 of season `s`:
 
 - the team's final rating from season `s-1` (offense and defense separately)
-- returning production (offense and defense percentages; a measure Bill Connelly publishes every year)
+- returning production (offense and defense percentages; CFBD's own measure, offense-only in practice per DECISIONS.md, not the one Bill Connelly publishes)
 - team talent composite
 - a 4-year weighted average of recruiting team rating
 
