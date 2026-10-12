@@ -28,26 +28,30 @@
 {# Data built before the calibration was exported; `cfbr web build --seasons <year>` enables it. #}
 <p class="callout">The matchup tool isn't available for {{ season }} yet. <a href="/rankings?season={{ season }}">See the {{ season }} ratings →</a></p>
 {% else %}
+<datalist id="h2h-teams">{% for t in teams %}<option value="{{ t.team }}">{% endfor %}</datalist>
 <div class="h2h">
   <div class="h2h-side">
+    <input type="search" class="h2h-find" data-for="h2h-home" list="h2h-teams" placeholder="Find a team" aria-label="Find the home or first team">
     <label>Home / first team
       <select id="h2h-home">{% for t in teams %}<option value="{{ t.team }}" {% if t.team == home %}selected{% endif %}>{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
     </label>
   </div>
   <div class="h2h-side">
+    <input type="search" class="h2h-find" data-for="h2h-away" list="h2h-teams" placeholder="Find a team" aria-label="Find the away or second team">
     <label>Away / second team
       <select id="h2h-away">{% for t in teams %}<option value="{{ t.team }}" {% if t.team == away %}selected{% endif %}>{{ t.team }}{% if t.rank %} (#{{ t.rank }}){% endif %}</option>{% endfor %}</select>
     </label>
   </div>
   <label class="h2h-neutral"><input type="checkbox" id="h2h-neutral"{% if neutral %} checked{% endif %}> Neutral field</label>
 </div>
+<p class="note" id="h2h-swapped" role="status" hidden>A team can't play itself, so the two teams were swapped.</p>
 <div class="tiles" id="h2h-out" aria-live="polite">
   <div class="tile"><div class="tile-label">Expected margin</div><div class="tile-value" id="h2h-margin">—</div><div class="tile-sub" id="h2h-pick"></div></div>
   <div class="tile"><div class="tile-label">Win probability</div><div class="tile-value" id="h2h-prob">—</div><div class="tile-sub" id="h2h-prob-sub"></div></div>
   <div class="tile"><div class="tile-label">Ratings</div><div class="tile-value" id="h2h-ratings">—</div><div class="tile-sub" id="h2h-ratings-sub"></div></div>
   <div class="tile"><div class="tile-label">Home-field advantage</div><div class="tile-value">{{ cal.b_home|signed }}</div><div class="tile-sub">points, calibrated{% if cal.stage2 %} (plus stage-2 terms){% endif %}; σ = {{ cal.sigma|num }}</div></div>
 </div>
-<p class="note"><a href="/method#matchup">How the margin and win probability are computed →</a></p>
+<p class="note"><a href="/method#matchup">How the margin and win probability are computed</a></p>
 <script id="h2h-data" type="application/json">{{ {"teams": teams, "cal": cal}|tojson }}</script>
 <script>
 (function () {
@@ -96,9 +100,19 @@
   }
   // A team can't play itself: picking the other side's team swaps the two.
   let prev = {home: home.value, away: away.value};
+  const swapped = document.getElementById("h2h-swapped");
   [[home, away, "home"], [away, home, "away"]].forEach(([el, other, side]) => el.addEventListener("change", () => {
+    swapped.hidden = el.value !== other.value;
     if (el.value === other.value) other.value = prev[side];
     prev = {home: home.value, away: away.value};
+  }));
+  // Typing a full team name in a search box selects it, as if picked from the list.
+  document.querySelectorAll(".h2h-find").forEach((box) => box.addEventListener("change", () => {
+    const sel = document.getElementById(box.dataset.for);
+    if (!byTeam[box.value] || sel.value === box.value) return;
+    sel.value = box.value;
+    sel.dispatchEvent(new Event("change"));
+    box.value = "";
   }));
   [home, away, neutral].forEach((el) => el.addEventListener("change", () => { update(); sync(); }));
   update();

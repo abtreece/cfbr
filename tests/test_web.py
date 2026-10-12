@@ -231,7 +231,7 @@ def test_rankings_show_poll_columns_and_note(poll_client):
     assert ">AP</th>" in html and ">Coaches</th>" in html
     assert ">CFP</th>" not in html  # no CFP rankings released yet
     assert '<span class="pr m-only">#3</span><a href="/team/2026/Texas%20A%26M">' in html
-    assert "AP: week 2 poll · Coaches: week 1 poll (week 2 not released yet)" in html
+    assert "AP: week 2 poll; Coaches: week 1 poll (week 2 not released yet)." in html
     assert 'data-v="999"' in html  # unranked teams sort last
 
 
@@ -253,7 +253,7 @@ def test_games_show_ap_rank_before_names(poll_client):
 def test_pages_render_without_poll_columns(client):
     # The default fixture predates polls; the store fills the columns with nulls.
     html = client.get("/rankings").text
-    assert ">AP</th>" in html and "Polls:" not in html
+    assert ">AP</th>" in html and "poll-note" not in html
     assert client.get("/api/rankings").json()["teams"][0]["ap_rank"] is None
 
 
@@ -1264,11 +1264,181 @@ def test_delta_shows_no_arrow_for_a_rounded_zero(client):
     assert "▲ 0.1" in tmpl.render(x=0.06) and "▼ 1.0" in tmpl.render(x=-1.0)
 
 
+def test_poll_line_names_matching_polls_together():
+    from cfbr.web.app import poll_line
+
+    assert poll_line(["AP: week 7 poll", "Coaches: week 7 poll"]) == "AP and Coaches: week 7 polls."
+    assert poll_line(["AP: week 7 poll", "Coaches: week 7 poll", "CFP: week 7 poll"]) == "AP, Coaches and CFP: week 7 polls."
+    assert poll_line(["AP: final poll", "Coaches: final poll"]) == "AP and Coaches: final polls."
+    assert poll_line(["AP: week 2 poll", "Coaches: week 1 poll (week 2 not released yet)"]) == \
+        "AP: week 2 poll; Coaches: week 1 poll (week 2 not released yet)."
+    assert poll_line([]) == ""
+
+
+def _odds_event(eid, home, away, kickoff, books):
+    """An Odds API event with spreads markets: books = [(title, home_point), ...]."""
+    return {"id": eid, "home_team": home, "away_team": away,
+            "commence_time": kickoff.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "bookmakers": [{"title": b, "markets": [{"key": "spreads", "outcomes": [
+                {"name": home, "point": pt, "price": -110}, {"name": away, "point": -pt, "price": -110}]}]}
+                           for b, pt in books]}
+
+
+def test_apply_lines_overlays_only_unplayed_games_the_snapshot_carries():
+    from cfbr.web.lines import apply_lines
+
+    snap = datetime(2026, 10, 14, 21, tzinfo=UTC)
+    games = pl.DataFrame({
+        "game_id": [1, 2, 3, 4],
+        "completed": [True, False, False, False],
+        "kickoff_ts": [snap - timedelta(days=3), snap + timedelta(days=3), snap + timedelta(days=3), snap - timedelta(hours=1)],
+        "cfbd_spread": [-7.0, -3.0, -10.0, -1.0],
+    })
+    fresh = (snap, pl.DataFrame({"game_id": [1, 2, 4], "spread": [-8.0, -4.5, -2.0]}))
+    out = apply_lines(games, fresh, "2026-10-11T20:00:11+00:00").sort("game_id").to_dicts()
+    # 1: final -> keeps CFBD's close. 2: unplayed and in the snapshot -> Odds API line.
+    # 3: unplayed, not in the snapshot -> CFBD. 4: kicked off before the snapshot -> CFBD (no live lines).
+    assert [(r["spread"], r["line_source"]) for r in out] == [(-7.0, "cfbd"), (-4.5, "odds"), (-10.0, "cfbd"), (-1.0, "cfbd")]
+    assert out[1]["line_as_of"] == snap.isoformat() and out[2]["line_as_of"] == "2026-10-11T20:00:11+00:00"
+    assert apply_lines(games, None, None)["spread"].to_list() == [-7.0, -3.0, -10.0, -1.0]
+    # During a build kickoff_ts is local time (America/Chicago), not UTC; same result.
+    local = games.with_columns(pl.col("kickoff_ts").dt.convert_time_zone("America/Chicago"))
+    assert apply_lines(local, fresh, None).sort("game_id")["line_source"].to_list() == ["cfbd", "odds", "cfbd", "cfbd"]
+
+
+def test_refresh_lines_patches_the_site_and_never_sticks(web_cfg):
+    from cfbr.web.lines import refresh_lines
+
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    games = pl.read_parquet(d / "games.parquet")
+    # As built today: CFBD lines kept in cfbd_spread.
+    games.with_columns(cfbd_spread=pl.col("spread")).write_parquet(d / "games.parquet")
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:11+00:00",
+                                                    "cfbd_lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    web_cfg.paths.raw_dir = web_cfg.paths.out_dir.parent / "raw"
+    web_cfg.paths.db_path = web_cfg.paths.out_dir.parent / "db" / "cfb.duckdb"
+    web_cfg.paths.db_path.parent.mkdir(parents=True)
+    assert refresh_lines(web_cfg, SEASON) is None  # no snapshot yet: nothing changes
+
+    # Game 3 (Texas A&M @ Ohio State, unplayed, CFBD −3) moves to −6.5 in a later Odds API snapshot.
+    kick = games.filter(pl.col("game_id") == 3)["kickoff_ts"][0]
+    snaps = web_cfg.paths.raw_dir / "odds" / str(SEASON) / "snapshots"
+    snaps.mkdir(parents=True)
+    ts = datetime.now(UTC).replace(microsecond=0)
+    (snaps / f"{ts:%Y%m%dT%H%M%SZ}.json").write_text(json.dumps(
+        [_odds_event("e3", "Ohio State", "Texas A&M", kick, [("DraftKings", -6.0), ("FanDuel", -7.0)])]))
+    before = (d / "meta.json").stat().st_mtime_ns
+    assert refresh_lines(web_cfg, SEASON) == 1
+    after = pl.read_parquet(d / "games.parquet").sort("game_id")
+    assert after.filter(pl.col("game_id") == 3)["spread"][0] == -6.5  # median of −6 and −7
+    assert after.filter(pl.col("game_id") == 3)["line_source"][0] == "odds"
+    assert after.filter(pl.col("game_id") == 1)["spread"][0] == -7.0  # final: CFBD close untouched
+    # Predictions untouched; meta rewritten last with the snapshot time.
+    assert after["pred_margin"].to_list() == games.sort("game_id")["pred_margin"].to_list()
+    meta = json.loads((d / "meta.json").read_text())
+    assert meta["lines_as_of"] == ts.isoformat() and (d / "meta.json").stat().st_mtime_ns > before
+    html = " ".join(TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text.split())
+    assert "Ohio State −6.5" in html
+
+    # A newer snapshot without the game: it falls back to CFBD instead of keeping the stale odds line.
+    (snaps / f"{ts + timedelta(minutes=5):%Y%m%dT%H%M%SZ}.json").write_text("[]")
+    assert refresh_lines(web_cfg, SEASON) == 0
+    g3 = pl.read_parquet(d / "games.parquet").filter(pl.col("game_id") == 3)
+    assert g3["spread"][0] == -3.0 and g3["line_source"][0] == "cfbd"
+
+
+def test_refresh_lines_skips_while_the_weekly_lock_is_held(web_cfg):
+    import fcntl
+
+    from cfbr.web.lines import refresh_lines
+
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    pl.read_parquet(d / "games.parquet").with_columns(cfbd_spread=pl.col("spread")).write_parquet(d / "games.parquet")
+    web_cfg.paths.raw_dir = web_cfg.paths.out_dir.parent / "raw"
+    web_cfg.paths.db_path = web_cfg.paths.out_dir.parent / "db" / "cfb.duckdb"
+    web_cfg.paths.db_path.parent.mkdir(parents=True)
+    snaps = web_cfg.paths.raw_dir / "odds" / str(SEASON) / "snapshots"
+    snaps.mkdir(parents=True)
+    (snaps / "20261014T210000Z.json").write_text("[]")
+    with open(web_cfg.paths.db_path.parent / ".weekly.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        before = (d / "games.parquet").read_bytes()
+        assert refresh_lines(web_cfg, SEASON) is None
+        assert (d / "games.parquet").read_bytes() == before
+
+
+def test_an_older_odds_snapshot_never_rolls_lines_back():
+    from cfbr.web.lines import newer_than
+
+    sat = datetime(2026, 10, 17, 23, tzinfo=UTC)
+    fresh = (sat, pl.DataFrame({"game_id": [1], "spread": [-3.0]}))
+    # Sunday's CFBD fetch succeeded but the Odds API fetch failed: Saturday's odds snapshot is older.
+    assert newer_than(fresh, "2026-10-18T14:00:00+00:00") is None
+    assert newer_than(fresh, "2026-10-17T14:00:00+00:00") is fresh  # older CFBD: odds apply
+    assert newer_than(fresh, None) is fresh and newer_than(None, "2026-10-18T14:00:00+00:00") is None
+
+
+def test_games_mark_lines_older_than_the_snapshot(web_cfg):
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    games = pl.read_parquet(d / "games.parquet")
+    games.with_columns(line_source=pl.lit("cfbd"), line_as_of=pl.lit("2026-10-11T20:00:11+00:00")).write_parquet(d / "games.parquet")
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-14T21:00:00+00:00",
+                                                    "cfbd_lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    html = " ".join(TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text.split())
+    assert "Lines marked * are older (Oct 11, 3:00 PM CT)" in html and 'title="Older line: as of' in html
+    # Snapshots seconds apart (the same run) aren't "older": no marker, no note.
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:55+00:00",
+                                                    "cfbd_lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    html = TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text
+    assert "Older line" not in html and "Lines marked *" not in html
+
+
+def test_unplayed_lines_say_when_they_were_fetched(web_cfg, tmp_path):
+    from cfbr.web.build import lines_as_of
+
+    raw = tmp_path / "raw"
+    assert lines_as_of(raw, 2026) is None
+    (raw / "lines" / "2026" / "snapshots").mkdir(parents=True)
+    for stem in ("20261011T162408Z", "20261011T200011Z"):
+        (raw / "lines" / "2026" / "snapshots" / f"{stem}.json").write_text("[]")
+    assert lines_as_of(raw, 2026) == "2026-10-11T20:00:11+00:00"  # the newest snapshot
+
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    meta = json.loads((d / "meta.json").read_text())
+    c = TestClient(create_app(web_cfg))
+    # Week 2 has unplayed games; no snapshot recorded -> no claim about freshness.
+    assert "lines-as-of" not in c.get("/games?season=2026&slot=r02").text
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:11+00:00"}))
+    c = TestClient(create_app(web_cfg))
+    html = c.get("/games?season=2026&slot=r02").text
+    assert "Vegas lines for games not yet played are as of Oct 11, 3:00 PM CT" in html
+    # A week that's all final doesn't need it.
+    assert "lines-as-of" not in c.get("/games?season=2026&slot=r01").text
+    # Nor does a finished season, even with leftover uncompleted rows (cancelled games).
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-11T20:00:11+00:00", "live": False}))
+    assert "lines-as-of" not in TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text
+
+
+def test_more_columns_note_lists_edge_cents_and_cover_when_shown(web_cfg):
+    from cfbr.bets.ledger import read_ledger
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    path = _write_ledger(web_cfg)
+    c = TestClient(create_app(web_cfg))
+    html = " ".join(c.get("/bets").text.split())
+    assert '"More columns" adds Edge now, Tier,' in html  # neither column in this ledger
+    read_ledger(path).with_columns(edge_cents=pl.lit(12.0), cover_prob=pl.lit(0.51)).write_csv(path)
+    html = " ".join(c.get("/bets").text.split())
+    assert '"More columns" adds Edge now, Edge ¢, Cover %, Tier,' in html
+
+
 def test_games_and_bets_label_their_line_sources(client, bets_client):
     games = client.get("/games?season=2026&slot=r01").text
-    assert "the latest line for games not yet played, the closing line once final" in games and ">Edge</th>" in games
+    assert "for games not yet played, the closing line once final" in games and ">Edge</th>" in games
     team = client.get("/team/2026/Texas%20A%26M").text
-    assert "the latest line for games not yet played, the closing line once final" in team
+    assert "for games not yet played, the closing line once final" in team
     bets = bets_client.get("/bets").text
     assert ">Bet (line at bet)</th>" in bets and "wins by" in bets
 
@@ -1529,6 +1699,19 @@ def test_single_book_bets_are_explained_only_when_present(web_cfg):
                      .otherwise(pl.col("n_providers")).cast(pl.Int32)).write_csv(path)
     html = " ".join(c.get("/bets").text.split())
     assert "2 bets were recorded when only one book's line was available (Books = 1)" in html
+
+
+def test_open_bets_hide_secondary_columns_by_default(bets_client):
+    html = bets_client.get("/bets").text
+    table = html[html.index('id="open-bets"'):]
+    table = table[:table.index("</table>")]
+    assert 'data-target="open-bets"' in html  # the "More columns" toggle
+    # Kept by default: what a bettor acts on.
+    for th in (">Game</th>", ">Bet (line at bet)</th>", ">Edge</th>", ">Best available</th>"):
+        assert th in table and f'extra">{th[1:]}' not in table, th
+    # Behind "More columns".
+    for th in ("Tier", "Risk / to win", "Books", "Edge now"):
+        assert f'extra">{th}</th>' in table, th
 
 
 def test_bets_lead_with_open_bets(bets_client):

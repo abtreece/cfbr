@@ -196,7 +196,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "show_cents": any(r.get("edge_cents") is not None for r in open_bets),
                     "show_cover": any(r.get("cover_prob") is not None for r in open_bets),
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
-                    "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs}
+                    "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs,
+                    "lines_as_of": s.meta.get("lines_as_of") if s is not None else None}
         # The owner's real bets: only for the owner (owner_viewer), never for other viewers,
         # premium or not, and never in /api/bets.
         ctx["real"] = (real_bets_ctx(store.real_bets(season), store.season(season))

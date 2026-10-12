@@ -37,6 +37,7 @@ from cfbr.web.odds import make_router as odds_router
 from cfbr.web.odds import prob
 from cfbr.web.roster import count_str, roster_card
 from cfbr.web.roster import make_router as roster_router
+from cfbr.web.lines import older_line
 from cfbr.web.store import Season, Store
 
 HERE = Path(__file__).parent
@@ -132,6 +133,20 @@ def poll_note(s: Season, week: int) -> list[str]:
         else:
             out.append(f"{label}: week {wk} poll (week {week + 1} not released yet)")
     return out
+
+
+def poll_line(notes: list[str]) -> str:
+    """One sentence from poll_note's entries: polls that say the same thing are named together
+    ("AP and Coaches: week 7 polls.") instead of "Polls: AP: week 7 poll · Coaches: week 7 poll."."""
+    groups: dict[str, list[str]] = {}
+    for n in notes:
+        label, _, what = n.partition(": ")
+        groups.setdefault(what, []).append(label)
+    parts = []
+    for what, labels in groups.items():
+        names = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+        parts.append(f"{names}: {what.replace(' poll', ' polls', 1) if len(labels) > 1 else what}")
+    return "; ".join(parts) + "." if parts else ""
 
 
 def sparkline(values: list[float | None], lo: float, hi: float, w: int = 72, h: int = 18) -> str:
@@ -437,7 +452,8 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     env.auto_reload = False
     app.state.templates = templates
     env.filters |= {"num": num, "signed": signed, "margin": margin, "pct": pct, "money": money, "kickoff": kickoff, "short_ts": short_ts, "slot_label": slot_label,
-                    "iso_ts": iso_ts,
+                    "iso_ts": iso_ts, "poll_line": poll_line,
+                    "older_line": older_line,
                     "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL, "prob": prob,

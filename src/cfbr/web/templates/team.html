@@ -4,7 +4,7 @@
 {% set col_defs = [
   (MODEL, (MODEL) ~ "'s expected margin for " ~ (team)),
   ("Win %", (team) ~ "'s win probability"),
-  ("Vegas", "Vegas line as an expected margin for " ~ (team) ~ " (−7 on the line shows as +7.0): the latest line for games not yet played, the closing line once final")] %}{% set col = dict(col_defs) %}
+  ("Vegas", "Vegas line as an expected margin for " ~ (team) ~ " (−7 on the line shows as +7.0): the latest line fetched (Games shows when it was fetched) for games not yet played, the closing line once final")] %}{% set col = dict(col_defs) %}
 {# Free viewers on a live season don't see the model's columns, so don't define them either. #}
 {% if locked %}{% set col_defs = col_defs|rejectattr("0", "in", [MODEL, "Win %"])|list %}{% endif %}
 {% block content %}
@@ -35,11 +35,11 @@
   {{ tile("AP poll", "#" ~ latest.ap_rank if latest.ap_rank is not none else "Unranked", others|join(" · ")) }}
   {% endif %}
 </div>
-{% if is_fbs and polls %}<p class="note poll-note">Polls: {{ polls|join(" · ") }}.</p>{% endif %}
+{% if is_fbs and polls %}<p class="note poll-note">{{ polls|poll_line }}</p>{% endif %}
 
 {% if explain %}
 <h2>Explain the rating</h2>
-<p class="note">Opponent-adjusted, against the FBS average; higher is better on both sides. <a href="/method#rating">More →</a></p>
+<p class="note">Opponent-adjusted, against the FBS average; higher is better on both sides. <a href="/method#rating">More</a></p>
 <div class="tiles explain">
   {% for e in explain %}
   {{ tile(e.label, (e.value|signed(3)) if e.kind == "ppa" else ((100 * e.value)|signed(1) ~ " pp"), e.sub) }}

@@ -21,7 +21,7 @@
 <h2 id="lines">Betting lines</h2>
 <p>Lines are never model inputs; they are only used to measure the model.</p>
 <ul>
-  <li><strong>Vegas</strong> is the median spread across sportsbooks, written as the favorite and its line (<em>Georgia −7</em>). For a game not yet played it is the latest line as of the last data update; once the game is final it is the closing line, which every accuracy number uses.</li>
+  <li><strong>Vegas</strong> is the median spread across sportsbooks, written as the favorite and its line (<em>Georgia −7</em>). For a game not yet played it is the latest line fetched, which can be a few days old (pages show when it was fetched); once the game is final it is the closing line, which every accuracy number uses.</li>
   <li><strong>{{ MODEL }}</strong> margins are written in words (<em>Georgia by 9.0</em>, or <em>wins by 9.0</em> from one team's side), so they never read as a line.</li>
   <li><strong>Edge</strong> is how many points the model's margin differs from the Vegas line, and toward which team. It is the only thing called an edge on this site.</li>
   <li><strong>ATS</strong> grades the model's side of the closing line; pushes and exact agreement are not graded.</li>

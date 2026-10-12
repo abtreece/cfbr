@@ -22,6 +22,7 @@ from cfbr.model.calibrate import STAGE2_TERMS
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 from cfbr.report.roster_web import write_roster_web
+from cfbr.web.lines import apply_lines, newer_than, odds_consensus
 
 ROSTER_FILES = ("roster_players", "roster_departures", "roster_summary")
 
@@ -162,6 +163,7 @@ def game_polls(polls: pl.DataFrame, season: int, games: pl.DataFrame) -> pl.Data
 
 def season_ratings(eng: Engine, season: int, now: datetime) -> pl.DataFrame:
     cal = eng.calibration(season)
+    live = not season_over(eng, season, now)
     fbs = eng.fbs(season)
     conf = eng.ds.team_status.filter(pl.col("season") == season).select("team", "conference")
     parts = []
@@ -198,12 +200,29 @@ def season_games(eng: Engine, season: int) -> pl.DataFrame:
     return g.join(game_polls(eng.ds.polls, season, g), on="game_id", how="left").sort("kickoff_ts", "game_id")
 
 
+def lines_as_of(raw_dir: Path, season: int) -> str | None:
+    """ISO time of the season's newest CFBD lines snapshot (data/raw/lines/{season}/snapshots/),
+    or None (finished seasons, or before any live fetch). Reads file names only."""
+    snaps = sorted((raw_dir / "lines" / str(season) / "snapshots").glob("*.json"))
+    if not snaps:
+        return None
+    try:
+        return datetime.strptime(snaps[-1].stem, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC).isoformat()
+    except ValueError:
+        return None
+
+
 def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None = None) -> Path:
     now = now or datetime.now(UTC)
     out = out_root / str(season)
     out.mkdir(parents=True, exist_ok=True)
     ratings = season_ratings(eng, season, now)
     games = season_games(eng, season)
+    # Display lines: CFBD's (kept as cfbd_spread), with the newest Odds API consensus on unplayed
+    # games, so a rebuild never rolls the site back to older lines (see cfbr.web.lines).
+    cfbd_as_of = lines_as_of(eng.cfg.paths.raw_dir, season)
+    fresh = newer_than(odds_consensus(eng.cfg.paths.raw_dir, season, games), cfbd_as_of)
+    games = apply_lines(games.rename({"spread": "cfbd_spread"}), fresh, cfbd_as_of)
     # Write to temp names then rename, so a running server never reads a half-written file.
     # meta.json goes last: its mtime is the server's reload signal, and the server treats a
     # parquet newer than meta.json as a rebuild in progress (see cfbr.web.store).
@@ -218,11 +237,19 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
     except Exception:
         log.exception("roster web data for %d failed; continuing without it", season)
     cal = eng.calibration(season)
+    live = not season_over(eng, season, now)
     meta = {
         "season": season,
         "built_at": now.isoformat(timespec="seconds"),
         "config": eng.cfg.source,
-        "live": not season_over(eng, season, now),
+        "live": live,
+        # When the lines behind "Vegas" for unplayed games were fetched: the newest Odds API
+        # snapshot when one supplied lines, else the newest CFBD lines snapshot. Per-game
+        # line_source/line_as_of say which each game shows. A rebuild from cache doesn't move it.
+        # Only for a live season: a finished season's leftover uncompleted rows (cancelled
+        # games) aren't "not yet played".
+        "lines_as_of": (fresh[0].isoformat() if fresh is not None else cfbd_as_of) if live else None,
+        "cfbd_lines_as_of": cfbd_as_of if live else None,
         # Points calibration, so a page can price a hypothetical matchup from two ratings
         # without the server fitting anything: margin = rating_h - rating_a + b_home (0 on a
         # neutral field); win probability = Phi(margin / sigma). With calibration v2 the

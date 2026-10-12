@@ -543,6 +543,18 @@ def odds_snapshot(
         send(cfg, "cfbr odds-snapshot failed", f"{type(e).__name__}: {e}"[:300])
         raise typer.Exit(code=1)
     typer.echo(f"{n} games within {window:g} h; wrote {path}")
+    # Show the new lines on the site too. Isolated: the snapshot above (the paper-bet close)
+    # is already saved, so a failure here only leaves the site's lines as they were.
+    from cfbr.web.lines import refresh_lines
+
+    try:
+        refreshed = refresh_lines(cfg, season)
+    except Exception as e:
+        log.exception("site lines refresh failed")
+        send(cfg, "cfbr odds-snapshot: site lines refresh failed", f"{type(e).__name__}: {e}"[:300])
+    else:
+        if refreshed is not None:
+            typer.echo(f"site lines refreshed: {refreshed} unplayed games on Odds API lines")
 
 
 @app.command()
