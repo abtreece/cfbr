@@ -13,6 +13,7 @@
   <li><strong>Explain the rating</strong> (team pages) shows the four play-efficiency terms behind it, each adjusted for opponents and shown as a deviation from the FBS average.</li>
   <li>FCS opponents are pooled {% if cfg.prep.fcs_pooling == "conference" %}by conference, one rated team per FCS conference{% else %}into a single rated team{% endif %}.</li>
 </ul>
+<p>Two building blocks come from others' public work. The college definition of a successful play (at least 50% of the yards to go on 1st down, 70% on 2nd, all of them on 3rd and 4th) is a Football Outsiders measure that Bill Connelly, who created SP+, popularized. The preseason prior uses returning production, an indicator Connelly also uses in SP+'s preseason projections; {{ MODEL }} uses CFBD's own offense-only version (the share of last season's offensive EPA and usage that returns), not Connelly's published numbers, alongside last season's rating, team talent and recruiting. {{ MODEL }} uses no SP+ ratings and is not fit to match them; it is fit and tuned only against game results and judged against closing lines.</p>
 
 <h2 id="point-in-time">Point in time</h2>
 <p>Every prediction for a game uses only games that kicked off before that week's first kickoff, so the numbers shown are the ones the model would have published at the time. Ratings "through week N" are fixed until the next week kicks off. Postseason weeks are 7-day windows from the first bowl game.</p>

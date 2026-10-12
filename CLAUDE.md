@@ -50,6 +50,7 @@ Production (cron, `cfbr-web`, the API key, the paper-bet ledger of record) is ja
 
 - **Point-in-time:** a prediction for a game in slot *w* uses only plays and games that kicked off before that slot's first kickoff. Cross-season models follow `schemes.training_seasons`. `tests/test_leakage.py` enforces this with a max-kickoff assertion and a canary future game. Any doubt about leakage is a reason to stop and ask.
 - **Betting lines are never model inputs.** They're used only for evaluation and the paper-bet ledger.
+- **Published ratings (SP+, FPI, etc.) are never used at all**: not as inputs, prior targets, calibration targets or tuning objectives, and never ingested. Borrowed public conventions (Football Outsiders' success rate, Connelly's garbage-time thresholds, returning production as a prior feature from CFBD data rather than Connelly's numbers) get credited (see DECISIONS.md "Independence from published ratings").
 - The closing spread is the median of `spread` across providers (home perspective; Vegas home margin = −spread).
 - The site's "after week N" ratings must exactly match `cfbr rank`'s `out/{season}/wNN/` output (tested).
 - The `lines` table holds the latest row per game-provider. Live line snapshots are kept separately under `data/raw/lines/{season}/snapshots/`.
