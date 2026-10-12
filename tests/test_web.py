@@ -1464,9 +1464,7 @@ def test_track_record_is_a_ratings_tab(client):
     assert f'<a href="/accuracy?season=2026">How accurate is {MODEL_NAME}?' in rankings
 
 
-def test_flagged_view_leads_with_the_biggest_edges_and_filters_fbs_conferences(web_cfg):
-    from cfbr.web.app import game_row
-
+def test_games_sort_and_filter_fbs_conferences(web_cfg):
     d = _write_season(web_dir(web_cfg), datetime.now(UTC))
     # Week 2's FCS opponent (Montana, from the FCS:Big Sky pool) plays in a real FCS league.
     games = pl.read_parquet(d / "games.parquet")
@@ -1482,11 +1480,33 @@ def test_flagged_view_leads_with_the_biggest_edges_and_filters_fbs_conferences(w
     conf = html[html.index('name="conf"'):html.index("</select>", html.index('name="conf"'))]
     assert "Big Sky" not in conf and "<option >SEC</option>" in conf
     assert "Big Sky" in pl.read_parquet(d / "games.parquet")["away_conference"].to_list()  # the check is live
-    # Flagged rows sort by edge, largest first (game_row's edge_pts).
-    rows = [game_row(r, None, True, 3.0) for r in (
-        {"home_team": "H", "away_team": "A", "pred_margin": 10.0, "win_prob": 0.7, "spread": -6.0, "margin": None, "completed": False},
-        {"home_team": "H", "away_team": "A", "pred_margin": 12.0, "win_prob": 0.8, "spread": -3.0, "margin": None, "completed": False})]
-    assert sorted(r["edge_pts"] for r in rows) == [4.0, 9.0]
+
+
+def test_flagged_views_render_biggest_edge_first(web_cfg):
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    # Two more week-2 games, both flagged, kicking off EARLIER than the existing ones and in
+    # ascending-edge order, so kickoff order and edge order disagree: only the route's sort
+    # can put the bigger edge first.
+    games = pl.read_parquet(d / "games.parquet")
+    base = games.filter(pl.col("game_id") == 3).to_dicts()[0]
+    early = base["kickoff_ts"] - timedelta(days=1)
+    extra = [
+        # Edge 4: model Small U by 10, line −6 (both favor the home team: an "edge" flag).
+        base | {"game_id": 10, "home_team": "Small U", "away_team": "Tiny Tech", "home": "Small U", "away": "Tiny Tech",
+                "kickoff_ts": early, "as_of": early, "pred_margin": 10.0, "win_prob": 0.75, "spread": -6.0},
+        # Edge 9: model Big State by 6, line Big State +3 (model picks the underdog: an "upset" flag).
+        base | {"game_id": 11, "home_team": "Big State", "away_team": "Giant A&M", "home": "Big State", "away": "Giant A&M",
+                "kickoff_ts": early + timedelta(hours=1), "as_of": early, "pred_margin": 6.0, "win_prob": 0.65, "spread": 3.0},
+    ]
+    pl.concat([games, pl.DataFrame(extra, schema=games.schema)]).write_parquet(d / "games.parquet")
+    (d / "meta.json").write_text((d / "meta.json").read_text())  # meta last, as the build does
+    c = TestClient(create_app(web_cfg))
+    every = c.get("/games?season=2026&slot=r02").text
+    assert every.index("Small U") < every.index("Big State")  # the plain view stays in kickoff order
+    flagged = c.get("/games?season=2026&slot=r02&show=flagged").text
+    assert flagged.index("Big State") < flagged.index("Small U")  # edge 9 before edge 4
+    upsets = c.get("/games?season=2026&slot=r02&show=upsets").text
+    assert "Big State" in upsets and "Small U" not in upsets
 
 
 def test_books_tooltip_reads_from_the_bet_team_s_side():
