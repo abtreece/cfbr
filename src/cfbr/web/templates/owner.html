@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Owner · CFB Ratings{% endblock %}
+{% block content %}
+<h1>Owner</h1>
+<p class="lede">Enter the owner key to see your real bets on this browser.</p>
+{% if failed %}<p class="callout">That key didn't match.</p>{% endif %}
+<form class="filters" method="post" action="/owner" autocomplete="off">
+  <label>Key
+    <input type="password" name="key" required autofocus>
+  </label>
+  <button type="submit">Sign in</button>
+</form>
+{% endblock %}

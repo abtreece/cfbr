@@ -6,11 +6,12 @@ backtest results under ``results/``, and ``out/{season}/accuracy.csv``.
 
 from __future__ import annotations
 
+import hmac
 import math
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -24,11 +25,12 @@ from fastapi.templating import Jinja2Templates
 from cfbr.backtest.metrics import summarize
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
-from cfbr.web.access import bets_access, premium_viewer
+from cfbr.web.access import OWNER_COOKIE, bets_access, owner_key, owner_token, premium_viewer
 from cfbr.web.bets import NO_STORE, price_str, spread_str
 
 # Finished seasons never change (a rebuild reproduces them), so shared caches may keep them an hour.
 PUBLIC_HOUR = {"Cache-Control": "public, max-age=3600"}
+OWNER_COOKIE_DAYS = 180
 from cfbr.web.bets import make_router as bets_router
 from cfbr.web.build import FINAL, STALE_GAME, web_dir
 from cfbr.web.odds import make_router as odds_router
@@ -668,6 +670,43 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         # Definitions and conventions only; no data, so the same for every viewer.
         resp = render(request, "method.html", cfg=cfg)
         resp.headers.update(PUBLIC_HOUR)
+        return resp
+
+    @app.get("/owner", response_class=HTMLResponse, include_in_schema=False)
+    def owner_form(request: Request):
+        # The key goes in a POST body, never the URL: uvicorn logs request lines (with query
+        # strings) to data/web.log, and browsers keep URLs in history.
+        if not owner_key():
+            raise HTTPException(404, "Not found.")
+        resp = render(request, "owner.html", failed=False)
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @app.post("/owner", response_class=HTMLResponse, include_in_schema=False)
+    async def owner_login(request: Request):
+        # The cookie holds an HMAC of the key, not the key. The body is parsed with the standard
+        # library (one urlencoded field), so no form-parsing dependency is needed.
+        real = owner_key()
+        if not real:
+            raise HTTPException(404, "Not found.")
+        body = (await request.body())[:4096].decode("utf-8", "replace")
+        key = (parse_qs(body).get("key") or [""])[0]
+        if not hmac.compare_digest(key.encode(), real.encode()):
+            resp = render(request, "owner.html", failed=True)
+            resp.status_code = 403
+            resp.headers.update(NO_STORE)
+            return resp
+        resp = RedirectResponse("/bets#mine", status_code=303)
+        resp.set_cookie(OWNER_COOKIE, owner_token(real), max_age=OWNER_COOKIE_DAYS * 86400,
+                        httponly=True, samesite="lax", path="/")
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @app.get("/owner/logout", include_in_schema=False)
+    def owner_logout():
+        resp = RedirectResponse("/bets", status_code=303)
+        resp.delete_cookie(OWNER_COOKIE, path="/")
+        resp.headers.update(NO_STORE)
         return resp
 
     # -- JSON API ---------------------------------------------------------------
