@@ -1897,12 +1897,21 @@ def test_shortlist_follows_the_viewers_books(shortlist_client):
     r = c.post("/bets/shortlist/books", content="books=BetMGM&books=Bovada",
                headers={"content-type": "application/x-www-form-urlencoded"})
     assert r.status_code == 303 and r.headers["location"] == "/bets/shortlist"
+    # The season being viewed survives a save; raw input never reaches the Location header.
+    r2 = c.post("/bets/shortlist/books", content="books=BetMGM&season=2026",
+                headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r2.headers["location"] == "/bets/shortlist?season=2026"
+    r3 = c.post("/bets/shortlist/books", content="books=BetMGM&season=2026%0d%0aX:1",
+                headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r3.headers["location"] == "/bets/shortlist"
+    assert 'name="season" value="2026"' in c.get("/bets/shortlist?season=2026").text
     assert "cfbr_books=betmgm" in r.headers["set-cookie"] and "HttpOnly" in r.headers["set-cookie"]
     body = c.get("/api/bets/shortlist").json()
     assert body["books"] == ["BetMGM"] and [p["game_id"] for p in body["picks"]] == [1, 2]
     assert [p["bet_at_book"] for p in body["picks"]] == ["BetMGM", "BetMGM"]
-    # An explicit ?books= wins over the cookie; junk falls back to the reference set.
+    # An explicit ?books= wins over the cookie, even when empty (the reference set); junk falls back to the reference set.
     assert c.get("/api/bets/shortlist?books=FanDuel").json()["books"] == ["FanDuel"]
+    assert c.get("/api/bets/shortlist?books=").json()["books"] == ["DraftKings", "FanDuel", "bet365"]
     c.cookies.set("cfbr_books", "nope.bovada")
     assert c.get("/api/bets/shortlist").json()["books"] == ["DraftKings", "FanDuel", "bet365"]
     # Submitting no books clears the choice.
@@ -1968,3 +1977,25 @@ def test_shortlist_survives_a_malformed_pricing_table(web_cfg, content):
     (web_cfg.paths.out_dir / "pricing_table.json").write_text(content)
     c = TestClient(create_app(web_cfg), follow_redirects=False)
     assert c.get("/bets/shortlist").status_code == 200
+
+
+def test_shortlist_ignores_a_pricing_table_that_includes_the_season(shortlist_client, web_cfg, monkeypatch):
+    from cfbr.bets.pricing import PricingTable
+    from cfbr.web import bets as web_bets
+
+    pmf = {m: {3: 0.2, 7: 0.1, -3: 0.1, 10: 0.6} for m in range(36)}
+    seen = []
+    real = web_bets.shortlist
+    monkeypatch.setattr(web_bets, "shortlist", lambda ledger, books, cfg, table=None: seen.append(table) or real(ledger, books, cfg, table))
+    for seasons, expect_table in (([2025, SEASON], False), ([2024, 2025], True), ([], True)):
+        PricingTable(seasons=seasons, n_games=1000, window=2.0, min_games=300, pmf=pmf).save(
+            web_cfg.paths.out_dir / "pricing_table.json")
+        seen.clear()
+        r = shortlist_client.get("/api/bets/shortlist?books=DraftKings,BetMGM")
+        assert r.status_code == 200 and shortlist_client.get("/bets/shortlist").status_code == 200
+        assert [t is not None for t in seen] == [expect_table, expect_table], seasons
+    # Without a usable table the book is picked by points: BetMGM -3 beats DraftKings -3.5 for the home side.
+    PricingTable(seasons=[2025, SEASON], n_games=1000, window=2.0, min_games=300, pmf=pmf).save(
+        web_cfg.paths.out_dir / "pricing_table.json")
+    picks = shortlist_client.get("/api/bets/shortlist?books=DraftKings,BetMGM").json()["picks"]
+    assert [p["bet_at_book"] for p in picks][0] == "BetMGM"

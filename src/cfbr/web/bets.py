@@ -239,6 +239,12 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         open_ = [r | {"moved_past": r["line_now"] is not None and r["line_now"] < r["team_line"]} for r in open_]
         return open_, [r for r in reversed(rows) if r["status"] != "open"]
 
+    def season_pricing_table(season: int):
+        """The pricing table only if it was built from seasons before ``season``; a later table
+        would re-rank a past season's picks with its own results."""
+        table = store.pricing_table()
+        return table if table is not None and (not table.seasons or max(table.seasons) < season) else None
+
     @router.get("/bets/shortlist", response_class=HTMLResponse, include_in_schema=False)
     def shortlist_page(request: Request, season: int | None = None):
         season, ledger = pick(season)
@@ -248,7 +254,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                "has_retro": season in store.retro_seasons()}
         if ledger is not None:
             s = store.season(season)
-            sl = shortlist(ledger, books, cfg.bets, store.pricing_table())
+            sl = shortlist(ledger, books, cfg.bets, season_pricing_table(season))
             open_picks, settled = shortlist_rows(sl, s)
             fbs = set() if s is None else set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
             ctx |= {"open_picks": open_picks, "settled": settled, "summary": summarize(sl, cfg.bets),
@@ -262,8 +268,13 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
     async def shortlist_books(request: Request):
         # Standard-library form parsing (repeated "books" fields), as /owner does.
         body = (await request.body())[:4096].decode("utf-8", "replace")
-        names = parse_qs(body).get("books", [])
-        resp = RedirectResponse("/bets/shortlist", status_code=303)
+        form = parse_qs(body)
+        names = form.get("books", [])
+        try:  # only a parsed int goes into the Location header, never the raw input
+            where = f"/bets/shortlist?season={int(form['season'][0])}"
+        except (KeyError, IndexError, ValueError):
+            where = "/bets/shortlist"
+        resp = RedirectResponse(where, status_code=303)
         if names:
             resp.set_cookie(BOOKS_COOKIE, book_cookie_value(choose_books(names, cfg.bets)),
                             max_age=BOOKS_COOKIE_DAYS * 86400, httponly=True, samesite="lax", path="/")
@@ -279,8 +290,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         season, ledger = pick(season)
         if ledger is None:
             raise HTTPException(404, "No paper bets recorded yet.")
-        chosen = choose_books(books.split(","), cfg.bets) if books else viewer_books(request, cfg.bets)
-        sl = shortlist(ledger, chosen, cfg.bets, store.pricing_table())
+        chosen = choose_books(books.split(","), cfg.bets) if books is not None else viewer_books(request, cfg.bets)
+        sl = shortlist(ledger, chosen, cfg.bets, season_pricing_table(season))
         response.headers.update(NO_STORE)
         return clean({"season": season, "books": sorted(chosen),
                       "summary": clean_summary(summarize(sl, cfg.bets)), "picks": sl.to_dicts()})

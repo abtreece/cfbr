@@ -18,6 +18,7 @@
   where one of your books had the number. Not betting advice. Check the live line before you bet.</p>
 
 <form class="filters" method="post" action="/bets/shortlist/books">
+  {% if season %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
   <fieldset><legend>Your books{% if reference %} <span class="muted">(default)</span>{% endif %}</legend>
   {% for b in rules.selectable_books %}
     <label><input type="checkbox" name="books" value="{{ b }}"{% if b in books %} checked{% endif %}> {{ b }}</label>
@@ -66,7 +67,7 @@
       FBS vs FBS with a line of 21 or less, not week 1; recorded at the week's first look; and one of your books offered the side at the paper line or better when it was recorded.</li>
     <li>"Or better at" is the best number among your books at that moment. Lines are captured on Sundays, so check the live number: picks whose consensus has moved against you since capture are flagged, and you should check your book's live number before betting.</li>
     <li>Picks are in kickoff order. Bigger edges haven't covered more often in the holdout seasons, so they aren't ranked by edge.</li>
-    <li>With no books chosen you see the default set (DraftKings, FanDuel, bet365), the list tracked below.</li>
+    <li>With no books chosen you see the default set ({{ rules.pricing_books|join(', ') or 'any non-offshore book' }}), the list tracked below.</li>
   </ul>
 </details>
 
