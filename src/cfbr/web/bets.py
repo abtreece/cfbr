@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cfbr.bets.experiments import tracked_tests
-from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly, what_if
+from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, week_label, weekly, what_if
 from cfbr.bets.shortlist import BOOK_RE, shortlist
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
@@ -259,6 +259,9 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             fbs = set() if s is None else set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
             ctx |= {"open_picks": open_picks, "settled": settled, "summary": summarize(sl, cfg.bets),
                     "n_paper": ledger.height, "fbs_teams": fbs,
+                    # The open picks' week(s), in kickoff order ("Week 7", "Postseason").
+                    "open_weeks": list(dict.fromkeys(week_label(r["week"], r["season_type"]) for r in open_picks)),
+                    "lines_as_of": s.meta.get("lines_as_of") if s is not None else None,
                     "test": next(t for t in tracked_tests(ledger, cfg.bets) if t["key"] == "shortlist")}
         resp = render(request, "bets_shortlist.html", **ctx)
         resp.headers.update(NO_STORE)

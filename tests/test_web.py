@@ -2025,3 +2025,20 @@ def test_shortlist_book_picker_names_the_empty_reference_set(shortlist_client, w
     c.cookies.set("cfbr_books", "betmgm")
     html = " ".join(c.get("/bets/shortlist").text.split())
     assert "Use default (any non-offshore book)" in html
+
+
+def test_shortlist_names_the_open_week_and_how_old_line_now_is(shortlist_client, web_cfg):
+    from cfbr.web.app import iso_ts
+
+    html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
+    assert "<h2>Week 7 picks</h2>" in html and "<h2>Open picks</h2>" not in html
+    assert "<strong>Line now</strong> is the consensus on Games." in html   # no lines_as_of in meta yet
+    d = web_dir(web_cfg) / str(SEASON)
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": "2026-10-14T21:00:00+00:00"}))
+    html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
+    assert f"is the consensus on Games, as of {iso_ts('2026-10-14T21:00:00+00:00')}." in html
+    # No open picks at the viewer's books: the heading falls back and the note goes with the table.
+    shortlist_client.cookies.set("cfbr_books", "betrivers")
+    html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
+    assert "<h2>Open picks</h2>" in html and "consensus on Games" not in html

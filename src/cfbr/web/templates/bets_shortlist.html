@@ -49,7 +49,7 @@
   {{ tile("On the list", (open_picks|length + settled|length) ~ " of " ~ n_paper, "paper bets this season") }}
 </div>
 
-<h2>Open picks</h2>
+<h2>{{ open_weeks|join(" and ") ~ " picks" if open_weeks else "Open picks" }}</h2>
 {% if open_picks %}
 <div class="table-wrap">
 <table class="data">
@@ -68,6 +68,7 @@
   </tbody>
 </table>
 </div>
+<p class="note"><strong>Paper line</strong> is the consensus when the bet was recorded; <strong>Line now</strong> is the consensus on Games{% if lines_as_of %}, as of {{ lines_as_of|iso_ts }}{% endif %}. Neither is your book's live number.</p>
 {% else %}
 <p class="muted">No open picks{% if not reference %} at your books{% endif %}. A pick needs a competitive FBS game found at the week's first look, with one of your books at the number.</p>
 {% endif %}
