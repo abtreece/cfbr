@@ -55,24 +55,27 @@ def _game(gid, slot, home, away, kickoff, completed, hp=None, ap=None, pred=3.0,
     }
 
 
-def _games(now: datetime) -> pl.DataFrame:
-    return pl.DataFrame([
+def _games(now: datetime, spreads: dict | None = None) -> pl.DataFrame:
+    df = pl.DataFrame([
         _game(1, "r01", "Texas A&M", "<b>Evil</b>", T0, True, 31, 10, pred=10.0, spread=-7.0),
         _game(2, "r01", "Hawai'i", "Ohio State", T0, True, 17, 24, pred=-4.0, spread=None),
         _game(3, "r02", "Ohio State", "Texas A&M", now + timedelta(days=2), False, pred=0.01, spread=-3.0),
         _game(4, "r02", "Hawai'i", "FCS:Big Sky", now + timedelta(days=2), False, pred=30.0, spread=float("nan")),
     ], schema_overrides={"home_points": pl.Int64, "away_points": pl.Int64, "margin": pl.Float64,
                          "spread": pl.Float64})
+    if spreads:
+        df = df.with_columns(spread=pl.col("game_id").replace_strict(spreads, default=None).fill_null(pl.col("spread")))
+    return df
 
 
 AP = {"Texas A&M": 3, "Ohio State": 11}
 
 
-def _write_season(root, now, live=True, polls=False):
+def _write_season(root, now, live=True, polls=False, spreads=None):
     """Synthetic season; ``polls=False`` mimics web data built before poll columns existed."""
     d = root / str(SEASON)
     d.mkdir(parents=True, exist_ok=True)
-    ratings, games = _ratings(), _games(now)
+    ratings, games = _ratings(), _games(now, spreads)
     meta = {"season": SEASON, "built_at": now.isoformat(), "config": "test", "live": live,
             "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}}
     if polls:
@@ -1736,3 +1739,49 @@ def test_shortlist_is_gated_and_linked(web_cfg):
     assert c.get("/bets/shortlist").status_code == 402
     assert c.get("/api/bets/shortlist").status_code == 402
     assert c.post("/bets/shortlist/books", content="books=FanDuel").status_code == 402
+
+
+def _shortlist_html(web_cfg, spreads):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True, spreads=spreads)
+    _write_shortlist_ledger(web_cfg)
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    c.cookies.set("cfbr_books", "betmgm")
+    return " ".join(c.get("/bets/shortlist").text.split())
+
+
+def test_shortlist_flags_only_a_consensus_that_moved_against_the_bettor(web_cfg):
+    # Game 1 is a home bet (paper line -3.5), game 2 an away bet (home line 4.0, so -4.0 for the bettor).
+    # BetMGM beats the consensus on both, so the unmoved lines must not be flagged.
+    html = _shortlist_html(web_cfg, {1: -3.5, 2: 4.0})
+    assert "Texas A&amp;M" in html and "or better at BetMGM" in html
+    assert "Consensus moved" not in html
+
+    html = _shortlist_html(web_cfg, {1: -5.0, 2: 4.0})
+    assert "Consensus moved −3.5 → −5 since capture: check BetMGM before betting" in html
+    assert html.count("Consensus moved") == 1
+
+    html = _shortlist_html(web_cfg, {1: -3.5, 2: 5.0})
+    assert "Consensus moved −4 → −5 since capture: check BetMGM before betting" in html
+    assert html.count("Consensus moved") == 1
+
+    # A line that moved in the bettor's favor is not flagged.
+    assert "Consensus moved" not in _shortlist_html(web_cfg, {1: -2.0, 2: 3.0})
+
+
+def test_shortlist_with_no_picks_at_the_viewers_books(shortlist_client):
+    shortlist_client.cookies.set("cfbr_books", "betrivers")
+    r = shortlist_client.get("/bets/shortlist")
+    assert r.status_code == 200
+    assert "No open picks at your books" in " ".join(r.text.split())
+    body = shortlist_client.get("/api/bets/shortlist?books=BetRivers").json()
+    assert body["picks"] == []
+    assert body["summary"]["settled"] == 0 and body["summary"]["won"] == 0
+
+
+@pytest.mark.parametrize("content", ["[]", '{"seasons": 1}', "{not json"])
+def test_shortlist_survives_a_malformed_pricing_table(web_cfg, content):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_shortlist_ledger(web_cfg)
+    (web_cfg.paths.out_dir / "pricing_table.json").write_text(content)
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    assert c.get("/bets/shortlist").status_code == 200

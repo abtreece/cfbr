@@ -231,11 +231,11 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
     # -- real-money shortlist (DECISIONS "Real-money shortlist"): same gate, read-only ------------
 
     def shortlist_rows(sl: pl.DataFrame, s) -> tuple[list[dict], list[dict]]:
-        """Open picks (with the current line, and whether it moved past the viewer's number) and
-        settled picks, newest first."""
+        """Open picks (with the current line, and whether the consensus has moved against the bettor
+        since capture) and settled picks, newest first."""
         rows = bet_rows(sl, cfg)
         open_ = with_line_now([r for r in rows if r["status"] == "open"], s, cfg.bets.threshold)
-        open_ = [r | {"moved_past": r["line_now"] is not None and r["line_now"] < r["bet_at"]} for r in open_]
+        open_ = [r | {"moved_past": r["line_now"] is not None and r["line_now"] < r["team_line"]} for r in open_]
         return open_, [r for r in reversed(rows) if r["status"] != "open"]
 
     @router.get("/bets/shortlist", response_class=HTMLResponse, include_in_schema=False)

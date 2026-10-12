@@ -40,16 +40,16 @@
 {% if open_picks %}
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Line now</th><th class="opt">Recorded at</th></tr></thead>
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Line now</th><th class="opt">Paper line</th></tr></thead>
   <tbody>
   {% for b in open_picks %}
     <tr>
       <td class="opt">{{ b.kickoff|kickoff }}</td>
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
       <td class="strong wrap">{{ b.team }} {{ b.bet_at|spread }} or better at {{ b.bet_at_book }}{% if b.bet_at_odds is not none %} ({{ b.bet_at_odds|price }}){% endif %}
-        {% if b.moved_past %}<br><span class="muted">Moved past your number ({{ b.line_now|spread }} now): pass</span>{% endif %}</td>
+        {% if b.moved_past %}<br><span class="muted">Consensus moved {{ b.team_line|spread }} → {{ b.line_now|spread }} since capture: check {{ b.bet_at_book }} before betting</span>{% endif %}</td>
       <td class="num opt">{{ b.line_now|spread }}</td>
-      <td class="opt">{{ b.team_line|spread }} consensus</td>
+      <td class="opt">{{ b.team_line|spread }}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -64,7 +64,7 @@
   <ul>
     <li>Every pick is a <a href="/bets{{ q }}">paper bet</a> that also passes three rules fixed before any of them settled:
       FBS vs FBS with a line of 21 or less, not week 1; recorded at the week's first look; and one of your books offered the side at the paper line or better when it was recorded.</li>
-    <li>"Or better at" is the best number among your books at that moment. Lines are captured on Sundays, so check the live number: if it has moved past yours, pass.</li>
+    <li>"Or better at" is the best number among your books at that moment. Lines are captured on Sundays, so check the live number: picks whose consensus has moved against you since capture are flagged, and you should check your book's live number before betting.</li>
     <li>Picks are in kickoff order. Bigger edges haven't covered more often in the holdout seasons, so they aren't ranked by edge.</li>
     <li>With no books chosen you see the default set (DraftKings, FanDuel, bet365), the list tracked below.</li>
   </ul>
@@ -93,7 +93,7 @@
 {% if settled %}
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th>Game</th><th>Bet</th><th class="num">Result</th><th class="num opt">CLV</th></tr></thead>
+  <thead><tr><th>Game</th><th>Bet</th><th class="num">Result*</th><th class="num opt">CLV</th></tr></thead>
   <tbody>
   {% for b in settled %}
     <tr><td class="wrap">{{ b.away_team }} @ {{ b.home_team }}</td><td class="wrap">{{ b.team }} {{ b.bet_at|spread }} at {{ b.bet_at_book }}</td>
@@ -102,6 +102,7 @@
   </tbody>
 </table>
 </div>
+<p class="muted">*Results and CLV are graded at the paper line, as for every paper bet, not at the number shown.</p>
 {% else %}<p class="muted">None settled yet.</p>{% endif %}
 {% endif %}
 {% endblock %}
