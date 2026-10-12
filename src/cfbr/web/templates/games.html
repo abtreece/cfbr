@@ -54,7 +54,7 @@
       {% if not locked %}<td class="strong wrap">{{ g.model_pick }}</td>
       <td class="num opt">{{ g.fav_prob|pct(0) }}</td>{% endif %}
       <td class="wrap">{{ g.vegas_pick or "—" }}</td>
-      {% if not locked %}<td class="wrap">{{ g.edge or "—" }}{% if g.flag == "upset" %} <span class="badge">upset pick</span>{% endif %}</td>{% endif %}
+      {% if not locked %}<td class="wrap">{{ g.edge or "—" }}{% if g.flag == "upset" %} <span class="badge">upset pick</span>{% elif g.flag == "edge" %} <span class="badge">{{ threshold|num(0) }}+ off line</span>{% endif %}</td>{% endif %}
       {% if any_final %}
       <td>{% if g.completed and g.home_points is not none %}{{ g.away_points }}–{{ g.home_points }}{% else %}<span class="muted">{{ g.status if g.status != "upcoming" else "—" }}</span>{% endif %}</td>
       {% if not locked %}<td class="num opt">{{ g.model_err|num }}</td>{% endif %}

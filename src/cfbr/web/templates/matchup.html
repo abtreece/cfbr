@@ -11,6 +11,10 @@
       {% for w in s.weeks|reverse %}<option value="{{ w }}" {% if w == week %}selected{% endif %}>{{ s.label(w) }}</option>{% endfor %}
     </select>
   </label>
+  {# The current picks ride along when the season or week changes (kept in step by sync() below). #}
+  {% if home %}<input type="hidden" name="home" id="h2h-q-home" value="{{ home }}">{% endif %}
+  {% if away %}<input type="hidden" name="away" id="h2h-q-away" value="{{ away }}">{% endif %}
+  <input type="hidden" name="neutral" id="h2h-q-neutral" value="1"{% if not neutral %} disabled{% endif %}>
   {% endif %}
   <noscript><button type="submit">Show</button></noscript>
 </form>
@@ -84,6 +88,11 @@
     q.set("home", home.value); q.set("away", away.value);
     if (neutral.checked) q.set("neutral", "1"); else q.delete("neutral");
     history.replaceState(null, "", `${location.pathname}?${q}`);
+    const qh = document.getElementById("h2h-q-home"), qa = document.getElementById("h2h-q-away"),
+          qn = document.getElementById("h2h-q-neutral");
+    if (qh) qh.value = home.value;
+    if (qa) qa.value = away.value;
+    if (qn) qn.disabled = !neutral.checked;
   }
   [home, away, neutral].forEach((el) => el.addEventListener("change", () => { update(); sync(); }));
   update();

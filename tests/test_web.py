@@ -1272,6 +1272,7 @@ def test_flagged_games_are_highlighted_and_filterable(client):
     html = " ".join(client.get("/games?season=2026&slot=r01").text.split())
     # Game 1: model Texas A&M by 10, line Texas A&M -7: 3-point edge -> flagged at the bet threshold.
     assert 'class="flagged"' in html and "Upset alerts" not in html
+    assert '<span class="badge">3+ off line</span>' in html  # a text marker, not just the row tint
     assert 'show=flagged" title=' in html and "Flagged <span class=\"muted\">1</span>" in html
     only = " ".join(client.get("/games?season=2026&slot=r01&show=flagged").text.split())
     assert only.count('class="flagged"') == only.count("<tr class") == 1
@@ -1307,6 +1308,11 @@ def test_matchup_page(web_cfg):
     html = c.get("/matchup?season=2026&home=Ohio%20State&away=Texas%20A%26M&neutral=1").text
     assert '<option value="Ohio State" selected>' in html and '<option value="Texas A&amp;M" selected>' in html
     assert 'id="h2h-neutral" checked' in html
+    # The season/week form carries the picks, so changing the week keeps the matchup.
+    form = html[html.index('<form class="filters"'):html.index("</form>")]
+    assert 'name="home" id="h2h-q-home" value="Ohio State"' in form
+    assert 'name="away" id="h2h-q-away" value="Texas A&amp;M"' in form
+    assert 'name="neutral" id="h2h-q-neutral" value="1">' in form  # enabled, so it submits
     html = c.get("/matchup?season=2026&home=Nobody&away=Nobody").text
     assert html.count(" selected>") >= 2  # still two different teams picked
     # Matchup lives under Games in the nav, as the second tab.
