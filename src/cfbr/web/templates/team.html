@@ -57,7 +57,7 @@
   <summary>Week-by-week table</summary>
   <div class="table-wrap">
   <table class="data">
-    <thead><tr><th>After</th><th class="num">Rk</th><th class="num">±</th><th class="num">Rating</th><th class="num">Off</th>
+    <thead><tr><th>Through</th><th class="num">Rk</th><th class="num">±</th><th class="num">Rating</th><th class="num">Off</th>
       <th class="num">Def</th><th class="num">Δ Rating</th><th class="num">Record</th><th class="num">Prior</th>
       <th class="num">AP</th><th class="num">Coaches</th>{% if show_cfp %}<th class="num">CFP</th>{% endif %}</tr></thead>
     <tbody>
@@ -89,7 +89,7 @@
 <table class="data">
   <thead>
     <tr><th>Date</th><th>Wk</th><th>Opponent</th><th>Result</th>
-      {% if not locked %}<th class="num">Model</th><th class="num">Win %</th>{% endif %}<th class="num">Vegas</th><th class="num">Actual</th>
+      {% if not locked %}<th class="num" title="Model's expected margin for {{ team }}">Model</th><th class="num" title="{{ team }}'s win probability">Win %</th>{% endif %}<th class="num" title="Vegas line as an expected margin for {{ team }} (−7 on the line shows as +7.0): the latest line for games not yet played, the closing line once final">Vegas</th><th class="num">Actual</th>
       {% if not locked %}<th class="num">Model err</th>{% endif %}<th class="num">Vegas err</th></tr>
   </thead>
   <tbody>

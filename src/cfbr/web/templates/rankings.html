@@ -55,7 +55,7 @@
       <th data-sort="num" class="num opt" title="Defense component, points (higher is better)">Def</th>
       <th data-sort="num" class="num opt" title="Rating change since the previous table">Δ Rating</th>
       <th data-sort="num" data-first="asc" class="num opt" title="AP Top 25 rank">AP</th>
-      {% if show_ap %}<th data-sort="num" class="num opt" title="Model rank minus AP rank: positive means the poll has the team higher than the model">vs AP</th>{% endif %}
+      {% if show_ap %}<th data-sort="num" class="num opt" title="Places the model ranks the team above (▲) or below (▼) the AP poll">vs AP</th>{% endif %}
       <th data-sort="num" data-first="asc" class="num opt" title="Coaches Poll rank">Coaches</th>
       {% if show_cfp %}<th data-sort="num" data-first="asc" class="num opt" title="College Football Playoff committee rank">CFP</th>{% endif %}
       <th data-sort="num" class="num opt" title="How much of the rating still comes from the preseason prior">Prior</th>
@@ -75,7 +75,7 @@
       <td class="num opt" data-v="{{ r.defense }}">{{ r.defense|signed }}</td>
       <td class="num opt" data-v="{{ r.rating_change if r.rating_change is not none else 0 }}">{{ delta(r.rating_change) }}</td>
       {{ poll_cell(r.ap_rank, "opt") }}
-      {% if show_ap %}<td class="num opt" data-v="{{ r.vs_ap if r.vs_ap is not none else 0 }}">{{ delta(r.vs_ap, 0, good_up=False) if r.vs_ap is not none else '<span class="muted">—</span>'|safe }}</td>{% endif %}
+      {% if show_ap %}<td class="num opt" data-v="{{ -r.vs_ap if r.vs_ap is not none else 0 }}">{{ delta(-r.vs_ap, 0) if r.vs_ap is not none else '<span class="muted">—</span>'|safe }}</td>{% endif %}
       {{ poll_cell(r.coaches_rank, "opt") }}
       {% if show_cfp %}{{ poll_cell(r.cfp_rank, "opt") }}{% endif %}
       <td class="num opt" data-v="{{ r.prior_share }}">{{ r.prior_share|pct(0) }}</td>

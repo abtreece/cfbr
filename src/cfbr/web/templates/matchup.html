@@ -5,7 +5,7 @@
 <form class="filters" method="get" action="/matchup">
   {{ season_select(seasons, season) }}
   {% if not locked %}
-  <label>Ratings through
+  <label>Through
     <select name="week" data-autosubmit>
       {% for w in s.weeks|reverse %}<option value="{{ w }}" {% if w == week %}selected{% endif %}>{{ s.label(w) }}</option>{% endfor %}
     </select>
@@ -20,7 +20,8 @@
 {% if locked %}
 {{ premium_notice(season, "ratings") }}
 {% elif not cal %}
-<p class="callout">This season's data was built before the calibration was exported; rebuild it (<code>cfbr web build --seasons {{ season }}</code>) to enable the tool.</p>
+{# Data built before the calibration was exported; `cfbr web build --seasons <year>` enables it. #}
+<p class="callout">The matchup tool isn't available for {{ season }} yet. <a href="/rankings?season={{ season }}">See the {{ season }} ratings →</a></p>
 {% else %}
 <div class="h2h">
   <div class="h2h-side">
@@ -39,7 +40,7 @@
   <div class="tile"><div class="tile-label">Expected margin</div><div class="tile-value" id="h2h-margin">—</div><div class="tile-sub" id="h2h-pick"></div></div>
   <div class="tile"><div class="tile-label">Win probability</div><div class="tile-value" id="h2h-prob">—</div><div class="tile-sub" id="h2h-prob-sub"></div></div>
   <div class="tile"><div class="tile-label">Ratings</div><div class="tile-value" id="h2h-ratings">—</div><div class="tile-sub" id="h2h-ratings-sub"></div></div>
-  <div class="tile"><div class="tile-label">Home edge</div><div class="tile-value">{{ cal.b_home|signed }}</div><div class="tile-sub">points, calibrated{% if cal.stage2 %} (plus stage-2 terms){% endif %}; σ = {{ cal.sigma|num }}</div></div>
+  <div class="tile"><div class="tile-label">Home-field advantage</div><div class="tile-value">{{ cal.b_home|signed }}</div><div class="tile-sub">points, calibrated{% if cal.stage2 %} (plus stage-2 terms){% endif %}; σ = {{ cal.sigma|num }}</div></div>
 </div>
 <p class="note"><a href="/method#matchup">How the margin and win probability are computed →</a></p>
 <script id="h2h-data" type="application/json">{{ {"teams": teams, "cal": cal}|tojson }}</script>

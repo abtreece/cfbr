@@ -20,6 +20,8 @@
 
 {% macro delta(x, digits=1, good_up=True) -%}
 {% if x is none or x != x %}<span class="muted">—</span>
+{#- A change that rounds to zero at the shown precision is no change ("▲ 0.0" says otherwise). #}
+{%- elif x|round(digits or 0) == 0 %}<span class="muted">0</span>
 {%- elif x > 0 %}<span class="{{ 'up' if good_up else 'down' }}">▲ {{ x|num(digits) if digits else x }}</span>
 {%- elif x < 0 %}<span class="{{ 'down' if good_up else 'up' }}">▼ {{ (-x)|num(digits) if digits else -x }}</span>
 {%- else %}<span class="muted">0</span>{% endif %}
