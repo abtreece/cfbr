@@ -1,6 +1,13 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, tile, team_link, poll_rank, premium_notice, tabs %}
+{% from "macros.html" import season_select, tile, team_link, poll_rank, premium_notice, tabs, col_legend  %}
 {% block title %}{{ season }} {{ slot|slot_label }} games · CFB Ratings{% endblock %}
+{% set col_defs = [
+  (MODEL, (MODEL) ~ "'s pick and expected margin (CFB ratings model; see Method)"),
+  ("Win %", "Win probability of the team " ~ (MODEL) ~ " favors"),
+  ("Vegas", "Median spread across sportsbooks: the latest line for games not yet played, the closing line once final"),
+  ("Edge", "Points between " ~ (MODEL) ~ "'s margin and the Vegas line, and toward which team")] %}{% set col = dict(col_defs) %}
+{# Free viewers on a live season don't see the model's columns, so don't define them either. #}
+{% if locked %}{% set col_defs = col_defs|rejectattr("0", "in", [MODEL, "Win %", "Edge"])|list %}{% endif %}
 {% block content %}
 {{ tabs([("/games?season=" ~ season, "Games by week", true), ("/matchup?season=" ~ season, "Any matchup", false)], "Games") }}
 <form class="filters" method="get" action="/games">
@@ -42,17 +49,18 @@
 {% set base = "/games?season=" ~ season ~ "&slot=" ~ slot ~ ("&conf=" ~ conf|q if conf else "") %}
 <nav class="chips" aria-label="Show games">
   <a href="{{ base }}"{% if show == "all" %} aria-current="true"{% endif %}>All <span class="muted">{{ counts.all }}</span></a>
-  <a href="{{ base }}&amp;show=flagged"{% if show == "flagged" %} aria-current="true"{% endif %}
-     title="The model picks the underdog to win, or is {{ threshold|num(0) }}+ points off the Vegas line">Flagged <span class="muted">{{ counts.flagged }}</span></a>
+  <a href="{{ base }}&amp;show=flagged"{% if show == "flagged" %} aria-current="true"{% endif %}>Flagged <span class="muted">{{ counts.flagged }}</span></a>
   {% if counts.upsets %}<a href="{{ base }}&amp;show=upsets"{% if show == "upsets" %} aria-current="true"{% endif %}>{{ MODEL }} picks the underdog <span class="muted">{{ counts.upsets }}</span></a>{% endif %}
 </nav>
+<p class="note flag-note">Flagged: {{ MODEL }} picks the underdog, or is {{ threshold|num(0) }}+ points off the Vegas line.
+  {% if ats and ats.ats_n %}A disagreement isn't an edge by itself: {{ MODEL }} is {{ ats.ats_win_rate|pct(1) }} against the spread this season ({{ ats.ats_n }} games); break-even at −110 is 52.4%.{% endif %}</p>
 {% endif %}
 
 <div class="table-wrap">
 <table class="data sortable" id="games">
   <thead>
-    <tr><th data-sort="num" data-first="asc">Kickoff ({{ tz_label }})</th><th>Matchup</th>{% if not locked %}<th>{{ MODEL }}</th><th data-sort="num" class="num opt" title="Win probability of the team the model favors">Win %</th>{% endif %}<th title="Median spread across sportsbooks: the latest line for games not yet played, the closing line once final">Vegas</th>
-      {% if not locked %}<th data-sort="num" title="Points between the model's margin and the Vegas line, and toward which team">Edge</th>{% endif %}{% if any_final %}<th>Final</th>{% if not locked %}<th data-sort="num" class="num opt">{{ MODEL }} err</th>{% endif %}<th data-sort="num" class="num opt">Vegas err</th>{% if not locked %}<th>ATS</th>{% endif %}{% endif %}</tr>
+    <tr><th data-sort="num" data-first="asc">Kickoff ({{ tz_label }})</th><th>Matchup</th>{% if not locked %}<th data-sort="num" title="{{ col[MODEL] }}">{{ MODEL }}</th><th data-sort="num" class="num opt" title="{{ col["Win %"] }}">Win %</th>{% endif %}<th data-sort="num" title="{{ col["Vegas"] }}">Vegas</th>
+      {% if not locked %}<th data-sort="num" title="{{ col["Edge"] }}">Edge</th>{% endif %}{% if any_final %}<th>Final</th>{% if not locked %}<th data-sort="num" class="num opt">{{ MODEL }} err</th>{% endif %}<th data-sort="num" class="num opt">Vegas err</th>{% if not locked %}<th>ATS</th>{% endif %}{% endif %}</tr>
   </thead>
   <tbody>
   {% for g in rows %}
@@ -61,9 +69,9 @@
     <tr{% if cls %} class="{{ cls|join(' ') }}"{% endif %}>
       <td data-v="{{ g.kickoff_ts.timestamp() if g.kickoff_ts else 0 }}">{{ g.kickoff_ts|kickoff }}</td>
       <td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}{% if g.status in ("postponed", "cancelled") and not any_final %} <span class="badge">{{ g.status }}</span>{% endif %}</td>
-      {% if not locked %}<td class="strong wrap">{{ g.model_pick }}</td>
-      <td class="num opt" data-v="{{ g.fav_prob if g.fav_prob is not none else -1 }}">{{ g.fav_prob|pct(0) }}</td>{% endif %}
-      <td class="wrap">{{ g.vegas_pick or "—" }}</td>
+      {% if not locked %}<td class="strong wrap" data-v="{{ g.pred_margin|abs if g.pred_margin is not none else -1 }}">{{ g.model_pick }}</td>
+      <td class="num opt" data-v="{{ g.fav_prob if g.fav_prob is not none else -1 }}">{{ prob(g.fav_prob) }}</td>{% endif %}
+      <td class="wrap" data-v="{{ g.spread|abs if g.spread is not none and g.spread == g.spread else -1 }}">{{ g.vegas_pick or "—" }}</td>
       {% if not locked %}<td class="wrap{% if g.flag %} strong{% endif %}" data-v="{{ g.edge_pts if g.edge_pts is not none else -1 }}">{{ g.edge or "—" }}{% if g.flag == "upset" %} <span class="badge">upset pick</span>{% elif g.flag == "edge" %}<span class="sr-only"> (flagged: {{ threshold|num(0) }}+ off the line)</span>{% endif %}</td>{% endif %}
       {% if any_final %}
       <td>{% if g.completed and g.home_points is not none %}{{ g.away_points }}–{{ g.home_points }}{% else %}<span class="muted">{{ g.status if g.status != "upcoming" else "—" }}</span>{% endif %}</td>
@@ -78,5 +86,6 @@
   </tbody>
 </table>
 </div>
-<p class="note">#N is the AP rank going into the game; finals are away–home.{% if not locked %} Highlighted rows are flagged: the model picks the underdog, or is {{ threshold|num(0) }}+ points off the line.{% endif %} <a href="/method#lines">Column definitions →</a></p>
+{{ col_legend(col_defs) }}
+<p class="note">#N is the AP rank going into the game; finals are away–home.{% if not locked %}{% endif %} <a href="/method#lines">Column definitions →</a></p>
 {% endblock %}

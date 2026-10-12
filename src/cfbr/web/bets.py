@@ -8,6 +8,7 @@ and every route depends on :func:`cfbr.web.access.bets_access`.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable
 from datetime import datetime
 
@@ -60,8 +61,30 @@ def bet_rows(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
             "edge_pts": abs(r["edge"]), "risked": risked, "to_win": to_win,
             "risk_dollars": risked * uv, "win_dollars": to_win * uv,
             "dollars": None if r["units"] is None else r["units"] * uv,
+            "books_side": books_from_side(r.get("books"), home),
         })
     return out
+
+
+_BOOK = re.compile(r"^(?P<book>.+?) (?P<spread>[+-]\d+(?:\.\d+)?)(?: \((?P<hp>[+-]\d+)/(?P<ap>[+-]\d+)\))?(?P<rest>.*)$")
+
+
+def books_from_side(books: str | None, home: bool) -> str | None:
+    """The ledger's per-book lines ("DraftKings +5.5 (-110/-110); ...", home spread and home/away
+    prices) rewritten from the bet team's side: "DraftKings −5.5 (−110); ...". Entries that don't
+    parse are kept as they are."""
+    if not books:
+        return books
+    out = []
+    for entry in books.split("; "):
+        m = _BOOK.match(entry)
+        if m is None:
+            out.append(entry)
+            continue
+        spread = float(m["spread"]) * (1 if home else -1)
+        price = m["hp"] if home else m["ap"]
+        out.append(f"{m['book']} {spread_str(spread)}" + (f" ({price_str(int(price))})" if price else "") + m["rest"])
+    return "; ".join(out)
 
 
 def with_line_now(rows: list[dict], s, threshold: float) -> list[dict]:

@@ -49,6 +49,19 @@
 
 {# Sub-navigation inside a section, e.g. Games: "Games by week | Any matchup".
    items: (href, label, is_current) tuples. #}
+{# Column definitions as a tap-to-open list under a table: the header tooltips read the same
+   (label, text) pairs, so the two can't drift, and touch and screen-reader users get them too. #}
+{% macro col_legend(defs) -%}
+<details class="legend">
+  <summary>What the columns mean</summary>
+  <dl>{% for label, text in defs %}<dt>{{ label }}</dt><dd>{{ text }}</dd>{% endfor %}</dl>
+</details>
+{%- endmacro %}
+
+{% macro ratings_tabs(season, current) -%}
+{{ tabs([("/rankings?season=" ~ season, "Rankings", current == "rankings"), ("/accuracy?season=" ~ season, "Track record", current == "accuracy")], "Ratings") }}
+{%- endmacro %}
+
 {% macro tabs(items, label) -%}
 <nav class="tabs" aria-label="{{ label }}">
   {% for href, text, current in items %}<a href="{{ href }}"{% if current %} aria-current="page"{% endif %}>{{ text }}</a>{% endfor %}

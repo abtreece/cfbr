@@ -1,7 +1,8 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, tile, line_chart %}
+{% from "macros.html" import season_select, tile, line_chart, ratings_tabs %}
 {% block title %}{{ season }} track record · CFB Ratings{% endblock %}
 {% block content %}
+{{ ratings_tabs(season, "accuracy") }}
 <form class="filters" method="get" action="/accuracy">
   {{ season_select(seasons, season) }}
   <noscript><button type="submit">Show</button></noscript>
@@ -9,9 +10,9 @@
 
 <h1>{{ season }} track record</h1>
 <p class="lede">
-  {% if kind == "tuning" %}<span class="badge">Tuning season</span> Slightly optimistic: the model was tuned on these seasons.
+  {% if kind == "tuning" %}<span class="badge">Tuning season</span> Slightly optimistic: {{ MODEL }} was tuned on these seasons.
   {% elif kind == "holdout" %}<span class="badge">Holdout season</span> Never used for tuning.
-  {% else %}<span class="badge">Live season</span> Season to date.{% endif %}
+  {% else %}<span class="badge">Live season</span>{% endif %}
   <a href="/method#accuracy">How accuracy is measured →</a>
 </p>
 
@@ -19,7 +20,7 @@
 <div class="tiles">
   {{ tile("Games", summary.n_games) }}
   {{ tile(MODEL ~ " MAE", summary.mae|num(2) ~ " pts") }}
-  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num(2) ~ " pts", MODEL ~ " " ~ summary.model_mae_lined|num(2) ~ " on the same " ~ summary.n_lined ~ " games") }}{% endif %}
+  {% if summary.n_lined %}{{ tile("Vegas MAE", summary.line_mae|num(2) ~ " pts", (MODEL ~ " " ~ summary.model_mae_lined|num(2) ~ " on the same " ~ summary.n_lined ~ " games") if summary.n_lined < summary.n_games else "same games as " ~ MODEL) }}{% endif %}
   {{ tile("Massey MAE", summary.massey_mae|num(2) ~ " pts", "score-only baseline") }}
   {{ tile("Winners picked", summary.su_accuracy|pct(1)) }}
   {% if summary.ats_n %}{{ tile("Against the spread", summary.ats_win_rate|pct(1),

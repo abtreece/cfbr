@@ -1,6 +1,8 @@
 {% extends "base.html" %}
-{% from "macros.html" import season_select, premium_notice %}
+{% from "macros.html" import season_select, premium_notice, col_legend  %}
 {% block title %}{{ season }} projections · CFB Ratings{% endblock %}
+{% set col_defs = [
+  ("Exp. wins [80%]", "Expected final regular-season wins, with the 10th–90th percentile range")] %}{% set col = dict(col_defs) %}
 {% block content %}
 <form class="filters" method="get" action="/odds">
   {{ season_select(sim_seasons, season) }}
@@ -35,7 +37,7 @@
   <thead><tr>
     <th data-sort="text">Team</th><th data-sort="text" class="opt">Conf</th>
     <th data-sort="num" class="num opt">Record</th>
-    <th data-sort="num" class="num opt" title="Expected final regular-season wins, with the 10th–90th percentile range">Exp. wins [80%]</th>
+    <th data-sort="num" class="num opt" title="{{ col["Exp. wins [80%]"] }}">Exp. wins [80%]</th>
     <th data-sort="num" class="num opt">Undefeated</th><th data-sort="num" class="num opt">Bowl</th>
     <th data-sort="num" class="num opt">Title game</th><th data-sort="num" class="num">Conf title</th>
     <th data-sort="num" class="num">Playoff</th><th data-sort="num" class="num opt">Bye</th>
@@ -49,13 +51,14 @@
       <td class="num opt" data-v="{{ r.wins_now - r.losses_now }}">{{ r.wins_now }}–{{ r.losses_now }}</td>
       <td class="num opt" data-v="{{ r.exp_wins }}">{{ r.exp_wins|num }} <span class="muted">[{{ r.wins_p10 }}–{{ r.wins_p90 }}]</span></td>
       {% for c in ("p_undefeated", "p_bowl_eligible", "p_title_game", "p_conf_title", "p_playoff", "p_bye", "p_champion") %}
-      <td class="num{% if c not in ('p_conf_title', 'p_playoff', 'p_champion') %} opt{% endif %}{% if c == 'p_playoff' %} strong{% endif %}" data-v="{{ r[c] }}">{{ prob(r[c]) }}</td>
+      <td class="num{% if c not in ('p_conf_title', 'p_playoff', 'p_champion') %} opt{% endif %}{% if c == 'p_playoff' %} strong{% endif %}" data-v="{{ r[c] }}">{{ "—" if c in ("p_title_game", "p_conf_title") and r.conference == "FBS Independents" else prob(r[c]) }}</td>
       {% endfor %}
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{{ col_legend(col_defs) }}
 <p class="note">Click a column header to sort. Bowl = 6+ wins; Bye = a top-4 playoff seed. <a href="/method#projections">More →</a></p>
 
 <h2>Conference title odds</h2>

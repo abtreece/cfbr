@@ -11,7 +11,7 @@
 {% endif %}
 
 <h1>{% if season %}{{ season }} paper bets{% else %}Paper bets{% endif %}</h1>
-<p class="lede">The bets the model would make against the betting market, tracked as hypothetical flat bets.
+<p class="lede">The bets {{ MODEL }} would make against the betting market, tracked as hypothetical flat bets.
   Nothing is wagered, and this is not betting advice.</p>
 
 {% if summary is not defined %}
@@ -58,7 +58,7 @@
       <td class="opt">{{ b.tier }}</td>
       <td class="num opt">{{ b.risk_dollars|money(false) }} / {{ b.win_dollars|money(false) }}</td>
       <td>{% if b.best is not none %}{{ b.best|spread }}{% if b.best_odds is not none %} ({{ b.best_odds|price }}){% endif %}{% if b.best_provider %} <span class="muted">{{ b.best_provider }}</span>{% endif %}{% else %}—{% endif %}</td>
-      <td class="num opt" {% if b.books %}title="{{ b.books }}"{% endif %}>{{ b.n_providers }}</td>
+      <td class="num opt" {% if b.books_side %}title="{{ b.books_side }}"{% endif %}>{{ b.n_providers }}</td>
       <td class="opt">{{ b.placed|short_ts }}</td>
     </tr>
   {% endfor %}
@@ -75,12 +75,12 @@
 <details class="rules" id="how">
   <summary>How it works</summary>
   <ul>
-    <li>Bet the model's side when its margin is {{ rules.threshold|num }}+ points off the consensus line (the <strong>Edge</strong>): the median spread across sportsbooks, offshore books included, as on <a href="/method#lines">Method</a>. Each bet is recorded once, before kickoff, and never changed.</li>
+    <li>Bet {{ MODEL }}'s side when its margin is {{ rules.threshold|num }}+ points off the consensus line (the <strong>Edge</strong>): the median spread across sportsbooks, offshore books included, as on <a href="/method#lines">Method</a>. Each bet is recorded once, before kickoff, and never changed.</li>
     <li>Flat {{ rules.unit_value|money(false) }} bets from a {{ rules.bankroll|money(false) }} bankroll at {{ rules.odds }}: risk {{ unit_risk|money(false) }} to win {{ unit_win|money(false) }}, break-even {{ summary.breakeven|pct }}.</li>
     <li><strong>Best available</strong> is the best line at a book you could bet, at that book's price: since 2026-10-12, the number-and-price pair worth the most against the consensus (a slightly worse number at a better price can win); before that, the best spread. Only {{ rules.pricing_books|join(", ") }} can set the best line{% if "bet365" in rules.pricing_books %} (bet365's lines come from a separate feed used only to price bets, so they never count toward the consensus){% endif %}, so a bet can have none.
       Every other book, including offshore books ({{ rules.offshore_books|join(", ") }}), counts toward the consensus but never sets the best line. In the Books tooltip, "(pricing only)" marks a line used only to price the bet, never in the consensus.</li>
     <li><strong>CLV</strong> is how many points the recorded line beat the <strong>Close</strong>: the consensus in the last snapshot before kickoff (at most {{ close_max_age|num(0) }} hours earlier), or CFBD's post-game consensus when none qualifies. It is the first sign of a real edge; win rate is mostly noise at this sample size.</li>
-    {% if show_cents or show_cover %}<li>{% if show_cents %}<strong>Edge ¢</strong> prices the edge in cents of fair odds, assuming the model is right. {% endif %}{% if show_cover %}<strong>Cover %</strong> is a calibrated estimate that found almost no signal; reporting only.{% endif %}</li>{% endif %}
+    {% if show_cents or show_cover %}<li>{% if show_cents %}<strong>Edge ¢</strong> prices the edge in cents of fair odds, assuming {{ MODEL }} is right. {% endif %}{% if show_cover %}<strong>Cover %</strong> is a calibrated estimate that found almost no signal; reporting only.{% endif %}</li>{% endif %}
     <li><strong>Tiers</strong> group bets by edge size; none cleared break-even with confidence in the 2015–2021 backtest.</li>
   </ul>
 </details>

@@ -1,6 +1,12 @@
 {% extends "base.html" %}
-{% from "macros.html" import tile, delta, line_chart, team_link, poll_rank, poll_cell, premium_notice, tabs %}
+{% from "macros.html" import tile, delta, line_chart, team_link, poll_rank, poll_cell, premium_notice, tabs, col_legend  %}
 {% block title %}{{ team }} {{ season }} · CFB Ratings{% endblock %}
+{% set col_defs = [
+  (MODEL, (MODEL) ~ "'s expected margin for " ~ (team)),
+  ("Win %", (team) ~ "'s win probability"),
+  ("Vegas", "Vegas line as an expected margin for " ~ (team) ~ " (−7 on the line shows as +7.0): the latest line for games not yet played, the closing line once final")] %}{% set col = dict(col_defs) %}
+{# Free viewers on a live season don't see the model's columns, so don't define them either. #}
+{% if locked %}{% set col_defs = col_defs|rejectattr("0", "in", [MODEL, "Win %"])|list %}{% endif %}
 {% block content %}
 <form class="filters" method="get" onsubmit="location.href='/team/'+this.season.value+'/{{ team|q }}'; return false;">
   <label>Season
@@ -42,10 +48,10 @@
 {% endif %}
 
 {% if projection %}
-<h2>Season outlook <span class="muted">through week {{ projection.week }}</span></h2>
+<h2>Projections <span class="muted">through week {{ projection.week }}</span></h2>
 <div class="tiles">
   {{ tile("Expected wins", projection.exp_wins|num, "80% range " ~ projection.wins_p10 ~ "–" ~ projection.wins_p90) }}
-  {{ tile("Conference title", prob(projection.p_conf_title)) }}
+  {% if latest.conference != "FBS Independents" %}{{ tile("Conference title", prob(projection.p_conf_title)) }}{% endif %}
   {{ tile("Playoff", prob(projection.p_playoff), "bye " ~ prob(projection.p_bye)) }}
   {{ tile("Champion", prob(projection.p_champion)) }}
 </div>
@@ -56,7 +62,7 @@
 <h2>Schedule and résumé</h2>
 <div class="tiles">
   {{ tile("Schedule strength", "#" ~ resume.sos_rank ~ " of " ~ resume.n_fbs, "avg. opponent rating " ~ resume.sos|signed ~ (" · played " ~ resume.sos_played|signed if resume.sos_played is not none else "")) }}
-  {{ tile("Record vs. top 25", resume.top25_w ~ "–" ~ resume.top25_l, "by the model's ratings, " ~ latest.label|lower) }}
+  {{ tile("Record vs. top 25", resume.top25_w ~ "–" ~ resume.top25_l, "by " ~ MODEL ~ "'s ratings, " ~ latest.label|lower) }}
   {% if resume.best_win %}{{ tile("Best win", resume.best_win.opponent, (resume.best_win.opp_rating|signed) ~ (" · #" ~ resume.best_win.opp_rank if resume.best_win.opp_rank is not none else "") ~ " · " ~ resume.best_win.team_points ~ "–" ~ resume.best_win.opp_points) }}{% endif %}
   {% if resume.worst_loss %}{{ tile("Worst loss", resume.worst_loss.opponent, (resume.worst_loss.opp_rating|signed) ~ (" · #" ~ resume.worst_loss.opp_rank if resume.worst_loss.opp_rank is not none else "") ~ " · " ~ resume.worst_loss.team_points ~ "–" ~ resume.worst_loss.opp_points) }}{% endif %}
 </div>
@@ -101,7 +107,7 @@
 <table class="data">
   <thead>
     <tr><th>Date ({{ tz_label }})</th><th>Wk</th><th>Opponent</th><th>Result</th>
-      {% if not locked %}<th class="num" title="{{ MODEL }}'s expected margin for {{ team }}">{{ MODEL }}</th><th class="num" title="{{ team }}'s win probability">Win %</th>{% endif %}<th class="num" title="Vegas line as an expected margin for {{ team }} (−7 on the line shows as +7.0): the latest line for games not yet played, the closing line once final">Vegas</th><th class="num">Actual</th>
+      {% if not locked %}<th class="num" title="{{ col[MODEL] }}">{{ MODEL }}</th><th class="num" title="{{ col["Win %"] }}">Win %</th>{% endif %}<th class="num" title="{{ col["Vegas"] }}">Vegas</th><th class="num">Actual</th>
       {% if not locked %}<th class="num">{{ MODEL }} err</th>{% endif %}<th class="num">Vegas err</th></tr>
   </thead>
   <tbody>
@@ -115,7 +121,7 @@
             {{ g.team_points }}–{{ g.opp_points }}
           {% else %}<span class="muted">{{ g.status }}</span>{% endif %}</td>
       {% if not locked %}<td class="num strong">{{ g.t_pred|signed }}</td>
-      <td class="num">{{ g.t_win_prob|pct(0) }}</td>{% endif %}
+      <td class="num">{{ prob(g.t_win_prob) }}</td>{% endif %}
       <td class="num">{{ g.t_vegas|signed }}</td>
       <td class="num">{{ g.t_margin|signed(0) if g.completed else "—" }}</td>
       {% if not locked %}<td class="num">{{ g.model_err|num }}</td>{% endif %}
@@ -125,4 +131,5 @@
   </tbody>
 </table>
 </div>
+{{ col_legend(col_defs) }}
 {% endblock %}
