@@ -1428,14 +1428,20 @@ def test_real_bets_are_owner_only(web_cfg, monkeypatch):
     # Premium (everyone today) but not the owner: no section.
     html = c.get("/bets").text
     assert 'id="mine"' not in html and "Ohio State +1.5" not in html
-    # A wrong key and a forged cookie both get nothing; a wrong key looks like any unknown page.
-    assert c.get("/owner?key=nope").status_code == 404 and c.get("/owner").status_code == 404
+    # The key travels only in a POST body: a key in the URL does nothing (URLs land in the
+    # server log and browser history).
+    form = c.get("/owner")
+    assert form.status_code == 200 and 'method="post"' in form.text and 'type="password"' in form.text
+    assert c.get("/owner?key=s3cret-key").status_code == 200 and OWNER_COOKIE not in c.cookies
+    # A wrong key and a forged cookie both get nothing.
+    r = c.post("/owner", content="key=nope", headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 403 and "didn't match" in r.text and OWNER_COOKIE not in c.cookies
     c.cookies.set(OWNER_COOKIE, owner_token("nope"))
     assert 'id="mine"' not in c.get("/bets").text
     c.cookies.clear()
 
     # The right key sets an HttpOnly cookie holding an HMAC, never the key itself.
-    r = c.get("/owner?key=s3cret-key")
+    r = c.post("/owner", content="key=s3cret-key", headers={"content-type": "application/x-www-form-urlencoded"})
     assert r.status_code == 303 and r.headers["location"] == "/bets#mine"
     set_cookie = r.headers["set-cookie"]
     assert "HttpOnly" in set_cookie and "samesite=lax" in set_cookie.lower() and "s3cret-key" not in set_cookie
@@ -1466,6 +1472,23 @@ def test_real_bets_are_owner_only(web_cfg, monkeypatch):
     assert 'id="mine"' not in c.get("/bets").text
 
 
+def test_owner_sees_a_season_with_only_real_bets(web_cfg, monkeypatch):
+    from cfbr.web.access import OWNER_COOKIE, owner_token
+
+    monkeypatch.setenv("OWNER_KEY", "s3cret-key")
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_real(web_cfg)  # no bets.csv at all
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    # Others: the betting page has no season, and the API has no paper bets.
+    assert 'id="mine"' not in c.get("/bets").text
+    assert c.get("/bets?season=2026").status_code == 404 and c.get("/api/bets").status_code == 404
+    c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
+    html = " ".join(c.get("/bets").text.split())
+    assert 'id="mine">My real bets' in html and "Ohio State +1.5" in html and "No paper bets recorded yet" in html
+    assert c.get("/bets?season=2026").status_code == 200
+    assert c.get("/api/bets").status_code == 404  # the API stays paper-only, owner or not
+
+
 def test_no_owner_key_means_no_owner(web_cfg, monkeypatch):
     from cfbr.web import access
     from cfbr.web import app as app_mod
@@ -1479,7 +1502,9 @@ def test_no_owner_key_means_no_owner(web_cfg, monkeypatch):
     _write_ledger(web_cfg)
     _write_real(web_cfg)
     c = TestClient(create_app(web_cfg), follow_redirects=False)
-    assert c.get("/owner?key=").status_code == 404 and c.get("/owner?key=anything").status_code == 404
+    assert c.get("/owner").status_code == 404
+    assert c.post("/owner", content="key=anything",
+                  headers={"content-type": "application/x-www-form-urlencoded"}).status_code == 404
     c.cookies.set(OWNER_COOKIE, owner_token(""))
     assert 'id="mine"' not in c.get("/bets").text
 

@@ -11,7 +11,7 @@ import math
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -665,13 +665,30 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
         resp.headers.update(PUBLIC_HOUR)
         return resp
 
-    @app.get("/owner", include_in_schema=False)
-    def owner_login(key: str = ""):
-        # Open once as /owner?key=<OWNER_KEY>. The cookie holds an HMAC of the key, not the key.
-        # A wrong or missing key looks like any unknown page, so the route reveals nothing.
-        real = owner_key()
-        if not real or not hmac.compare_digest(key.encode(), real.encode()):
+    @app.get("/owner", response_class=HTMLResponse, include_in_schema=False)
+    def owner_form(request: Request):
+        # The key goes in a POST body, never the URL: uvicorn logs request lines (with query
+        # strings) to data/web.log, and browsers keep URLs in history.
+        if not owner_key():
             raise HTTPException(404, "Not found.")
+        resp = render(request, "owner.html", failed=False)
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @app.post("/owner", response_class=HTMLResponse, include_in_schema=False)
+    async def owner_login(request: Request):
+        # The cookie holds an HMAC of the key, not the key. The body is parsed with the standard
+        # library (one urlencoded field), so no form-parsing dependency is needed.
+        real = owner_key()
+        if not real:
+            raise HTTPException(404, "Not found.")
+        body = (await request.body())[:4096].decode("utf-8", "replace")
+        key = (parse_qs(body).get("key") or [""])[0]
+        if not hmac.compare_digest(key.encode(), real.encode()):
+            resp = render(request, "owner.html", failed=True)
+            resp.status_code = 403
+            resp.headers.update(NO_STORE)
+            return resp
         resp = RedirectResponse("/bets#mine", status_code=303)
         resp.set_cookie(OWNER_COOKIE, owner_token(real), max_age=OWNER_COOKIE_DAYS * 86400,
                         httponly=True, samesite="lax", path="/")

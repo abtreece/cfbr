@@ -132,19 +132,25 @@ def clean_summary(m: dict) -> dict:
 def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) -> APIRouter:
     router = APIRouter(dependencies=[Depends(bets_access)])
 
-    def pick(season: int | None) -> tuple[int | None, pl.DataFrame | None]:
-        seasons = store.bet_seasons()
+    def pick(season: int | None, seasons: list[int] | None = None) -> tuple[int | None, pl.DataFrame | None]:
+        """The season to show (default: newest of ``seasons``, the paper-ledger seasons unless
+        given) and its paper ledger (None when that season has only real bets)."""
+        seasons = store.bet_seasons() if seasons is None else seasons
         if season is None:
             season = seasons[-1] if seasons else None
         elif season not in seasons:
             raise HTTPException(404, f"No paper bets for {season}.")
-        return season, (store.bets(season) if season is not None else None)
+        has_paper = season is not None and season in store.bet_seasons()
+        return season, (store.bets(season) if has_paper else None)
 
     @router.get("/bets", response_class=HTMLResponse, include_in_schema=False)
     def bets_page(request: Request, season: int | None = None, owner: bool = Depends(owner_viewer)):
-        season, ledger = pick(season)
+        # The owner also reaches seasons that have only real bets; everyone else (and the API)
+        # sees paper-ledger seasons only.
+        seasons = sorted(set(store.bet_seasons()) | set(store.real_seasons())) if owner else store.bet_seasons()
+        season, ledger = pick(season, seasons)
         risked, to_win = risk(cfg.bets.odds, cfg.bets.stake)
-        ctx = {"bet_seasons": store.bet_seasons(), "season": season, "rules": cfg.bets,
+        ctx = {"bet_seasons": seasons, "season": season, "rules": cfg.bets,
                "close_max_age": cfg.odds.closing_max_age_hours,
                "unit_risk": risked * cfg.bets.unit_value, "unit_win": to_win * cfg.bets.unit_value}
         if ledger is not None:
