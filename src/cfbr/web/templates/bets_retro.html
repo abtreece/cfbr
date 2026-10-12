@@ -3,7 +3,7 @@
 {% block title %}{% if season %}{{ season }} {% endif %}retroactive paper bets · CFB Ratings{% endblock %}
 {% block content %}
 {% set q = "?season=" ~ season if season else "" %}
-{{ tabs([("/bets" ~ q, "Live", false), ("/bets/retro" ~ q, "Replay", true)], "Paper bets") }}
+{{ tabs([("/bets" ~ q, "Live", false), ("/bets/shortlist" ~ q, "Shortlist", false), ("/bets/retro" ~ q, "Replay", true)], "Paper bets") }}
 {% if retro_seasons|length > 1 %}
 <form class="filters" method="get" action="/bets/retro">
   {{ season_select(retro_seasons, season) }}

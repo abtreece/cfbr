@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import polars as pl
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from cfbr.config import load_config
@@ -589,6 +590,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
     r = c.get("/api/bets")
     assert r.status_code == 402 and r.json()["detail"] == "Subscription required."
     assert c.get("/bets/retro").status_code == 402 and c.get("/api/bets/retro").status_code == 402
+    assert c.get("/bets/shortlist").status_code == 402 and c.get("/api/bets/shortlist").status_code == 402
     assert c.get("/lab").status_code == 402  # edge-vs-close research sits with the bets
     for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/method", "/team/2026/Ohio%20State",
                 "/api/rankings", "/api/games?slot=r02", "/api/team/2026/Ohio%20State", "/api/seasons"):
@@ -1666,3 +1668,71 @@ def test_choose_books_validates_against_the_selectable_list():
     assert "Bovada" not in b.selectable_books and set(b.pricing_books) <= set(b.selectable_books)
     v = book_cookie_value({"Bally Bet", "DraftKings"})
     assert v == "ballybet.draftkings" and choose_books(v.split("."), b) == {"Bally Bet", "DraftKings"}
+
+
+def _write_shortlist_ledger(cfg):
+    from cfbr.bets.ledger import LEDGER_SCHEMA
+
+    first, later = "2026-10-11T14:05:00+00:00", "2026-10-11T20:05:00+00:00"
+    rows = [
+        _bet(1, "home", -3.5) | {"fbs_game": True, "placed_at": first,
+                                 "books": "DraftKings -3.5 (-110/-110); BetMGM -3 (-115/-105)"},
+        _bet(2, "away", 4.0) | {"fbs_game": True, "placed_at": first, "books": "BetMGM +3.5 (-110/-110)"},
+        _bet(3, "home", -3.0) | {"fbs_game": True, "placed_at": later, "books": "DraftKings -3 (-110/-110)"},
+        _bet(5, "home", -7.0, "won", 31, 14, -8.0, week=6) | {"fbs_game": True, "placed_at": "2026-10-04T14:00:00+00:00",
+                                                              "books": "FanDuel -7 (-110/-110)"},
+    ]
+    d = cfg.paths.out_dir / str(SEASON)
+    d.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows, schema=LEDGER_SCHEMA).write_csv(d / "bets.csv")
+
+
+@pytest.fixture
+def shortlist_client(web_cfg):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_shortlist_ledger(web_cfg)
+    return TestClient(create_app(web_cfg), follow_redirects=False)
+
+
+def test_shortlist_defaults_to_the_reference_books(shortlist_client):
+    r = shortlist_client.get("/bets/shortlist")
+    assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
+    html = " ".join(r.text.split())
+    assert "Shortlist" in html and "Texas A&amp;M" in html       # game 1 (home, DK at the line)
+    assert "−3.5 or better at DraftKings" in html
+    assert "Hawai" not in html.split('id="settled"')[0]          # game 2: only BetMGM has its number
+    body = shortlist_client.get("/api/bets/shortlist").json()
+    assert [p["game_id"] for p in body["picks"]] == [1, 5] and body["books"] == ["DraftKings", "FanDuel", "bet365"]
+    assert body["summary"]["won"] == 1
+
+
+def test_shortlist_follows_the_viewers_books(shortlist_client):
+    c = shortlist_client
+    r = c.post("/bets/shortlist/books", content="books=BetMGM&books=Bovada",
+               headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 303 and r.headers["location"] == "/bets/shortlist"
+    assert "cfbr_books=betmgm" in r.headers["set-cookie"] and "HttpOnly" in r.headers["set-cookie"]
+    body = c.get("/api/bets/shortlist").json()
+    assert body["books"] == ["BetMGM"] and [p["game_id"] for p in body["picks"]] == [1, 2]
+    assert [p["bet_at_book"] for p in body["picks"]] == ["BetMGM", "BetMGM"]
+    # An explicit ?books= wins over the cookie; junk falls back to the reference set.
+    assert c.get("/api/bets/shortlist?books=FanDuel").json()["books"] == ["FanDuel"]
+    c.cookies.set("cfbr_books", "nope.bovada")
+    assert c.get("/api/bets/shortlist").json()["books"] == ["DraftKings", "FanDuel", "bet365"]
+    # Submitting no books clears the choice.
+    r = c.post("/bets/shortlist/books", content="", headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 303 and ("Max-Age=0" in r.headers["set-cookie"] or 'cfbr_books=""' in r.headers["set-cookie"])
+
+
+def test_shortlist_is_gated_and_linked(web_cfg):
+    from cfbr.web.access import bets_access
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_shortlist_ledger(web_cfg)
+    app = create_app(web_cfg)
+    c = TestClient(app)
+    assert 'href="/bets/shortlist?season=2026"' in c.get("/bets").text
+    app.dependency_overrides[bets_access] = lambda: (_ for _ in ()).throw(HTTPException(402, "no"))
+    assert c.get("/bets/shortlist").status_code == 402
+    assert c.get("/api/bets/shortlist").status_code == 402
+    assert c.post("/bets/shortlist/books", content="books=FanDuel").status_code == 402

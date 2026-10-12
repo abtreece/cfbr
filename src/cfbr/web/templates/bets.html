@@ -2,7 +2,8 @@
 {% from "macros.html" import season_select, tile, team_link, line_chart, tabs %}
 {% block title %}{% if season %}{{ season }} {% endif %}paper bets · CFB Ratings{% endblock %}
 {% block content %}
-{% if has_retro %}{{ tabs([("/bets?season=" ~ season, "Live", true), ("/bets/retro?season=" ~ season, "Replay", false)], "Paper bets") }}{% endif %}
+{% if season %}{% set t = [("/bets?season=" ~ season, "Live", true), ("/bets/shortlist?season=" ~ season, "Shortlist", false)] %}
+{% if has_retro %}{% set t = t + [("/bets/retro?season=" ~ season, "Replay", false)] %}{% endif %}{{ tabs(t, "Paper bets") }}{% endif %}
 {% if bet_seasons|length > 1 %}
 <form class="filters" method="get" action="/bets">
   {{ season_select(bet_seasons, season) }}
