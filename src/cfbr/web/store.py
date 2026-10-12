@@ -10,11 +10,14 @@ new ratings with old games.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import polars as pl
+
+log = logging.getLogger(__name__)
 
 POLL_COLS = ("ap_rank", "coaches_rank", "cfp_rank")
 
@@ -154,6 +157,20 @@ class Store:
         from cfbr.bets.ledger import read_ledger
 
         return self._cached_csv(self._bets, season, self.out_dir / str(season) / "bets.csv", read_ledger)
+
+    def pricing_table(self):
+        """The points-to-cents table ``cfbr weekly`` writes (out/pricing_table.json), or None.
+        Read-only; without it the shortlist picks a book by points, then price."""
+        from cfbr.bets.pricing import PricingTable
+
+        path = self.out_dir / "pricing_table.json"
+        if not path.exists():
+            return None
+        try:
+            return PricingTable.load(path)
+        except (ValueError, KeyError, TypeError, AttributeError, OSError) as e:
+            log.warning("pricing table at %s unreadable (%s); shortlist picks by points then price", path, e)
+            return None
 
     def real_seasons(self) -> list[int]:
         """Seasons with real bets (``out/{season}/bets_real.csv``); used only for the owner's view."""

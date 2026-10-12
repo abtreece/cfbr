@@ -8,19 +8,21 @@ and every route depends on :func:`cfbr.web.access.bets_access`.
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Callable
 from datetime import datetime
+from urllib.parse import parse_qs
 
 import polars as pl
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly, what_if
+from cfbr.bets.shortlist import BOOK_RE, shortlist
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
-from cfbr.web.access import bets_access, owner_viewer
+from cfbr.web.access import (BOOKS_COOKIE, BOOKS_COOKIE_DAYS, bets_access, book_cookie_value, choose_books,
+                             owner_viewer, viewer_books)
 from cfbr.web.store import Store
 
 # Betting data is per-viewer once the section is gated; never let a shared cache keep it.
@@ -66,9 +68,6 @@ def bet_rows(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
     return out
 
 
-_BOOK = re.compile(r"^(?P<book>.+?) (?P<spread>[+-]\d+(?:\.\d+)?)(?: \((?P<hp>[+-]\d+)/(?P<ap>[+-]\d+)\))?(?P<rest>.*)$")
-
-
 def books_from_side(books: str | None, home: bool) -> str | None:
     """The ledger's per-book lines ("DraftKings +5.5 (-110/-110); ...", home spread and home/away
     prices) rewritten from the bet team's side: "DraftKings −5.5 (−110); ...". Entries that don't
@@ -77,7 +76,7 @@ def books_from_side(books: str | None, home: bool) -> str | None:
         return books
     out = []
     for entry in books.split("; "):
-        m = _BOOK.match(entry)
+        m = BOOK_RE.match(entry)
         if m is None:
             out.append(entry)
             continue
@@ -229,6 +228,73 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             "bets": (ledger.with_columns(tier=tier_expr(cfg.bets), dollars=pl.col("units") * cfg.bets.unit_value)
                      .sort("kickoff_ts", "game_id").to_dicts()),
         })
+
+    # -- real-money shortlist (DECISIONS "Real-money shortlist"): same gate, read-only ------------
+
+    def shortlist_rows(sl: pl.DataFrame, s) -> tuple[list[dict], list[dict]]:
+        """Open picks (with the current line, and whether the consensus has moved against the bettor
+        since capture) and settled picks, newest first."""
+        rows = bet_rows(sl, cfg)
+        open_ = with_line_now([r for r in rows if r["status"] == "open"], s, cfg.bets.threshold)
+        open_ = [r | {"moved_past": r["line_now"] is not None and r["line_now"] < r["team_line"]} for r in open_]
+        return open_, [r for r in reversed(rows) if r["status"] != "open"]
+
+    def season_pricing_table(season: int):
+        """The pricing table only if it was built from seasons before ``season``; a later table
+        would re-rank a past season's picks with its own results."""
+        table = store.pricing_table()
+        return table if table is not None and (not table.seasons or max(table.seasons) < season) else None
+
+    @router.get("/bets/shortlist", response_class=HTMLResponse, include_in_schema=False)
+    def shortlist_page(request: Request, season: int | None = None):
+        season, ledger = pick(season)
+        books = viewer_books(request, cfg.bets)
+        ctx = {"bet_seasons": store.bet_seasons(), "season": season, "rules": cfg.bets, "books": books,
+               "reference": books == frozenset(cfg.bets.pricing_books),
+               "has_retro": season in store.retro_seasons()}
+        if ledger is not None:
+            s = store.season(season)
+            sl = shortlist(ledger, books, cfg.bets, season_pricing_table(season))
+            open_picks, settled = shortlist_rows(sl, s)
+            fbs = set() if s is None else set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
+            ctx |= {"open_picks": open_picks, "settled": settled, "summary": summarize(sl, cfg.bets),
+                    "n_paper": ledger.height, "fbs_teams": fbs,
+                    "test": next(t for t in tracked_tests(ledger, cfg.bets) if t["key"] == "shortlist")}
+        resp = render(request, "bets_shortlist.html", **ctx)
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @router.post("/bets/shortlist/books", include_in_schema=False)
+    async def shortlist_books(request: Request):
+        # Standard-library form parsing (repeated "books" fields), as /owner does.
+        body = (await request.body())[:4096].decode("utf-8", "replace")
+        form = parse_qs(body)
+        names = form.get("books", [])
+        try:  # only a parsed int goes into the Location header, never the raw input
+            where = f"/bets/shortlist?season={int(form['season'][0])}"
+        except (KeyError, IndexError, ValueError):
+            where = "/bets/shortlist"
+        resp = RedirectResponse(where, status_code=303)
+        if names:
+            resp.set_cookie(BOOKS_COOKIE, book_cookie_value(choose_books(names, cfg.bets)),
+                            max_age=BOOKS_COOKIE_DAYS * 86400, httponly=True, samesite="lax", path="/")
+        else:
+            resp.delete_cookie(BOOKS_COOKIE, path="/")
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @router.get("/api/bets/shortlist")
+    def api_shortlist(request: Request, response: Response, season: int | None = None, books: str | None = None):
+        from cfbr.web.app import clean
+
+        season, ledger = pick(season)
+        if ledger is None:
+            raise HTTPException(404, "No paper bets recorded yet.")
+        chosen = choose_books(books.split(","), cfg.bets) if books is not None else viewer_books(request, cfg.bets)
+        sl = shortlist(ledger, chosen, cfg.bets, season_pricing_table(season))
+        response.headers.update(NO_STORE)
+        return clean({"season": season, "books": sorted(chosen),
+                      "summary": clean_summary(summarize(sl, cfg.bets)), "picks": sl.to_dicts()})
 
     # -- retroactive replay (``cfbr bets-retro``): same gate, never mixed with the live ledger --
 

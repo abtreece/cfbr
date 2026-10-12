@@ -90,6 +90,10 @@ class Bets(BaseModel):
     # Books a bet may be priced at (the best line). Every book, offshore included, still
     # counts toward the consensus line. Empty = any non-offshore book.
     pricing_books: list[str] = ["DraftKings", "FanDuel", "bet365"]
+    # Books a viewer may pick for the real-money shortlist (never offshore; DECISIONS
+    # "Shortlist book choice"). No choice = pricing_books, the set T3 tracks.
+    selectable_books: list[str] = ["DraftKings", "FanDuel", "bet365", "BetMGM", "BetRivers", "Bally Bet", "betPARX",
+                                   "theScore Bet"]
     # Dollar reporting only: a starting bankroll and the dollar value of one unit
     # (1% of the bankroll, so a 1-unit bet at -110 risks $11 to win $10).
     bankroll: float = 1000.0

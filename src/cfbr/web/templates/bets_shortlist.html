@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, tile, team_link, tabs %}
+{% block title %}{% if season %}{{ season }} {% endif %}shortlist · CFB Ratings{% endblock %}
+{% block content %}
+{% set q = "?season=" ~ season if season else "" %}
+{% set t = [("/bets" ~ q, "Live", false), ("/bets/shortlist" ~ q, "Shortlist", true)] %}
+{% if has_retro %}{% set t = t + [("/bets/retro" ~ q, "Replay", false)] %}{% endif %}
+{{ tabs(t, "Paper bets") }}
+{% if bet_seasons|length > 1 %}
+<form class="filters" method="get" action="/bets/shortlist">
+  {{ season_select(bet_seasons, season) }}
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+{% endif %}
+
+<h1>{% if season %}{{ season }} {% endif %}shortlist</h1>
+<p class="lede">The paper bets worth a real bet at your sportsbooks: competitive FBS games, found at the week's first look,
+  where one of your books had the number. Not betting advice. Check the live line before you bet.</p>
+
+<form class="filters" method="post" action="/bets/shortlist/books">
+  {% if season %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
+  <fieldset><legend>Your books{% if reference %} <span class="muted">(default)</span>{% endif %}</legend>
+  {% for b in rules.selectable_books %}
+    <label><input type="checkbox" name="books" value="{{ b }}"{% if b in books %} checked{% endif %}> {{ b }}</label>
+  {% endfor %}
+  </fieldset>
+  <button type="submit">Save</button>
+</form>
+
+{% if open_picks is not defined %}
+<p class="muted">No paper bets recorded yet.</p>
+{% else %}
+<div class="tiles">
+  {{ tile("Record", summary.won ~ "–" ~ summary.lost ~ "–" ~ summary.push, "won–lost–push") }}
+  {{ tile("Avg CLV", (summary.avg_clv|signed(2) ~ " pts") if summary.n_clv else "—",
+          ("beat the close " ~ summary.beat_close|pct(0) ~ " of " ~ summary.n_clv) if summary.n_clv else "after games close") }}
+  {{ tile("On the list", (open_picks|length + settled|length) ~ " of " ~ n_paper, "paper bets this season") }}
+</div>
+
+<h2>Open picks</h2>
+{% if open_picks %}
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num opt">Line now</th><th class="opt">Paper line</th></tr></thead>
+  <tbody>
+  {% for b in open_picks %}
+    <tr>
+      <td class="opt">{{ b.kickoff|kickoff }}</td>
+      <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
+      <td class="strong wrap">{{ b.team }} {{ b.bet_at|spread }} or better at {{ b.bet_at_book }}{% if b.bet_at_odds is not none %} ({{ b.bet_at_odds|price }}){% endif %}
+        {% if b.moved_past %}<br><span class="muted">Consensus moved {{ b.team_line|spread }} → {{ b.line_now|spread }} since capture: check {{ b.bet_at_book }} before betting</span>{% endif %}</td>
+      <td class="num opt">{{ b.line_now|spread }}</td>
+      <td class="opt">{{ b.team_line|spread }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No open picks{% if not reference %} at your books{% endif %}. A pick needs a competitive FBS game found at the week's first look, with one of your books at the number.</p>
+{% endif %}
+
+<details class="rules">
+  <summary>How it works</summary>
+  <ul>
+    <li>Every pick is a <a href="/bets{{ q }}">paper bet</a> that also passes three rules fixed before any of them settled:
+      FBS vs FBS with a line of 21 or less, not week 1; recorded at the week's first look; and one of your books offered the side at the paper line or better when it was recorded.</li>
+    <li>"Or better at" is the best number among your books at that moment. Lines are captured on Sundays, so check the live number: picks whose consensus has moved against you since capture are flagged, and you should check your book's live number before betting.</li>
+    <li>Picks are in kickoff order. Bigger edges haven't covered more often in the holdout seasons, so they aren't ranked by edge.</li>
+    <li>With no books chosen you see the default set ({{ rules.pricing_books|join(', ') or 'any non-offshore book' }}), the list tracked below.</li>
+  </ul>
+</details>
+
+{% if test %}
+<h2>Is the shortlist better than the full list?</h2>
+<p class="note">{{ test.question }}</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Group</th><th class="num opt">Settled</th><th class="num">W–L–P</th><th class="num opt">ROI</th><th class="num opt">Avg CLV</th></tr></thead>
+  <tbody>
+  {% for g in test.groups %}
+    <tr><td class="team wrap">{{ g.label }}</td><td class="num opt">{{ g.settled }}</td><td class="num">{{ g.won }}–{{ g.lost }}–{{ g.push }}</td>
+      <td class="num opt">{{ g.roi|pct }}</td><td class="num opt">{{ g.avg_clv|signed(2) if g.n_clv else "—" }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">{% if test.enough_data %}CLV gap: <strong>{{ test.gap|signed(2) }} pts</strong> [{{ test.ci95[0]|signed(2) }}, {{ test.ci95[1]|signed(2) }}].
+  {% else %}<strong>No conclusion yet.</strong> {{ test.n_in }} and {{ test.n_out }} bets with a closing line, of the {{ test.min_clv_bets }} per group needed by {{ test.decision_point }}.{% endif %}
+  {{ test.decision }}</p>
+{% endif %}
+
+<h2 id="settled">Settled picks</h2>
+{% if settled %}
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Game</th><th>Bet</th><th class="num">Result*</th><th class="num opt">CLV</th></tr></thead>
+  <tbody>
+  {% for b in settled %}
+    <tr><td class="wrap">{{ b.away_team }} @ {{ b.home_team }}</td><td class="wrap">{{ b.team }} {{ b.bet_at|spread }} at {{ b.bet_at_book }}</td>
+      <td class="num">{{ b.status }}</td><td class="num opt">{{ b.clv|signed(1) if b.clv is not none else "—" }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted">*Results and CLV are graded at the paper line, as for every paper bet, not at the number shown.</p>
+{% else %}<p class="muted">None settled yet.</p>{% endif %}
+{% endif %}
+{% endblock %}

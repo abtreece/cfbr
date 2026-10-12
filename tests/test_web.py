@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import polars as pl
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from cfbr.config import load_config
@@ -54,24 +55,27 @@ def _game(gid, slot, home, away, kickoff, completed, hp=None, ap=None, pred=3.0,
     }
 
 
-def _games(now: datetime) -> pl.DataFrame:
-    return pl.DataFrame([
+def _games(now: datetime, spreads: dict | None = None) -> pl.DataFrame:
+    df = pl.DataFrame([
         _game(1, "r01", "Texas A&M", "<b>Evil</b>", T0, True, 31, 10, pred=10.0, spread=-7.0),
         _game(2, "r01", "Hawai'i", "Ohio State", T0, True, 17, 24, pred=-4.0, spread=None),
         _game(3, "r02", "Ohio State", "Texas A&M", now + timedelta(days=2), False, pred=0.01, spread=-3.0),
         _game(4, "r02", "Hawai'i", "FCS:Big Sky", now + timedelta(days=2), False, pred=30.0, spread=float("nan")),
     ], schema_overrides={"home_points": pl.Int64, "away_points": pl.Int64, "margin": pl.Float64,
                          "spread": pl.Float64})
+    if spreads:
+        df = df.with_columns(spread=pl.col("game_id").replace_strict(spreads, default=None).fill_null(pl.col("spread")))
+    return df
 
 
 AP = {"Texas A&M": 3, "Ohio State": 11}
 
 
-def _write_season(root, now, live=True, polls=False):
+def _write_season(root, now, live=True, polls=False, spreads=None):
     """Synthetic season; ``polls=False`` mimics web data built before poll columns existed."""
     d = root / str(SEASON)
     d.mkdir(parents=True, exist_ok=True)
-    ratings, games = _ratings(), _games(now)
+    ratings, games = _ratings(), _games(now, spreads)
     meta = {"season": SEASON, "built_at": now.isoformat(), "config": "test", "live": live,
             "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}}
     if polls:
@@ -503,7 +507,7 @@ def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
     assert [w["label"] for w in body["weekly"]] == ["Week 6"] and body["weekly"][0]["cum_dollars"] == pytest.approx(-1)
     assert body["weekly"][0]["balance"] == pytest.approx(999) and body["summary"]["balance"] == pytest.approx(999)
     assert [t["name"] for t in body["tiers"]] == ["Small", "Medium", "Large"]
-    assert [t["key"] for t in body["tests"]] == ["core_filter", "second_look"]
+    assert [t["key"] for t in body["tests"]] == ["core_filter", "second_look", "shortlist"]
     assert [p["key"] for p in body["what_if"]] == ["flat_1", "flat_2", "all_in"]
     assert body["what_if"][0]["balance"] == pytest.approx(body["summary"]["balance"])
     assert sum(g["settled"] for g in body["tests"][0]["groups"]) == m["settled"]
@@ -589,6 +593,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
     r = c.get("/api/bets")
     assert r.status_code == 402 and r.json()["detail"] == "Subscription required."
     assert c.get("/bets/retro").status_code == 402 and c.get("/api/bets/retro").status_code == 402
+    assert c.get("/bets/shortlist").status_code == 402 and c.get("/api/bets/shortlist").status_code == 402
     assert c.get("/lab").status_code == 402  # edge-vs-close research sits with the bets
     for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/method", "/team/2026/Ohio%20State",
                 "/api/rankings", "/api/games?slot=r02", "/api/team/2026/Ohio%20State", "/api/seasons"):
@@ -1834,3 +1839,163 @@ def test_build_exports_calibration(engine, tmp_path):
     build_season(engine, 2023, tmp_path, now=datetime.now(UTC))
     cal = json.loads((tmp_path / "2023" / "meta.json").read_text())["calibration"]
     assert cal["b_home"] == pytest.approx(engine.calibration(2023).b_home) and cal["sigma"] > 0
+
+
+# -- shortlist book choice ---------------------------------------------------------------
+
+
+def test_choose_books_validates_against_the_selectable_list():
+    from cfbr.config import Bets
+    from cfbr.web.access import book_cookie_value, choose_books
+
+    b = Bets()
+    assert choose_books(["draftkings", "Bovada", "nope", " FanDuel "], b) == {"DraftKings", "FanDuel"}
+    assert choose_books([], b) == choose_books(["Bovada"], b) == frozenset(b.pricing_books)  # offshore is not selectable
+    assert "Bovada" not in b.selectable_books and set(b.pricing_books) <= set(b.selectable_books)
+    v = book_cookie_value({"Bally Bet", "DraftKings"})
+    assert v == "ballybet.draftkings" and choose_books(v.split("."), b) == {"Bally Bet", "DraftKings"}
+
+
+def _write_shortlist_ledger(cfg):
+    from cfbr.bets.ledger import LEDGER_SCHEMA
+
+    first, later = "2026-10-11T14:05:00+00:00", "2026-10-11T20:05:00+00:00"
+    rows = [
+        _bet(1, "home", -3.5) | {"fbs_game": True, "placed_at": first,
+                                 "books": "DraftKings -3.5 (-110/-110); BetMGM -3 (-115/-105)"},
+        _bet(2, "away", 4.0) | {"fbs_game": True, "placed_at": first, "books": "BetMGM +3.5 (-110/-110)"},
+        _bet(3, "home", -3.0) | {"fbs_game": True, "placed_at": later, "books": "DraftKings -3 (-110/-110)"},
+        _bet(5, "home", -7.0, "won", 31, 14, -8.0, week=6) | {"fbs_game": True, "placed_at": "2026-10-04T14:00:00+00:00",
+                                                              "books": "FanDuel -7 (-110/-110)"},
+    ]
+    d = cfg.paths.out_dir / str(SEASON)
+    d.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows, schema=LEDGER_SCHEMA).write_csv(d / "bets.csv")
+
+
+@pytest.fixture
+def shortlist_client(web_cfg):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_shortlist_ledger(web_cfg)
+    return TestClient(create_app(web_cfg), follow_redirects=False)
+
+
+def test_shortlist_defaults_to_the_reference_books(shortlist_client):
+    r = shortlist_client.get("/bets/shortlist")
+    assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
+    html = " ".join(r.text.split())
+    assert "Shortlist" in html and "Texas A&amp;M" in html       # game 1 (home, DK at the line)
+    assert "−3.5 or better at DraftKings" in html
+    assert "Hawai" not in html.split('id="settled"')[0]          # game 2: only BetMGM has its number
+    body = shortlist_client.get("/api/bets/shortlist").json()
+    assert [p["game_id"] for p in body["picks"]] == [1, 5] and body["books"] == ["DraftKings", "FanDuel", "bet365"]
+    assert body["summary"]["won"] == 1
+
+
+def test_shortlist_follows_the_viewers_books(shortlist_client):
+    c = shortlist_client
+    r = c.post("/bets/shortlist/books", content="books=BetMGM&books=Bovada",
+               headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 303 and r.headers["location"] == "/bets/shortlist"
+    # The season being viewed survives a save; raw input never reaches the Location header.
+    r2 = c.post("/bets/shortlist/books", content="books=BetMGM&season=2026",
+                headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r2.headers["location"] == "/bets/shortlist?season=2026"
+    r3 = c.post("/bets/shortlist/books", content="books=BetMGM&season=2026%0d%0aX:1",
+                headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r3.headers["location"] == "/bets/shortlist"
+    assert 'name="season" value="2026"' in c.get("/bets/shortlist?season=2026").text
+    assert "cfbr_books=betmgm" in r.headers["set-cookie"] and "HttpOnly" in r.headers["set-cookie"]
+    body = c.get("/api/bets/shortlist").json()
+    assert body["books"] == ["BetMGM"] and [p["game_id"] for p in body["picks"]] == [1, 2]
+    assert [p["bet_at_book"] for p in body["picks"]] == ["BetMGM", "BetMGM"]
+    # An explicit ?books= wins over the cookie, even when empty (the reference set); junk falls back to the reference set.
+    assert c.get("/api/bets/shortlist?books=FanDuel").json()["books"] == ["FanDuel"]
+    assert c.get("/api/bets/shortlist?books=").json()["books"] == ["DraftKings", "FanDuel", "bet365"]
+    c.cookies.set("cfbr_books", "nope.bovada")
+    assert c.get("/api/bets/shortlist").json()["books"] == ["DraftKings", "FanDuel", "bet365"]
+    # Submitting no books clears the choice.
+    r = c.post("/bets/shortlist/books", content="", headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 303 and ("Max-Age=0" in r.headers["set-cookie"] or 'cfbr_books=""' in r.headers["set-cookie"])
+
+
+def test_shortlist_is_gated_and_linked(web_cfg):
+    from cfbr.web.access import bets_access
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_shortlist_ledger(web_cfg)
+    app = create_app(web_cfg)
+    c = TestClient(app)
+    assert 'href="/bets/shortlist?season=2026"' in c.get("/bets").text
+    app.dependency_overrides[bets_access] = lambda: (_ for _ in ()).throw(HTTPException(402, "no"))
+    assert c.get("/bets/shortlist").status_code == 402
+    assert c.get("/api/bets/shortlist").status_code == 402
+    assert c.post("/bets/shortlist/books", content="books=FanDuel").status_code == 402
+
+
+def _shortlist_html(web_cfg, spreads):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True, spreads=spreads)
+    _write_shortlist_ledger(web_cfg)
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    c.cookies.set("cfbr_books", "betmgm")
+    return " ".join(c.get("/bets/shortlist").text.split())
+
+
+def test_shortlist_flags_only_a_consensus_that_moved_against_the_bettor(web_cfg):
+    # Game 1 is a home bet (paper line -3.5), game 2 an away bet (home line 4.0, so -4.0 for the bettor).
+    # BetMGM beats the consensus on both, so the unmoved lines must not be flagged.
+    html = _shortlist_html(web_cfg, {1: -3.5, 2: 4.0})
+    assert "Texas A&amp;M" in html and "or better at BetMGM" in html
+    assert "Consensus moved" not in html
+
+    html = _shortlist_html(web_cfg, {1: -5.0, 2: 4.0})
+    assert "Consensus moved −3.5 → −5 since capture: check BetMGM before betting" in html
+    assert html.count("Consensus moved") == 1
+
+    html = _shortlist_html(web_cfg, {1: -3.5, 2: 5.0})
+    assert "Consensus moved −4 → −5 since capture: check BetMGM before betting" in html
+    assert html.count("Consensus moved") == 1
+
+    # A line that moved in the bettor's favor is not flagged.
+    assert "Consensus moved" not in _shortlist_html(web_cfg, {1: -2.0, 2: 3.0})
+
+
+def test_shortlist_with_no_picks_at_the_viewers_books(shortlist_client):
+    shortlist_client.cookies.set("cfbr_books", "betrivers")
+    r = shortlist_client.get("/bets/shortlist")
+    assert r.status_code == 200
+    assert "No open picks at your books" in " ".join(r.text.split())
+    body = shortlist_client.get("/api/bets/shortlist?books=BetRivers").json()
+    assert body["picks"] == []
+    assert body["summary"]["settled"] == 0 and body["summary"]["won"] == 0
+
+
+@pytest.mark.parametrize("content", ["[]", '{"seasons": 1}', "{not json"])
+def test_shortlist_survives_a_malformed_pricing_table(web_cfg, content):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_shortlist_ledger(web_cfg)
+    (web_cfg.paths.out_dir / "pricing_table.json").write_text(content)
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    assert c.get("/bets/shortlist").status_code == 200
+
+
+def test_shortlist_ignores_a_pricing_table_that_includes_the_season(shortlist_client, web_cfg, monkeypatch):
+    from cfbr.bets.pricing import PricingTable
+    from cfbr.web import bets as web_bets
+
+    pmf = {m: {3: 0.2, 7: 0.1, -3: 0.1, 10: 0.6} for m in range(36)}
+    seen = []
+    real = web_bets.shortlist
+    monkeypatch.setattr(web_bets, "shortlist", lambda ledger, books, cfg, table=None: seen.append(table) or real(ledger, books, cfg, table))
+    for seasons, expect_table in (([2025, SEASON], False), ([2024, 2025], True), ([], True)):
+        PricingTable(seasons=seasons, n_games=1000, window=2.0, min_games=300, pmf=pmf).save(
+            web_cfg.paths.out_dir / "pricing_table.json")
+        seen.clear()
+        r = shortlist_client.get("/api/bets/shortlist?books=DraftKings,BetMGM")
+        assert r.status_code == 200 and shortlist_client.get("/bets/shortlist").status_code == 200
+        assert [t is not None for t in seen] == [expect_table, expect_table], seasons
+    # Without a usable table the book is picked by points: BetMGM -3 beats DraftKings -3.5 for the home side.
+    PricingTable(seasons=[2025, SEASON], n_games=1000, window=2.0, min_games=300, pmf=pmf).save(
+        web_cfg.paths.out_dir / "pricing_table.json")
+    picks = shortlist_client.get("/api/bets/shortlist?books=DraftKings,BetMGM").json()["picks"]
+    assert [p["bet_at_book"] for p in picks][0] == "BetMGM"
