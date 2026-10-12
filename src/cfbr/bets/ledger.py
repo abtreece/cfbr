@@ -498,7 +498,7 @@ def tests_markdown(ledger: pl.DataFrame, cfg: Bets) -> list[str]:
     from cfbr.bets.experiments import tracked_tests
 
     lines = ["## Tracked tests", "",
-             "Pre-registered splits of the bets above (rules fixed 2026-10-11, see DECISIONS.md). They don't change "
+             "Pre-registered splits of the bets above (T1 and T2 rules fixed 2026-10-11, T3 2026-10-12, see DECISIONS.md). They don't change "
              "which bets are recorded. Primary metric: the gap in average CLV between the two groups.", ""]
     for t in tracked_tests(ledger, cfg):
         lines += [f"### {t['name']}", "", t["question"], "",
