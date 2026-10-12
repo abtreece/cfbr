@@ -8,7 +8,6 @@ and every route depends on :func:`cfbr.web.access.bets_access`.
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Callable
 from datetime import datetime
 
@@ -18,6 +17,7 @@ from fastapi.responses import HTMLResponse
 
 from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, weekly, what_if
+from cfbr.bets.shortlist import BOOK_RE
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
 from cfbr.web.access import bets_access, owner_viewer
@@ -66,9 +66,6 @@ def bet_rows(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
     return out
 
 
-_BOOK = re.compile(r"^(?P<book>.+?) (?P<spread>[+-]\d+(?:\.\d+)?)(?: \((?P<hp>[+-]\d+)/(?P<ap>[+-]\d+)\))?(?P<rest>.*)$")
-
-
 def books_from_side(books: str | None, home: bool) -> str | None:
     """The ledger's per-book lines ("DraftKings +5.5 (-110/-110); ...", home spread and home/away
     prices) rewritten from the bet team's side: "DraftKings −5.5 (−110); ...". Entries that don't
@@ -77,7 +74,7 @@ def books_from_side(books: str | None, home: bool) -> str | None:
         return books
     out = []
     for entry in books.split("; "):
-        m = _BOOK.match(entry)
+        m = BOOK_RE.match(entry)
         if m is None:
             out.append(entry)
             continue
