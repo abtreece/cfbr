@@ -25,7 +25,10 @@
 {% if locked %}
 {{ premium_notice(season, "season odds") }}
 {% else %}
-<div class="lede sim-notes">{{ notes }}</div>
+<details class="rules sim-notes">
+  <summary>How these are simulated</summary>
+  {{ notes }}
+</details>
 
 <div class="table-wrap">
 <table class="data sortable" id="odds">
@@ -53,7 +56,7 @@
   </tbody>
 </table>
 </div>
-<p class="note">Click a column header to sort. Bowl = 6+ wins. Bye = a top-4 playoff seed. &lt;1% means it happened in at least one simulated season but under 1 in 100.</p>
+<p class="note">Click a column header to sort. Bowl = 6+ wins; Bye = a top-4 playoff seed. <a href="/method#projections">More →</a></p>
 
 <h2>Conference title odds</h2>
 <div class="conf-grid">

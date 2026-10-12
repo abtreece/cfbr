@@ -9,10 +9,10 @@
 
 <h1>{{ season }} accuracy</h1>
 <p class="lede">
-  Every prediction was made walk-forward, using only games played before that week kicked off.
-  {% if kind == "tuning" %}<span class="badge">Tuning season</span> Hyperparameters were tuned on {{ cfg.seasons.tuning[0] }}–{{ cfg.seasons.tuning[1] }}, so these numbers are slightly optimistic.
+  {% if kind == "tuning" %}<span class="badge">Tuning season</span> Slightly optimistic: the model was tuned on these seasons.
   {% elif kind == "holdout" %}<span class="badge">Holdout season</span> Never used for tuning.
   {% else %}<span class="badge">Live season</span> Season to date.{% endif %}
+  <a href="/method#accuracy">How accuracy is measured →</a>
 </p>
 
 {% if summary.n_games %}
@@ -103,12 +103,15 @@
   </tbody>
 </table>
 </div>
+{% if runs|selectattr("metrics.diagnostics")|list %}
+<p class="note">In the diagnostics: Bias = actual − predicted home margin. Slope = OLS slope of actual on predicted (above 1: predictions too timid, below 1: too bold).
+  Blend = actual margin fit on line and model; the model weight is the information it carries beyond the closing line.</p>
+{% endif %}
 {% for run in runs %}{% set d = run.metrics.diagnostics %}{% if d and d.n_games %}
 <details class="table-view">
   <summary>Diagnostics · <code>{{ run.run_id }}</code> ({{ run.metrics.seasons[0] }}–{{ run.metrics.seasons[-1] }}, {{ d.n_games }} games)</summary>
-  <p class="note">Bias = actual − predicted home margin. Slope = OLS slope of actual on predicted (above 1: predictions too timid, below 1: too bold).
-  {% if d.blend %}Blend: actual ≈ {{ d.blend.w_line|num(3) }}·line + {{ d.blend.w_model|num(3) }}·model over {{ d.blend.n }} lined games
-  (MAE line {{ d.blend.mae_line|num(2) }}, model {{ d.blend.mae_model|num(2) }}, blend {{ d.blend.mae_blend|num(2) }}); the model weight is the information it carries beyond the closing line.{% endif %}</p>
+  {% if d.blend %}<p class="note">Blend: actual ≈ {{ d.blend.w_line|num(3) }}·line + {{ d.blend.w_model|num(3) }}·model over {{ d.blend.n }} lined games
+  (MAE line {{ d.blend.mae_line|num(2) }}, model {{ d.blend.mae_model|num(2) }}, blend {{ d.blend.mae_blend|num(2) }}).</p>{% endif %}
   <div class="diag-grid">
   <div class="table-wrap"><table class="data">
     <thead><tr><th>Week</th><th class="num">Games</th><th class="num">Bias</th><th class="num">Slope</th><th class="num">MAE</th></tr></thead>

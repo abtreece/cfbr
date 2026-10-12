@@ -18,17 +18,15 @@
 <p class="muted">No retroactive paper bets yet. <code>cfbr bets-retro</code> builds them.</p>
 {% else %}
 <div class="callout">
-  <strong>Retroactive, not live.</strong> These bets were reconstructed after the games, not recorded before kickoff,
-  so they are kept apart from the live record and never count toward its {{ rules.min_sample }}-bet minimum.
-  Each week uses the model's point-in-time prediction (fit only on games played before that week's first kickoff),
-  compared with the <strong>opening</strong> line and graded at that line; closing-line value (CLV) is measured against the closing line.
+  <strong>Retroactive, not live.</strong> Reconstructed after the games and kept apart from the live record.
+  Each week uses the model's point-in-time prediction against the <strong>opening</strong> line, graded at that line.
 </div>
 
 <details class="rules">
   <summary>How these were built</summary>
   <ul>
-    <li>Same rules as the live bets: bet the model's side when it differs from the opening consensus by at least {{ rules.threshold|num }} points,
-      {{ rules.odds }} odds, {{ rules.stake|num }} unit to win, starting from a {{ rules.bankroll|money(false) }} bankroll with every bet a flat {{ rules.unit_value|money(false) }} unit ({{ (rules.unit_value / rules.bankroll)|pct(0) }} of the starting bankroll, not compounding). Break-even win rate {{ breakeven|pct }}.</li>
+    <li>Same rules as the <a href="/bets{% if season %}?season={{ season }}{% endif %}#how">live bets</a>, applied to the opening consensus;
+      they never count toward the live record's {{ rules.min_sample }}-bet minimum.</li>
     <li>Opening lines come from CFBD: DraftKings, plus offshore Bovada in the consensus. Other US books have no free line history,
       so the best line is DraftKings' opening number.</li>
     <li>Two models: the published model (v1 prior), and the roster-prior shadow model, which isn't published. The roster prior was judged on these same weeks,
@@ -87,7 +85,7 @@
 </table>
 </div>
 
-{% with plans=m.what_if, chart=m.what_if_chart, cid="what-if-" ~ m.model, hx="h3" %}{% include "_what_if.html" %}{% endwith %}
+{% with plans=m.what_if, chart=m.what_if_chart, cid="what-if-" ~ m.model, hx="h3", explain=loop.first %}{% include "_what_if.html" %}{% endwith %}
 
 <h3>By edge tier</h3>
 <div class="table-wrap">
@@ -132,6 +130,6 @@
   </div>
 </details>
 {% endfor %}
-<p class="note">Bet lines are the opening line for the team bet on. Final score is away–home. Close is the closing consensus; CLV &gt; 0 means the opening line beat it.</p>
+<p class="note">Bet lines are the opening line for the team bet on; CLV &gt; 0 means it beat the close.</p>
 {% endif %}
 {% endblock %}

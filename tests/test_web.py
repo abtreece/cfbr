@@ -231,10 +231,11 @@ def test_rankings_show_poll_columns_and_note(poll_client):
 def test_team_page_poll_tiles_and_opponent_rank(poll_client):
     html = " ".join(poll_client.get("/team/2026/Ohio%20State").text.split())
     assert "AP poll</div><div class=\"tile-value\">#11" in html
-    assert "Coaches poll</div><div class=\"tile-value\">#12" in html
+    assert "Coaches #12" in html  # Coaches rank rides on the AP tile
     assert '<span class="pr">#3</span><a href="/team/2026/Texas%20A%26M">' in html  # upcoming opponent
     html = " ".join(poll_client.get("/team/2026/Hawai%27i").text.split())
     assert "AP poll</div><div class=\"tile-value\">Unranked" in html
+    assert "Coaches unranked" in html  # a released poll without the team still says so
 
 
 def test_games_show_ap_rank_before_names(poll_client):
@@ -245,7 +246,7 @@ def test_games_show_ap_rank_before_names(poll_client):
 def test_pages_render_without_poll_columns(client):
     # The default fixture predates polls; the store fills the columns with nulls.
     html = client.get("/rankings").text
-    assert ">AP</th>" in html and "Polls for comparison" not in html
+    assert ">AP</th>" in html and "Polls:" not in html
     assert client.get("/api/rankings").json()["teams"][0]["ap_rank"] is None
 
 
@@ -521,6 +522,7 @@ def test_retro_bets_page_and_api(web_cfg):
     assert "Week 1" in html and "−$1" in html and "$1,009" in html and "Retro U −7" in html
     assert "3 in common, 3 on the same side" in html
     assert html.count("What if: staking plans") == 2  # one panel per model
+    assert html.count("not a separate record") == 1  # explained once, above the first
     body = c.get("/api/bets/retro").json()
     assert body["retroactive"] is True and [m["model"] for m in body["models"]] == ["v1", "roster"]
     led = read_retro(web_cfg.paths.out_dir / str(SEASON) / "bets_retro.csv")
@@ -580,7 +582,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
     r = c.get("/api/bets")
     assert r.status_code == 402 and r.json()["detail"] == "Subscription required."
     assert c.get("/bets/retro").status_code == 402 and c.get("/api/bets/retro").status_code == 402
-    for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/team/2026/Ohio%20State",
+    for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/method", "/team/2026/Ohio%20State",
                 "/api/rankings", "/api/games?slot=r02", "/api/team/2026/Ohio%20State", "/api/seasons"):
         r = c.get(url)
         assert r.status_code == 200, url
@@ -802,19 +804,16 @@ def test_roster_page_departure_reasons(web_cfg):
     assert "not on a roster · senior last season" in html
     assert '<option value="portal_transfer">' in html
     assert "2 drafted · 1 now on another roster" in html
-    team_html = " ".join(client.get("/team/2026/Texas%20A%26M").text.split())
-    assert "2 drafted · 1 to other rosters" in team_html
 
 
-def test_team_page_shows_roster_card(roster_client):
+def test_team_page_shows_roster_line(roster_client):
     html = " ".join(roster_client.get("/team/2026/Texas%20A%26M").text.split())
     assert '<a href="/roster/2026/Texas%20A%26M">Full roster' in html
-    assert "1 returners · 1 transfers in" in html
-    # The starting-QB tile names him and says where he is, not a bare Yes/No.
-    assert ("starting QB</div><div class=\"tile-value\">Sam Starter</div> "
-            "<div class=\"tile-sub\">returns · 380 pass att. last season" in html)
+    assert "(1 returners, 1 transfers in)" in html
+    # The starting QB is named with where he is, not a bare Yes/No.
+    assert "last season's starting QB Sam Starter (returns · 380 pass att. last season)" in html
     assert "Starting QB back" not in html
-    # No roster rows for this team -> no card.
+    # No roster rows for this team -> no roster line.
     assert "/roster/2026/Hawai%27i" not in roster_client.get("/team/2026/Hawai%27i").text
 
 
@@ -1222,17 +1221,10 @@ def test_explain_rating_percentiles():
     assert 1 <= res["sos_rank"] <= 4 and res["top25_w"] == 1
 
 
-def test_rankings_vs_ap_column_and_box(poll_client):
+def test_rankings_vs_ap_column(poll_client):
     html = " ".join(poll_client.get("/rankings?season=2026&week=1").text.split())
-    assert "vs AP" in html and "Model vs. the AP poll" in html
-    # Texas A&M: model #1, AP #3 -> poll lower than model (model higher): vs_ap = -2.
-    from cfbr.web.app import ap_disagreements, rankings_rows
-
-    rows = [{"team": "A", "rank": 1, "ap_rank": 3, "vs_ap": -2}, {"team": "B", "rank": 9, "ap_rank": 2, "vs_ap": 7},
-            {"team": "C", "rank": 20, "ap_rank": None, "vs_ap": None}]
-    box = ap_disagreements(rows)
-    assert [r["team"] for r in box["over"]] == ["B"] and [r["team"] for r in box["under"]] == ["A"]
-    assert [r["team"] for r in box["unranked"]] == ["C"]
+    assert "vs AP" in html
+    # Texas A&M: model #1, AP #3 -> model has the team higher than the poll: vs_ap = -2.
     api = poll_client.get("/api/rankings?season=2026&week=1").json()["teams"]
     assert {t["team"]: t["vs_ap"] for t in api}["Texas A&M"] == -2
 
@@ -1279,6 +1271,27 @@ def test_matchup_page(web_cfg):
 
 def test_footer_shows_build_time(client):
     assert "data built" in client.get("/rankings").text
+
+
+def test_method_page_holds_shared_definitions(client, web_cfg):
+    r = client.get("/method")
+    assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=3600"
+    html = " ".join(r.text.split())
+    assert "never model inputs" in html and "Tuning seasons</strong> (2015–2021)" in html
+    # Pooling follows the config the site runs on (tuned.toml pools by conference).
+    pooled = "by conference" if web_cfg.prep.fcs_pooling == "conference" else "into a single rated team"
+    assert f"FCS opponents are pooled {pooled}" in html
+    for anchor in ("rating", "point-in-time", "lines", "polls", "accuracy", "projections", "rosters"):
+        assert f'id="{anchor}"' in html
+    # Every page links to it from the footer instead of repeating the caveats.
+    rankings = client.get("/rankings").text
+    assert '<a href="/method">' in rankings and "never model inputs" not in rankings
+
+
+def test_bets_hide_columns_the_ledger_never_filled(bets_client):
+    # The synthetic ledger predates Edge ¢ and Cover %, so those columns are left out, not shown as dashes.
+    html = bets_client.get("/bets").text
+    assert ">Edge ¢</th>" not in html and ">Cover %</th>" not in html
 
 
 def test_build_exports_calibration(engine, tmp_path):

@@ -41,9 +41,7 @@
   <div class="tile"><div class="tile-label">Ratings</div><div class="tile-value" id="h2h-ratings">—</div><div class="tile-sub" id="h2h-ratings-sub"></div></div>
   <div class="tile"><div class="tile-label">Home edge</div><div class="tile-value">{{ cal.b_home|signed }}</div><div class="tile-sub">points, calibrated{% if cal.stage2 %} (plus stage-2 terms){% endif %}; σ = {{ cal.sigma|num }}</div></div>
 </div>
-<p class="note">Margin = rating difference + home edge (0 on a neutral field); win probability = Φ(margin / σ).
-  {% if cal.stage2 %}Calibration v2 then adjusts the margin by the prior-share and home terms fitted on past seasons, as the game predictions do.{% endif %}
-  Computed in your browser from the published ratings; nothing is fitted here.</p>
+<p class="note"><a href="/method#matchup">How the margin and win probability are computed →</a></p>
 <script id="h2h-data" type="application/json">{{ {"teams": teams, "cal": cal}|tojson }}</script>
 <script>
 (function () {
