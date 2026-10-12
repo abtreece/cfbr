@@ -17,15 +17,27 @@
 <p class="lede">The paper bets worth a real bet at your sportsbooks: competitive FBS games, found at the week's first look,
   where one of your books had the number. Not betting advice. Check the live line before you bet.</p>
 
-<form class="filters" method="post" action="/bets/shortlist/books">
-  {% if season %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
-  <fieldset><legend>Your books{% if reference %} <span class="muted">(default)</span>{% endif %}</legend>
-  {% for b in rules.selectable_books %}
-    <label><input type="checkbox" name="books" value="{{ b }}"{% if b in books %} checked{% endif %}> {{ b }}</label>
-  {% endfor %}
-  </fieldset>
-  <button type="submit">Save</button>
-</form>
+<details class="books">
+  <summary>Your books: <strong>{% for b in rules.selectable_books if b in books %}{{ b }}{% if not loop.last %}, {% endif %}{% endfor %}</strong>{% if reference %} <span class="muted">(default)</span>{% endif %} <span class="change">Change</span></summary>
+  <form class="book-choices" method="post" action="/bets/shortlist/books">
+    {% if season %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
+    <fieldset>
+      <legend class="sr-only">Sportsbooks you bet at</legend>
+      {% for b in rules.selectable_books %}
+      <label><input type="checkbox" name="books" value="{{ b }}"{% if b in books %} checked{% endif %}>{{ b }}</label>
+      {% endfor %}
+    </fieldset>
+    <div class="actions">
+      <button type="submit">Save</button>
+      {% if not reference %}<button type="submit" class="link" form="books-default">Use default ({{ rules.pricing_books|join(', ') or 'any book' }})</button>{% endif %}
+    </div>
+  </form>
+  {% if not reference %}
+  <form id="books-default" method="post" action="/bets/shortlist/books">
+    {% if season %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
+  </form>
+  {% endif %}
+</details>
 
 {% if open_picks is not defined %}
 <p class="muted">No paper bets recorded yet.</p>

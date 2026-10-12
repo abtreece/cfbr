@@ -1999,3 +1999,18 @@ def test_shortlist_ignores_a_pricing_table_that_includes_the_season(shortlist_cl
         web_cfg.paths.out_dir / "pricing_table.json")
     picks = shortlist_client.get("/api/bets/shortlist?books=DraftKings,BetMGM").json()["picks"]
     assert [p["bet_at_book"] for p in picks][0] == "BetMGM"
+
+
+def test_shortlist_book_picker_summarizes_the_choice_and_offers_the_default(shortlist_client):
+    c = shortlist_client
+    html = " ".join(c.get("/bets/shortlist").text.split())
+    assert "Your books: <strong>DraftKings, FanDuel, bet365</strong>" in html and "(default)" in html
+    assert 'form="books-default"' not in html                  # already on the default: no reset offered
+    c.post("/bets/shortlist/books", content="books=BetMGM&season=2026",
+           headers={"content-type": "application/x-www-form-urlencoded"})
+    html = " ".join(c.get("/bets/shortlist?season=2026").text.split())
+    assert "Your books: <strong>BetMGM</strong>" in html and "(default)" not in html
+    assert 'id="books-default"' in html and 'form="books-default"' in html
+    # The reset form posts no books (clearing the cookie) and keeps the season.
+    reset = html.split('id="books-default"')[1].split("</form>")[0]
+    assert 'name="books"' not in reset and 'name="season" value="2026"' in reset
