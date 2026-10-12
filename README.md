@@ -81,7 +81,7 @@ Code is written on a dev machine and reaches the server (javelin, `~/cfb-ratings
 deploy/deploy.sh    # DEPLOY_HOST / DEPLOY_DIR override javelin and cfb-ratings
 ```
 
-It sends itself over ssh and, on the server: refuses a dirty working tree; holds the `cfbr weekly` lock (refuses while a run is in progress, and no run starts mid-deploy); fast-forwards to `origin/main` (refuses anything else); `uv sync --frozen`; runs the tests against the real data; rebuilds `out/web/`; restarts `cfbr-web`; and checks `/`, `/accuracy`, `/bets` and `/api/bets` for 200 and `data/web.log` for new tracebacks. If any step after the fast-forward fails, it resets to the previous commit, rebuilds `out/web/` and restarts.
+It sends itself over ssh and, on the server: refuses a dirty working tree; holds the `cfbr weekly` lock (refuses while a run is in progress, and no run starts mid-deploy); fast-forwards to `origin/main` (refuses anything else); `uv sync --frozen`; runs the tests against the real data; rebuilds `out/web/`; restarts `cfbr-web`; and checks `/` (after its redirect to `/rankings`), `/accuracy`, `/bets` and `/api/bets` for 200 and `data/web.log` for new tracebacks. If any step after the fast-forward fails, it resets to the previous commit, rebuilds `out/web/` and restarts.
 
 The restart is required: Jinja reloads templates from disk at once, but the Python already loaded (routes, row builders, filters) stays the old version until the process restarts, and a new template asking for a column the old code never produces returns a 500. Cron jobs run `uv run` from the checkout and pick up new code on their next run. Data-only changes (a `cfbr weekly` run, new files under `out/`) need no deploy.
 
