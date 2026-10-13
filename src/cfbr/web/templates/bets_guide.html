@@ -47,7 +47,8 @@
 
 <h2 id="consensus">Consensus and your book</h2>
 <ul>
-  <li><strong>Consensus</strong> is the median spread across every book that posted the game, offshore books included. It's the market's best guess, and the number paper bets are recorded and graded at.</li>
+  <li><strong>Consensus</strong> is the median spread across the books in the regular line feeds, offshore books included. It's the market's best guess, and the number paper bets are recorded and graded at.
+    Lines fetched only to price a bet{% if "bet365" in rules.pricing_books %} (bet365's){% endif %} are marked "pricing only" on the bets pages and never count toward it.</li>
   <li><strong>Your book's number</strong> is what you can actually bet. Books differ by a half point or a point, and by price.</li>
   <li>On the shortlist, <strong>"−3.5 or better at DraftKings"</strong> means DraftKings had −3.5 or a friendlier number (−3, −2.5) when the bet was recorded. For an underdog, "or better" means a bigger number (+7.5 beats +7).</li>
   <li>Offshore books (Bovada, BetOnline and others) count toward the consensus as market information, but a paper bet is never priced at one.</li>
@@ -112,7 +113,8 @@
   <li><strong>If the line moved past the "or better" number,</strong> look at "edge now". Under {{ "%g"|format(rules.threshold) }}, pass.</li>
   <li><strong>A big line move or a big edge is a reason to check the news</strong> (injuries, suspensions, weather) before betting.</li>
   <li><strong>A bigger edge isn't a surer bet.</strong> Don't bet more because the edge is larger.</li>
-  <li><strong>Bet a flat amount.</strong> The paper bets use 1 unit (${{ "%g"|format(unit_risk) }} to win ${{ "%g"|format(unit_win) }}), about 1% of a ${{ "{:,.0f}".format(rules.bankroll) }} bankroll. Never chase losses.</li>
+  <li><strong>Bet a flat amount.</strong> Every paper bet is {{ "%g"|format(rules.stake) }} {{ "unit" if rules.stake == 1 else "units" }} (${{ "%g"|format(unit_risk) }} to win ${{ "%g"|format(unit_win) }}),
+    where a unit is ${{ "%g"|format(rules.unit_value) }}, {{ (rules.unit_value / rules.bankroll)|pct(1) }} of a ${{ "{:,.0f}".format(rules.bankroll) }} bankroll. Never chase losses.</li>
   <li><strong>Judge yourself on CLV,</strong> not on a week's record.</li>
   <li><strong>At {{ rules.odds|price }} you need {{ break_even_std|pct }} to break even.</strong> Most bettors don't get there, and none of the model's holdout tiers above did.</li>
 </ol>

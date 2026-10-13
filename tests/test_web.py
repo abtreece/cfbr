@@ -502,9 +502,14 @@ def test_bets_guide(bets_client, web_cfg):
     # Definitions and made-up examples only: nothing from the ledger.
     assert "TestBook" not in html and "Texas A&amp;M" not in html
 
+    assert "1 unit ($11 to win $10), where a unit is $10, 1.0% of a $1,000 bankroll" in html
+    assert 'Lines fetched only to price a bet (bet365\'s) are marked "pricing only"' in html
+
     web_cfg.bets.threshold = 4.0
+    web_cfg.bets.stake, web_cfg.bets.unit_value, web_cfg.bets.bankroll = 2.0, 25.0, 1000.0
     html = " ".join(TestClient(create_app(web_cfg)).get("/bets/guide").text.split())
     assert "at least <strong>4 points</strong>" in html and "Under 4, pass." in html
+    assert "2 units ($55 to win $50), where a unit is $25, 2.5% of a $1,000 bankroll" in html
 
 
 def test_bets_pages_link_the_guide(bets_client):
