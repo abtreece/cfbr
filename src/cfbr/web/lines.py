@@ -8,7 +8,8 @@ snapshot (:func:`refresh_lines`).
 
 ``games.parquet`` keeps each game's CFBD line in ``cfbd_spread``, so every refresh recomputes
 ``spread`` from scratch: a game the newest snapshot no longer carries falls back to CFBD instead
-of keeping a stale Odds API line.
+of keeping a stale Odds API line. ``book_lines.parquet`` is rewritten alongside it with each
+book's line for those same games (:func:`book_lines`), for the shortlist's "now" numbers.
 
 Display only: lines are never model inputs, nothing here touches ratings, predictions or a
 ledger, and finished games keep their closing line from CFBD.
@@ -30,19 +31,44 @@ from cfbr.ingest.odds import latest_odds_snapshot, odds_frame, team_aliases
 log = logging.getLogger(__name__)
 
 
-def odds_consensus(raw_dir: Path, season: int, games: pl.DataFrame) -> tuple[datetime, pl.DataFrame] | None:
-    """(snapshot time, game_id + spread) from the newest Odds API snapshot: the median home
-    spread across every book that posted the game, offshore included, the same consensus the
-    paper bets use. ``games`` needs game_id, home_team, away_team, kickoff_ts. None without a
-    snapshot."""
+BOOK_LINES_SCHEMA = {"game_id": pl.Int64, "book": pl.Utf8, "home_spread": pl.Float64,
+                     "home_price": pl.Int64, "away_price": pl.Int64, "as_of": pl.Utf8}
+
+
+def odds_books(raw_dir: Path, season: int, games: pl.DataFrame) -> tuple[datetime, pl.DataFrame] | None:
+    """(snapshot time, per-book home spreads and prices) from the newest Odds API snapshot.
+    ``games`` needs game_id, home_team, away_team, kickoff_ts. None without a snapshot."""
     snap = latest_odds_snapshot(raw_dir, season)
     if snap is None:
         return None
     ts, events = snap
     teams_path = raw_dir / "teams_fbs" / str(season) / "season.json"
     aliases = team_aliases(json.loads(teams_path.read_text())) if teams_path.exists() else {}
-    books = odds_frame(events, games.select("game_id", "home_team", "away_team", "kickoff_ts"), aliases)
-    return ts, books.group_by("game_id").agg(pl.col("spread").median())
+    return ts, odds_frame(events, games.select("game_id", "home_team", "away_team", "kickoff_ts"), aliases)
+
+
+def consensus(books: tuple[datetime, pl.DataFrame] | None) -> tuple[datetime, pl.DataFrame] | None:
+    """(snapshot time, game_id + spread): the median home spread across every book that posted
+    the game, offshore included, the same consensus the paper bets use."""
+    if books is None:
+        return None
+    ts, frame = books
+    return ts, frame.group_by("game_id").agg(pl.col("spread").median())
+
+
+def book_lines(games: pl.DataFrame, books: tuple[datetime, pl.DataFrame] | None) -> pl.DataFrame:
+    """Each book's line and prices for the games :func:`apply_lines` gave an Odds API line
+    (``line_source == "odds"``), so the shortlist can say what the pick's own book offers now.
+    Empty when ``books`` is None, so an older file never outlives the lines it came from."""
+    if books is None:
+        return pl.DataFrame(schema=BOOK_LINES_SCHEMA)
+    ts, frame = books
+    fresh_ids = games.filter(pl.col("line_source") == "odds").select("game_id")
+    return (frame.join(fresh_ids, on="game_id", how="semi")
+            .select("game_id", pl.col("provider").alias("book"), pl.col("spread").alias("home_spread"),
+                    "home_price", "away_price", as_of=pl.lit(ts.isoformat()))
+            .cast(BOOK_LINES_SCHEMA)
+            .sort("game_id", "book"))
 
 
 def newer_than(fresh: tuple[datetime, pl.DataFrame] | None,
@@ -121,14 +147,16 @@ def refresh_lines(cfg: Config, season: int) -> int | None:
             return None
         if not meta.get("live", True):
             return None  # a finished season keeps its closing lines
-        fresh = newer_than(odds_consensus(cfg.paths.raw_dir, season, games), meta.get("cfbd_lines_as_of"))
+        books = odds_books(cfg.paths.raw_dir, season, games)
+        fresh = newer_than(consensus(books), meta.get("cfbd_lines_as_of"))
         if fresh is None:
             return None
         out = apply_lines(games.drop([c for c in ("line_source", "line_as_of") if c in games.columns]),
                           fresh, meta.get("cfbd_lines_as_of"))
-        tmp = d / ".games.parquet.tmp"
-        out.write_parquet(tmp)
-        tmp.replace(games_path)
+        for name, df in (("games", out), ("book_lines", book_lines(out, books))):
+            tmp = d / f".{name}.parquet.tmp"
+            df.write_parquet(tmp)
+            tmp.replace(d / f"{name}.parquet")
         meta["lines_as_of"] = fresh[0].isoformat()
         tmp = d / ".meta.json.tmp"
         tmp.write_text(json.dumps(meta, indent=2, default=str))

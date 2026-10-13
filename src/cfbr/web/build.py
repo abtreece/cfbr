@@ -22,7 +22,7 @@ from cfbr.model.calibrate import STAGE2_TERMS
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 from cfbr.report.roster_web import write_roster_web
-from cfbr.web.lines import apply_lines, newer_than, odds_consensus
+from cfbr.web.lines import apply_lines, book_lines, consensus, newer_than, odds_books
 
 ROSTER_FILES = ("roster_players", "roster_departures", "roster_summary")
 
@@ -221,12 +221,14 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
     # Display lines: CFBD's (kept as cfbd_spread), with the newest Odds API consensus on unplayed
     # games, so a rebuild never rolls the site back to older lines (see cfbr.web.lines).
     cfbd_as_of = lines_as_of(eng.cfg.paths.raw_dir, season)
-    fresh = newer_than(odds_consensus(eng.cfg.paths.raw_dir, season, games), cfbd_as_of)
+    books = odds_books(eng.cfg.paths.raw_dir, season, games)
+    fresh = newer_than(consensus(books), cfbd_as_of)
     games = apply_lines(games.rename({"spread": "cfbd_spread"}), fresh, cfbd_as_of)
     # Write to temp names then rename, so a running server never reads a half-written file.
     # meta.json goes last: its mtime is the server's reload signal, and the server treats a
     # parquet newer than meta.json as a rebuild in progress (see cfbr.web.store).
-    for name, df in (("ratings", ratings), ("games", games)):
+    for name, df in (("ratings", ratings), ("games", games),
+                     ("book_lines", book_lines(games, books if fresh is not None else None))):
         tmp = out / f".{name}.parquet.tmp"
         df.write_parquet(tmp)
         tmp.replace(out / f"{name}.parquet")

@@ -34,7 +34,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
 | `cfbr check` | Daily dead-man's switch: alert when no successful `weekly` run is recorded since the last Sunday in season, or the backup is stale |
 | `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
-| `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon |
+| `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon, plus weekdays 3× with `--if-games-within 168` for fresher site lines |
 | `cfbr market-ratings --season 2026` | Diagnostic: invert the closing lines into market-implied ratings per slot and compare with the model's (`results/market_ratings_{season}.md`); no API calls |
 | `cfbr moneyline-eval` | Market-only test: is a side's moneyline a better buy than its spread at −110, both priced with the points-to-cents table (`results/moneyline_pricing.md`); no API calls |
 | `cfbr sim --season 2026 --week 6` | Simulate the rest of the season (win totals, conference titles, playoff odds) into `out/{season}/wNN/season_sim.*`; `cfbr weekly` runs it too |
@@ -106,14 +106,17 @@ On macOS, `tests/test_backup.py` needs GNU rsync (`brew install rsync`); the sys
 0 20,21 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "15" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 ```
 
-`odds-snapshot` pulls the pre-kickoff Odds API snapshot that grades paper-bet CLV. It reads kickoffs from the cached CFBD games file (no CFBD call) and exits without spending credits unless a game kicks off within 6 h, so the Sunday and Monday runs cost nothing on a normal week; about 14–18 credits a week in all. After saving a snapshot it also refreshes the site's Vegas lines for unplayed games from that snapshot (the median across books), patching `out/web/{season}/games.parquet` and rewriting `meta.json` last; it skips the refresh while `cfbr weekly` or a deploy holds the lock, and a refresh failure alerts but never loses the snapshot. Finished games keep CFBD's closing line. No restart is needed: the server reloads on the new `meta.json`.
+`odds-snapshot` pulls the pre-kickoff Odds API snapshot that grades paper-bet CLV. It reads kickoffs from the cached CFBD games file (no CFBD call) and exits without spending credits unless a game kicks off within 6 h, so the Sunday and Monday 4:40 PM runs cost nothing on a normal week. The weekday 9 AM, 1 PM and 9 PM runs pass `--if-games-within 168`, so they pull whenever a game is within a week: they keep the site's lines and the shortlist's "now" numbers fresh between Sunday's capture and the weekend (free in the offseason). About 46–50 credits a week in all, roughly 215 a month with `cfbr weekly`'s, against the free tier's 500. After saving a snapshot it also refreshes the site's Vegas lines for unplayed games from that snapshot (the median across books) and each book's line (`book_lines.parquet`, for the shortlist), patching `out/web/{season}/` and rewriting `meta.json` last; it skips the refresh while `cfbr weekly` or a deploy holds the lock, and a refresh failure alerts but never loses the snapshot. Finished games keep CFBD's closing line. No restart is needed: the server reloads on the new `meta.json`. Extra snapshots never move a paper bet: only `cfbr weekly` records bets, from the snapshot it takes itself, and closes use the newest snapshot in the 12 h before kickoff.
 
 ```cron
-# Odds API closing snapshots (Central): Tue-Fri 4:40 PM, Fri 9 PM, Sat 10:40 AM, 2:10 PM, 6:10 PM, 9:30 PM,
-# Sun and Mon 4:40 PM (for the rare Sunday/Monday game; free when nothing kicks off).
-# Runs that land after UTC midnight in winter (Sat 6:10 PM CST = 00:10 UTC Sunday) get their own line.
+# Odds API snapshots (Central). Every weekday 9 AM, 1 PM and 9 PM whenever a game is within a week;
+# closing snapshots Tue-Fri 4:40 PM, Sat 10:40 AM, 2:10 PM, 6:10 PM, 9:30 PM, and Sun and Mon 4:40 PM
+# (for the rare Sunday/Monday game; free when nothing kicks off).
+# Runs that land after UTC midnight (9 PM; Sat 6:10 PM CST = 00:10 UTC Sunday) get their own line.
+5 14,15 * * 1-5   [ "$(TZ=America/Chicago date +\%H)" = "09" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot --if-games-within 168 >> data/odds-snapshot.log 2>&1
+5 18,19 * * 1-5   [ "$(TZ=America/Chicago date +\%H)" = "13" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot --if-games-within 168 >> data/odds-snapshot.log 2>&1
+0 2,3 * * 2-6     [ "$(TZ=America/Chicago date +\%H)" = "21" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot --if-games-within 168 >> data/odds-snapshot.log 2>&1
 40 21,22 * * 2-5  [ "$(TZ=America/Chicago date +\%H)" = "16" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
-0 2,3 * * 6       [ "$(TZ=America/Chicago date +\%H)" = "21" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
 40 15,16 * * 6    [ "$(TZ=America/Chicago date +\%H)" = "10" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
 10 19,20 * * 6    [ "$(TZ=America/Chicago date +\%H)" = "14" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
 10 23 * * 6       [ "$(TZ=America/Chicago date +\%H)" = "18" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1

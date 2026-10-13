@@ -1362,6 +1362,11 @@ def test_refresh_lines_patches_the_site_and_never_sticks(web_cfg):
     assert after["pred_margin"].to_list() == games.sort("game_id")["pred_margin"].to_list()
     meta = json.loads((d / "meta.json").read_text())
     assert meta["lines_as_of"] == ts.isoformat() and (d / "meta.json").stat().st_mtime_ns > before
+    # Each book's line for the refreshed game, written before meta.json.
+    books = pl.read_parquet(d / "book_lines.parquet")
+    assert books.select("game_id", "book", "home_spread").rows() == [(3, "DraftKings", -6.0), (3, "FanDuel", -7.0)]
+    assert set(books["as_of"]) == {ts.isoformat()}
+    assert (d / "book_lines.parquet").stat().st_mtime_ns <= (d / "meta.json").stat().st_mtime_ns
     html = " ".join(TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text.split())
     assert "Ohio State −6.5" in html
 
@@ -1370,6 +1375,7 @@ def test_refresh_lines_patches_the_site_and_never_sticks(web_cfg):
     assert refresh_lines(web_cfg, SEASON) == 0
     g3 = pl.read_parquet(d / "games.parquet").filter(pl.col("game_id") == 3)
     assert g3["spread"][0] == -3.0 and g3["line_source"][0] == "cfbd"
+    assert pl.read_parquet(d / "book_lines.parquet").height == 0  # no stale book lines either
 
 
 def test_refresh_lines_skips_while_the_weekly_lock_is_held(web_cfg):
@@ -1957,31 +1963,56 @@ def test_shortlist_is_gated_and_linked(web_cfg):
     assert c.post("/bets/shortlist/books", content="books=FanDuel").status_code == 402
 
 
-def _shortlist_html(web_cfg, spreads):
-    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True, spreads=spreads)
+def _shortlist_html(web_cfg, spreads, books=None):
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True, spreads=spreads)
+    if books is not None:
+        from cfbr.web.lines import BOOK_LINES_SCHEMA
+
+        pl.DataFrame([{"game_id": g, "book": b, "home_spread": h, "home_price": hp, "away_price": ap,
+                       "as_of": "2026-10-14T14:00:00+00:00"} for g, b, h, hp, ap in books],
+                     schema=BOOK_LINES_SCHEMA).write_parquet(d / "book_lines.parquet")
+        (d / "meta.json").write_text((d / "meta.json").read_text())  # meta last, as the build writes it
     _write_shortlist_ledger(web_cfg)
     c = TestClient(create_app(web_cfg), follow_redirects=False)
     c.cookies.set("cfbr_books", "betmgm")
     return " ".join(c.get("/bets/shortlist").text.split())
 
 
-def test_shortlist_flags_only_a_consensus_that_moved_against_the_bettor(web_cfg):
-    # Game 1 is a home bet (paper line -3.5), game 2 an away bet (home line 4.0, so -4.0 for the bettor).
-    # BetMGM beats the consensus on both, so the unmoved lines must not be flagged.
+def test_keys_crossed():
+    from cfbr.web.bets import keys_crossed
+
+    assert keys_crossed(-11.5, -14.5) == [14]     # favorite: a 14-point win no longer covers
+    assert keys_crossed(8.5, 4.5) == [7]          # underdog: a 7-point loss no longer covers
+    assert keys_crossed(-11.5, -12.5) == []
+    assert keys_crossed(-2.5, -3.5) == [3] and keys_crossed(3.5, 2.5) == [3]
+    assert keys_crossed(-3.0, -3.5) == [3]        # a push becomes a loss
+    assert keys_crossed(-6.5, -10.5) == [7, 10]
+    assert keys_crossed(-7.0, -7.0) == []
+
+
+def test_shortlist_shows_how_the_picks_book_moved(web_cfg):
+    # Game 1: home bet, paper line −3.5, BetMGM −3 at capture. Game 2: away bet, paper line −4,
+    # BetMGM −3.5 for the bettor at capture. The model has each bet team by 10.
+
+    # Without per-book lines (older web data): the consensus against the paper line.
     html = _shortlist_html(web_cfg, {1: -3.5, 2: 4.0})
     assert "Texas A&amp;M" in html and "or better at BetMGM" in html
-    assert "Consensus moved" not in html
+    assert "Consensus now −3.5 (BetMGM not in the newest odds): unchanged" in html
+    assert html.count("unchanged") == 2 and "edge now 6.5" in html and "would pass" not in html
 
-    html = _shortlist_html(web_cfg, {1: -5.0, 2: 4.0})
-    assert "Consensus moved −3.5 → −5 since capture: check BetMGM before betting" in html
-    assert html.count("Consensus moved") == 1
+    # BetMGM moved game 1 against the bettor (across 3) and game 2 toward them (also across 3).
+    html = _shortlist_html(web_cfg, {1: -5.0, 2: 3.0},
+                           [(1, "BetMGM", -4.5, -105, -115), (2, "BetMGM", 2.5, -110, -110), (2, "DraftKings", 2.0, -110, -110)])
+    assert 'class="down">BetMGM now −4.5 (−105): 1.5 pts worse, crossed 3</span> <span class="muted">· edge now 5.5</span>' in html
+    assert 'class="up">BetMGM now −2.5 (−110): 1 pt better, crossed 3</span> <span class="muted">· edge now 7.5</span>' in html
+    assert "Consensus now" not in html
 
-    html = _shortlist_html(web_cfg, {1: -3.5, 2: 5.0})
-    assert "Consensus moved −4 → −5 since capture: check BetMGM before betting" in html
-    assert html.count("Consensus moved") == 1
-
-    # A line that moved in the bettor's favor is not flagged.
-    assert "Consensus moved" not in _shortlist_html(web_cfg, {1: -2.0, 2: 3.0})
+    # Far enough that the model would no longer bet it.
+    html = _shortlist_html(web_cfg, {1: -7.5, 2: 4.0}, [(1, "BetMGM", -7.5, -110, -110)])
+    assert "BetMGM now −7.5 (−110): 4.5 pts worse, crossed 3, 7" in html
+    assert "edge now 2.5, under 3: the model would pass" in html
+    # Game 2's book has no line now: it falls back to the consensus.
+    assert "Consensus now −4 (BetMGM not in the newest odds): unchanged" in html
 
 
 def test_shortlist_with_no_picks_at_the_viewers_books(shortlist_client):

@@ -32,6 +32,9 @@ class Season:
     meta: dict
     ratings: pl.DataFrame
     games: pl.DataFrame
+    # Each book's current line for games on Odds API lines (cfbr.web.lines.book_lines); None
+    # for web data built before it existed.
+    book_lines: pl.DataFrame | None = None
 
     @property
     def weeks(self) -> list[int]:
@@ -91,9 +94,12 @@ class Store:
                 return hit[1]
             d = meta_path.parent
             files = [d / "ratings.parquet", d / "games.parquet"]
+            books_path = d / "book_lines.parquet"
+            if books_path.exists():
+                files.append(books_path)
             try:
                 meta = json.loads(meta_path.read_text())
-                ratings, games = (pl.read_parquet(f) for f in files)
+                ratings, games, *books = (pl.read_parquet(f) for f in files)
                 consistent = (all(f.stat().st_mtime <= mtime for f in files)
                               and meta_path.stat().st_mtime == mtime)
             except (OSError, ValueError, pl.exceptions.PolarsError):
@@ -101,7 +107,8 @@ class Store:
             if not consistent:
                 return hit[1] if hit else None
             s = Season(meta, _ensure(ratings, POLL_COLS),
-                       _ensure(games, [f"{side}_{c}" for side in ("home", "away") for c in POLL_COLS]))
+                       _ensure(games, [f"{side}_{c}" for side in ("home", "away") for c in POLL_COLS]),
+                       books[0] if books else None)
             self._seasons[season] = (mtime, s)
             return s
 

@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cfbr.bets.experiments import tracked_tests
-from cfbr.bets.ledger import by_tier, risk, summarize, tier_expr, week_label, weekly, what_if
+from cfbr.bets.ledger import book_key, by_tier, risk, summarize, tier_expr, week_label, weekly, what_if
 from cfbr.bets.shortlist import BOOK_RE, shortlist
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
@@ -110,6 +110,44 @@ def with_line_now(rows: list[dict], s, threshold: float) -> list[dict]:
                         "line_now_older": older, "line_now_as_of": g.get("line_as_of") if older else None,
                         "below_threshold": edge_now is not None and edge_now < threshold})
     return out
+
+
+# Margins college football games end on most often; a line moving across one costs (or gains)
+# more than its size suggests. Display only (DECISIONS "Shortlist line moves").
+KEY_NUMBERS = (3, 7, 10, 14)
+
+
+def keys_crossed(was: float, now: float) -> list[int]:
+    """Key numbers whose result a move from ``was`` to ``now`` (the bettor's spread) changes:
+    final margins (bet team's view) from -was to -now, counting a whole-number end, which
+    turns a win or loss into a push."""
+    lo, hi = sorted((-was, -now))
+    return [k for k in KEY_NUMBERS if any(lo <= m <= hi for m in (k, -k))] if was != now else []
+
+
+def line_move(r: dict, books: pl.DataFrame | None, threshold: float) -> dict:
+    """What an open shortlist pick's book offers now, from the newest odds snapshot, against
+    the number shown at capture (``bet_at``). Falls back to the consensus (``line_now`` against
+    the paper line) when that book has no line for the game. ``move`` is from the bettor's side:
+    positive means a better number. ``edge_now`` is the model's margin against the number now.
+    Display only: it never changes the shortlist or a bet's grading."""
+    flip = 1 if r["side"] == "home" else -1
+    hit = None
+    if books is not None and r.get("bet_at_book"):
+        want = book_key(r["bet_at_book"])
+        hit = next((b for b in books.filter(pl.col("game_id") == int(r["game_id"])).iter_rows(named=True)
+                    if book_key(b["book"]) == want), None)
+    if hit is not None:
+        now, was = flip * hit["home_spread"], r["bet_at"]
+        price = hit["home_price"] if flip == 1 else hit["away_price"]
+        source = "book"
+    elif r.get("line_now") is not None:
+        now, was, price, source = r["line_now"], r["team_line"], None, "consensus"
+    else:
+        return {"move_source": None}
+    edge_now = r["model_team"] + now
+    return {"move_source": source, "move_now": now, "move_price": price, "move": now - was,
+            "move_keys": keys_crossed(was, now), "move_edge": edge_now, "move_below": edge_now < threshold}
 
 
 def real_bets_ctx(real: pl.DataFrame | None, s) -> dict | None:
@@ -242,11 +280,12 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
     # -- real-money shortlist (DECISIONS "Real-money shortlist"): same gate, read-only ------------
 
     def shortlist_rows(sl: pl.DataFrame, s) -> tuple[list[dict], list[dict]]:
-        """Open picks (with the current line, and whether the consensus has moved against the bettor
-        since capture) and settled picks, newest first."""
+        """Open picks (with the current line, and how the pick's book has moved since capture:
+        :func:`line_move`) and settled picks, newest first."""
         rows = bet_rows(sl, cfg)
         open_ = with_line_now([r for r in rows if r["status"] == "open"], s, cfg.bets.threshold)
-        open_ = [r | {"moved_past": r["line_now"] is not None and r["line_now"] < r["team_line"]} for r in open_]
+        books = None if s is None else s.book_lines
+        open_ = [r | line_move(r, books, cfg.bets.threshold) for r in open_]
         return open_, [r for r in reversed(rows) if r["status"] != "open"]
 
     def season_pricing_table(season: int):
