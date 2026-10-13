@@ -208,7 +208,9 @@ def test_game_picks_link_to_the_matchup_tool(client):
     # the FCS game gets no link (FCS teams aren't in the tool).
     html = client.get("/games?season=2026&slot=r02").text
     assert 'href="/matchup?season=2026&amp;home=Ohio%20State&amp;away=Texas%20A%26M"' in html
-    assert "away=FCS" not in html
+    assert "Montana" in html and "&amp;away=Montana" not in html     # the FCS game is listed, unlinked
+    table = html[html.index('id="games"'):html.index("</table>")]
+    assert table.count('href="/matchup?') == 1                        # Ohio State–Texas A&M only
 
 
 def test_neutral_site_pick_links_with_neutral(web_cfg):
