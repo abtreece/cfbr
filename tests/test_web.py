@@ -198,6 +198,28 @@ def test_upcoming_slot_is_default_in_live_season(client):
     assert "Final</th>" not in html  # no result columns before any game is final
 
 
+def test_game_picks_link_to_the_matchup_tool(client):
+    # Week 1's Texas A&M (home) vs <b>Evil</b>: predicted on the preseason ratings (as_of T0),
+    # so the link pins week 0 and the real home team; the name is URL-encoded, never raw HTML.
+    html = client.get("/games?season=2026&slot=r01").text
+    assert ('href="/matchup?season=2026&amp;week=0&amp;home=Texas%20A%26M&amp;away=%3Cb%3EEvil%3C/b%3E"'
+            in html)
+    # Week 2: no ratings week has that as_of yet, so the link opens on the latest ratings;
+    # the FCS game gets no link (FCS teams aren't in the tool).
+    html = client.get("/games?season=2026&slot=r02").text
+    assert 'href="/matchup?season=2026&amp;home=Ohio%20State&amp;away=Texas%20A%26M"' in html
+    assert "away=FCS" not in html
+
+
+def test_neutral_site_pick_links_with_neutral(web_cfg):
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC))
+    g = pl.read_parquet(d / "games.parquet")
+    g.with_columns(neutral_site=pl.col("game_id") == 3).write_parquet(d / "games.parquet")
+    (d / "meta.json").write_text((d / "meta.json").read_text())  # meta last, as web build writes it
+    html = TestClient(create_app(web_cfg)).get("/games?season=2026&slot=r02").text
+    assert "&amp;home=Ohio%20State&amp;away=Texas%20A%26M&amp;neutral=1" in html
+
+
 def test_missing_things_404(client):
     for url in ("/team/2026/Nobody", "/rankings?season=1999", "/rankings?week=7", "/games?slot=r09"):
         assert client.get(url).status_code == 404, url
