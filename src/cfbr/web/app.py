@@ -599,6 +599,17 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
             conf, g = None, week_games
         now = datetime.now(UTC)
         rows = [game_row(r, now, bool(s.meta.get("live")), cfg.bets.threshold) for r in g.to_dicts()]
+        if not locked:
+            # Each FBS-vs-FBS pick links to the matchup tool with this game's home, away and venue,
+            # on the ratings week the prediction used (same as_of), so the tool shows the same number.
+            # A game with no such week yet (a later slot) opens on the default, latest ratings.
+            week_of = dict(s.ratings.select("as_of", "week").unique().iter_rows())
+            for r in rows:
+                if r["model_pick"] and r["home_team"] in fbs_teams and r["away_team"] in fbs_teams:
+                    wk = week_of.get(r.get("as_of"))
+                    r["matchup_url"] = (f"/matchup?season={s.meta['season']}" + (f"&week={wk}" if wk is not None else "")
+                                        + f"&home={quote(r['home_team'])}&away={quote(r['away_team'])}"
+                                        + ("&neutral=1" if r.get("neutral_site") else ""))
         # "Flagged" games (model picks the underdog, or is threshold+ points off the line) are
         # highlighted in place; ?show=flagged / ?show=upsets narrows the table to them.
         counts = {"all": len(rows), "flagged": sum(1 for r in rows if r["flag"]),
