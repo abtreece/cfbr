@@ -3,7 +3,7 @@
 {% block title %}{% if season %}{{ season }} {% endif %}paper bets · CFB Ratings{% endblock %}
 {% block content %}
 {% if season %}{% set t = [("/bets?season=" ~ season, "Live", true), ("/bets/shortlist?season=" ~ season, "Shortlist", false)] %}
-{% if has_retro %}{% set t = t + [("/bets/retro?season=" ~ season, "Replay", false)] %}{% endif %}{{ tabs(t, "Paper bets") }}{% endif %}
+{% if has_retro %}{% set t = t + [("/bets/retro?season=" ~ season, "Replay", false)] %}{% endif %}{{ tabs(t + [("/bets/guide", "Guide", false)], "Paper bets") }}{% endif %}
 {% if bet_seasons|length > 1 %}
 <form class="filters" method="get" action="/bets">
   {{ season_select(bet_seasons, season) }}
@@ -13,7 +13,7 @@
 
 <h1>{% if season %}{{ season }} paper bets{% else %}Paper bets{% endif %}</h1>
 <p class="lede">The bets {{ MODEL }} would make against the betting market, tracked as hypothetical flat bets.
-  Nothing is wagered, and this is not betting advice.</p>
+  Nothing is wagered, and this is not betting advice. New to betting? Start with the <a href="/bets/guide">guide</a>.</p>
 
 {% if summary is not defined %}
 {# `cfbr weekly` records them once a season has line snapshots and predictions. #}<p class="muted">No paper bets recorded yet. They start once this season has betting lines and predictions.</p>

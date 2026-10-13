@@ -477,6 +477,42 @@ def bets_client(web_cfg):
     return TestClient(create_app(web_cfg))
 
 
+def test_break_even():
+    from cfbr.bets.ledger import break_even
+
+    assert round(break_even(-110), 4) == 0.5238
+    assert round(break_even(-105), 4) == 0.5122
+    assert break_even(100) == 0.5
+    assert round(break_even(105), 4) == 0.4878
+
+
+def test_bets_guide(bets_client, web_cfg):
+    r = bets_client.get("/bets/guide")
+    assert r.status_code == 200 and r.headers["cache-control"] == "private, no-store"
+    html = " ".join(r.text.split())
+    assert '<a href="/bets/guide" aria-current="page">Guide</a>' in html
+    # Break-even table from the odds math, not hand-typed.
+    for price, be in (("−120", "54.5%"), ("−110", "52.4%"), ("−105", "51.2%"), ("+105", "48.8%")):
+        assert f'<td class="num">{price}</td>' in html and f'<td class="num">{be}</td>' in html, price
+    # Edge tiers and holdout cover rates come from config and the backtest constants.
+    assert "Small edge (3–6 pts)" in html and "50.4%" in html and "49.0%" in html and "48.4%" in html
+    assert "at least <strong>3 points</strong>" in html and "Under 3, pass." in html
+    assert "before 500 settled bets" in html and "$11 to win $10" in html
+    assert 'id="rules"' in html and html.count('<li><strong>') >= 10
+    # Definitions and made-up examples only: nothing from the ledger.
+    assert "TestBook" not in html and "Texas A&amp;M" not in html
+
+    web_cfg.bets.threshold = 4.0
+    html = " ".join(TestClient(create_app(web_cfg)).get("/bets/guide").text.split())
+    assert "at least <strong>4 points</strong>" in html and "Under 4, pass." in html
+
+
+def test_bets_pages_link_the_guide(bets_client):
+    for url in ("/bets", "/bets/shortlist"):
+        html = bets_client.get(url).text
+        assert '<a href="/bets/guide">Guide</a>' in html and 'Start with the <a href="/bets/guide">guide</a>' in html, url
+
+
 def test_bets_page(bets_client):
     r = bets_client.get("/bets")
     assert r.status_code == 200
@@ -618,6 +654,7 @@ def test_bets_gate_blocks_only_the_betting_section(web_cfg):
     assert r.status_code == 402 and r.json()["detail"] == "Subscription required."
     assert c.get("/bets/retro").status_code == 402 and c.get("/api/bets/retro").status_code == 402
     assert c.get("/bets/shortlist").status_code == 402 and c.get("/api/bets/shortlist").status_code == 402
+    assert c.get("/bets/guide").status_code == 402
     assert c.get("/lab").status_code == 402  # edge-vs-close research sits with the bets
     for url in ("/rankings", "/games?slot=r01", "/games?slot=r02", "/accuracy", "/method", "/team/2026/Ohio%20State",
                 "/api/rankings", "/api/games?slot=r02", "/api/team/2026/Ohio%20State", "/api/seasons"):

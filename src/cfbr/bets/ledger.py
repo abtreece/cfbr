@@ -255,6 +255,12 @@ def risk(odds: int, stake: float) -> tuple[float, float]:
     return stake, stake * odds / 100
 
 
+def break_even(odds: int) -> float:
+    """Win rate (pushes aside) at which a bet at ``odds`` neither makes nor loses money."""
+    risked, won = risk(odds, 1.0)
+    return risked / (risked + won)
+
+
 def grade(side: str, line: float, home_points: int, away_points: int) -> str:
     margin = home_points - away_points
     cover = margin + line if side == "home" else -(margin + line)
@@ -343,7 +349,7 @@ def summarize(ledger: pl.DataFrame, cfg: Bets, basis: str = "consensus") -> dict
     risked = float(sum(risk(o, k)[0] for o, k in s.select(price, "stake").iter_rows())) if s.height else 0.0
     units = float(s[un].sum()) if s.height else 0.0
     c = s.filter(pl.col(cv).is_not_null())
-    be = (-cfg.odds / (100 - cfg.odds)) if cfg.odds < 0 else 100 / (100 + cfg.odds)
+    be = break_even(cfg.odds)
     opn = ledger.filter(pl.col("status") == "open")
     at_risk = float(sum(risk(o, k)[0] for o, k in opn.select("odds", "stake").iter_rows()))
     return {
@@ -416,12 +422,16 @@ def by_tier(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
     out = []
     for t in tiers(cfg):
         m = summarize(d.filter(pl.col("_tier") == t["name"]).drop("_tier"), cfg)
-        def ref(table: dict) -> dict | None:
-            r = table.get((t["lo"], t["hi"]))
-            return None if r is None else {"wins": r[0], "n": r[1], "rate": r[0] / r[1], "ci95": wilson_ci(*r)}
-        out.append({**t, **m, "bets": m["open"] + m["settled"], "backtest": ref(BACKTEST_TIER_COVER),
-                    "holdout": ref(HOLDOUT_TIER_COVER)})
+        out.append({**t, **m, "bets": m["open"] + m["settled"], "backtest": tier_reference(t, BACKTEST_TIER_COVER),
+                    "holdout": tier_reference(t, HOLDOUT_TIER_COVER)})
     return out
+
+
+def tier_reference(t: dict, table: dict) -> dict | None:
+    """A tier's historical cover rate from ``table`` (BACKTEST_/HOLDOUT_TIER_COVER), with its
+    Wilson interval; None when the configured tier bounds aren't the ones that were measured."""
+    r = table.get((t["lo"], t["hi"]))
+    return None if r is None else {"wins": r[0], "n": r[1], "rate": r[0] / r[1], "ci95": wilson_ci(*r)}
 
 
 def coin_roi_chance(n: int, odds: int, roi: float) -> float:
@@ -435,7 +445,7 @@ def coin_roi_chance(n: int, odds: int, roi: float) -> float:
 
 def power_note(table: PricingTable, cfg: Bets) -> str:
     """Bets needed to show a win rate above break-even, from the points-to-cents table (review B2/B3)."""
-    be = (-cfg.odds / (100 - cfg.odds)) if cfg.odds < 0 else 100 / (100 + cfg.odds)
+    be = break_even(cfg.odds)
     parts = []
     for e in (2.0, 3.0):
         p = cover_probability_if_right(table, e)

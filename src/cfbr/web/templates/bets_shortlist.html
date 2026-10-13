@@ -5,7 +5,7 @@
 {% set q = "?season=" ~ season if season else "" %}
 {% set t = [("/bets" ~ q, "Live", false), ("/bets/shortlist" ~ q, "Shortlist", true)] %}
 {% if has_retro %}{% set t = t + [("/bets/retro" ~ q, "Replay", false)] %}{% endif %}
-{{ tabs(t, "Paper bets") }}
+{{ tabs(t + [("/bets/guide", "Guide", false)], "Paper bets") }}
 {% if bet_seasons|length > 1 %}
 <form class="filters" method="get" action="/bets/shortlist">
   {{ season_select(bet_seasons, season) }}
@@ -15,7 +15,7 @@
 
 <h1>{% if season %}{{ season }} {% endif %}shortlist</h1>
 <p class="lede">The paper bets worth a real bet at your sportsbooks: competitive FBS games, found at the week's first look,
-  where one of your books had the number. Not betting advice. Check the live line before you bet.</p>
+  where one of your books had the number. Not betting advice. Check the live line before you bet. New to betting? Start with the <a href="/bets/guide">guide</a>.</p>
 
 <details class="books">
   <summary>Your books: <strong>{% for b in rules.selectable_books if b in books %}{{ b }}{% if not loop.last %}, {% endif %}{% else %}any non-offshore book{% endfor %}</strong>{% if reference %} <span class="muted">(default)</span>{% endif %} <span class="change">Change</span></summary>
@@ -83,9 +83,9 @@
       FBS vs FBS with a line of 21 or less, not week 1; recorded at the week's first look; and one of your books offered the side at the paper line or better when it was recorded.</li>
     <li>"Or better at" is the best number among your books at that moment. Lines are captured on Sundays; under each pick is what that book offers in the newest odds snapshot.
       <span class="up">Better</span> means a friendlier number if you haven't bet yet. <span class="down">Worse</span> means you'd need more points;
-      a bet you already placed at the old number is then ahead of the market (closing line value, the best sign of a real edge).</li>
-    <li>"Crossed" names a key number the move went across: games end on 3, 7, 10 and 14 most often, so those points are worth the most.
-      "Edge now" is the model's margin against the number now; under {{ "%g"|format(rules.threshold) }} points the model would not bet.
+      a bet you already placed at the old number is then ahead of the market (<a href="/bets/guide#clv">closing line value</a>, the best sign of a real edge).</li>
+    <li>"Crossed" names a <a href="/bets/guide#key-numbers">key number</a> the move went across: games end on 3, 7, 10 and 14 most often, so those points are worth the most.
+      "<a href="/bets/guide#edge">Edge now</a>" is the model's margin against the number now; under {{ "%g"|format(rules.threshold) }} points the model would not bet.
       Snapshots lag a live book, so check yours before betting.</li>
     <li>Picks are in kickoff order. Bigger edges haven't covered more often in the holdout seasons, so they aren't ranked by edge.</li>
     <li>With no books chosen you see the default set ({{ rules.pricing_books|join(', ') or 'any non-offshore book' }}), the list tracked below.</li>

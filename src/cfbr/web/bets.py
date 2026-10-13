@@ -17,7 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cfbr.bets.experiments import tracked_tests
-from cfbr.bets.ledger import book_key, by_tier, risk, summarize, tier_expr, week_label, weekly, what_if
+from cfbr.bets.ledger import (HOLDOUT_TIER_COVER, book_key, break_even, by_tier, risk, summarize, tier_expr,
+                              tier_reference, tiers, week_label, weekly, what_if)
 from cfbr.bets.shortlist import BOOK_RE, shortlist
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
@@ -28,6 +29,9 @@ from cfbr.web.store import Store
 
 # Betting data is per-viewer once the section is gated; never let a shared cache keep it.
 NO_STORE = {"Cache-Control": "private, no-store"}
+
+# Prices in the guide's break-even table, from more juice to a plus-money price.
+GUIDE_PRICES = (-120, -115, -110, -105, 100, 105)
 
 
 def spread_str(x: float | None) -> str:
@@ -313,6 +317,20 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "lines_as_of": s.meta.get("lines_as_of") if s is not None else None,
                     "test": next(t for t in tracked_tests(ledger, cfg.bets) if t["key"] == "shortlist")}
         resp = render(request, "bets_shortlist.html", **ctx)
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @router.get("/bets/guide", response_class=HTMLResponse, include_in_schema=False)
+    def guide_page(request: Request):
+        # Definitions and made-up examples only, never the ledger; numbers come from config and
+        # the backtest constants so the page can't drift from the rules it explains.
+        risked, to_win = risk(cfg.bets.odds, cfg.bets.stake)
+        resp = render(request, "bets_guide.html", rules=cfg.bets, has_retro=bool(store.retro_seasons()),
+                      prices=[{"odds": o, "risk": risk(o, 1.0)[0] * 100, "win": risk(o, 1.0)[1] * 100,
+                               "break_even": break_even(o)} for o in GUIDE_PRICES],
+                      break_even_std=break_even(cfg.bets.odds),
+                      tiers=[t | {"holdout": tier_reference(t, HOLDOUT_TIER_COVER)} for t in tiers(cfg.bets)],
+                      unit_risk=risked * cfg.bets.unit_value, unit_win=to_win * cfg.bets.unit_value)
         resp.headers.update(NO_STORE)
         return resp
 
