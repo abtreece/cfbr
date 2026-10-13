@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% from "macros.html" import tabs %}
+{% block title %}Betting guide · CFB Ratings{% endblock %}
+{% block content %}
+{% set t = [("/bets", "Live", false), ("/bets/shortlist", "Shortlist", false)] %}
+{% if has_retro %}{% set t = t + [("/bets/retro", "Replay", false)] %}{% endif %}
+{{ tabs(t + [("/bets/guide", "Guide", true)], "Paper bets") }}
+
+<h1>Betting guide</h1>
+<p class="lede">What the numbers on the betting pages mean, and the rules of thumb behind using them.
+  The games in the examples are made up. Nothing here is betting advice.</p>
+
+<div class="prose">
+<nav class="toc" aria-label="On this page">
+  <a href="#spread">Spreads</a> · <a href="#price">Price and juice</a> · <a href="#consensus">Consensus and your book</a> ·
+  <a href="#moves">Line moves</a> · <a href="#key-numbers">Key numbers</a> · <a href="#points-vs-price">Points vs price</a> ·
+  <a href="#edge">Edge</a> · <a href="#clv">Closing line value</a> · <a href="#rules">Rules of thumb</a> · <a href="#glossary">Glossary</a>
+</nav>
+
+<h2 id="spread">Reading a spread</h2>
+<p>A spread handicaps the favorite so either side is a fair bet. In <strong>Riverton −7 vs Lakeview +7</strong>, Riverton is favored by 7:</p>
+<ul>
+  <li>A bet on <strong>Riverton −7</strong> wins if Riverton wins by 8 or more. That's <strong>covering</strong>.</li>
+  <li>A bet on <strong>Lakeview +7</strong> wins if Lakeview wins, or loses by 6 or less.</li>
+  <li>If Riverton wins by exactly 7, it's a <strong>push</strong>: the bet is refunded.</li>
+  <li>A half point (−7.5) can't push. Riverton must win by 8; a 7-point win now loses.</li>
+</ul>
+<p>The betting pages always write a line from the side being bet, so <em>Lakeview +7</em> and <em>Riverton −7</em> are the same game seen from opposite sides.</p>
+
+<h2 id="price">The price (juice)</h2>
+<p>The number in parentheses, like <strong>(−110)</strong>, is the price in American odds. A minus price is what you risk to win $100;
+  a plus price is what you win on $100. With both sides at −110, a bettor on each side risks $110 to win $100; that extra $10 is the book's cut, called <strong>juice</strong> or <strong>vig</strong>.
+  <strong>More juice is a worse payout</strong>: you risk more to win the same amount, so you need to win more often to break even.</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th class="num">Price</th><th class="num">Risk</th><th class="num">To win</th><th class="num">Break-even</th></tr></thead>
+  <tbody>
+  {% for p in prices %}
+    <tr{% if p.odds == rules.odds %} class="strong"{% endif %}><td class="num">{{ p.odds|price }}</td><td class="num">${{ "%g"|format(p.risk) }}</td>
+      <td class="num">${{ "%g"|format(p.win) }}</td><td class="num">{{ p.break_even|pct }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Break-even is the share of bets you must win, pushes aside: risk ÷ (risk + to win).
+  {{ rules.odds|price }} is the standard price, and the one every paper bet assumes.</p>
+
+<h2 id="consensus">Consensus and your book</h2>
+<ul>
+  <li><strong>Consensus</strong> is the median spread across the books in the regular line feeds, offshore books included. It's the market's best guess, and the number paper bets are recorded and graded at.
+    Lines fetched only to price a bet{% if "bet365" in rules.pricing_books %} (bet365's){% endif %} are marked "pricing only" on the bets pages and never count toward it.</li>
+  <li><strong>Your book's number</strong> is what you can actually bet. Books differ by a half point or a point, and by price.</li>
+  <li>On the shortlist, <strong>"−3.5 or better at DraftKings"</strong> means DraftKings had −3.5 or a friendlier number (−3, −2.5) when the bet was recorded. For an underdog, "or better" means a bigger number (+7.5 beats +7).</li>
+  <li>Offshore books (Bovada, BetOnline and others) count toward the consensus as market information, but a paper bet is never priced at one.</li>
+</ul>
+
+<h2 id="moves">Line moves</h2>
+<p>Lines move when money comes in on one side or news breaks (an injury, a suspension, the weather). Under each shortlist pick is what its book offers in the newest odds snapshot:</p>
+<ul>
+  <li><span class="up">Better</span>: a friendlier number than at capture (−3 instead of −3.5). Good news if you haven't bet yet.</li>
+  <li><span class="down">Worse</span>: you'd need more points (−4.5 instead of −3.5). If you <em>haven't</em> bet, the bet got more expensive.
+    If you already bet the old number, the market has moved your way: you're ahead of it (see <a href="#clv">closing line value</a>).</li>
+  <li><strong>Edge now</strong> is the model's margin against the number now. Under {{ "%g"|format(rules.threshold) }} points, the model wouldn't bet it.</li>
+</ul>
+<p>Snapshots are taken a few times a day, so a live book can be ahead of the page. Check your book before you bet.</p>
+
+<h2 id="key-numbers">Key numbers</h2>
+<p>Football is scored in 3s and 7s, so some final margins are far more common than others. In FBS-vs-FBS games from 2015 to 2025,
+  <strong>3</strong> was the final margin in about 10% of games and <strong>7</strong> in about 9%; <strong>10</strong> and <strong>14</strong> each about 4.5%.
+  Most other margins are 3.5% or less.</p>
+<p>A half point that crosses a key number changes the result in many more games than one that doesn't. Moving from −2.5 to −3.5 turns every 3-point win from a win into a loss;
+  moving from −11.5 to −12.5 only changes 12-point wins. When a pick says <strong>"crossed 7"</strong>, the move went across one of these numbers and cost (or gained) more than its size suggests.</p>
+
+<h2 id="points-vs-price">Points vs price</h2>
+<p>Books trade points for price. For one game you might see <strong>−13.5 (−115)</strong> at one book and <strong>−14.5 (−105)</strong> at another.
+  The first costs more juice; the second needs one more point, and 14 is a key number. Here the extra point is usually worth more than the 10 cents of juice.
+  Away from a key number (−11.5 vs −12.5), the cheaper price usually wins.</p>
+<p>The shortlist weighs both: its "or better at" book is the one with the best expected value given the number and the price, not just the best number.</p>
+
+<h2 id="edge">Edge, and what it isn't</h2>
+<p><strong>Edge</strong> is how far the model's margin is from the line. If the model has Riverton by 10 and the line is Riverton −7, the edge is 3 points on Riverton.
+  A bet is made when the edge is at least <strong>{{ "%g"|format(rules.threshold) }} points</strong>.</p>
+<p>The edge decides <em>whether</em> to bet. It isn't a measure of how sure the model is. Bigger edges haven't covered more often:</p>
+<div class="table-wrap">
+<table class="data">
+  <thead><tr><th>Tier</th><th class="num">Holdout cover rate, 2022–2025</th></tr></thead>
+  <tbody>
+  {% for tier in tiers %}
+    <tr><td>{{ tier.label }}</td><td class="num">{% if tier.holdout %}{{ tier.holdout.rate|pct }}<span class="ci"> [{{ tier.holdout.ci95[0]|pct }}, {{ tier.holdout.ci95[1]|pct }}]</span>
+      <span class="muted">of {{ tier.holdout.n }}</span>{% else %}—{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note">Model side against the closing line, pushes excluded, in seasons never used for tuning. Break-even at {{ rules.odds|price }} is {{ break_even_std|pct }}.</p>
+<p>The edge is the model's error minus the market's error. The market's error is usually small, because it already prices in everything public.
+  So a large edge more often means the model is missing something, like a starting quarterback's injury, than that the market is badly wrong.
+  {{ MODEL }} rates teams from play-by-play efficiency and doesn't see injury reports.</p>
+
+<h2 id="clv">Closing line value</h2>
+<p>The <strong>closing line</strong> is the last line before kickoff, when the market has the most information. <strong>Closing line value (CLV)</strong> is how much better your number was than the close:
+  bet Riverton −7, game closes −8.5, you have +1.5 points of CLV.</p>
+<p>Over many bets, beating the close is the best sign of a real edge. A season's win–loss record is mostly luck: over 100 bets, a bettor with no edge at all wins 60 or more about 3% of the time and 55 or more about 18% of the time.
+  That's why the paper bets draw no conclusion before {{ rules.min_sample }} settled bets, and why average CLV is shown first.</p>
+
+<h2 id="rules">Rules of thumb</h2>
+<div class="callout">
+<ol class="rules-list">
+  <li><strong>Same number at two books:</strong> take the less negative price. −105 beats −110.</li>
+  <li><strong>Same price:</strong> take the better number.</li>
+  <li><strong>Number and price both differ:</strong> a half point across 3 or 7 is worth more than a few cents of juice. Elsewhere, the price usually wins.</li>
+  <li><strong>Check your book right before you bet.</strong> The site's lines can be hours old.</li>
+  <li><strong>If the line moved past the "or better" number,</strong> look at "edge now". Under {{ "%g"|format(rules.threshold) }}, pass.</li>
+  <li><strong>A big line move or a big edge is a reason to check the news</strong> (injuries, suspensions, weather) before betting.</li>
+  <li><strong>A bigger edge isn't a surer bet.</strong> Don't bet more because the edge is larger.</li>
+  <li><strong>Bet a flat amount.</strong> Every paper bet is {{ "%g"|format(rules.stake) }} {{ "unit" if rules.stake == 1 else "units" }} (${{ "%g"|format(unit_risk) }} to win ${{ "%g"|format(unit_win) }}),
+    where a unit is ${{ "%g"|format(rules.unit_value) }}, {{ (rules.unit_value / rules.bankroll)|pct(1) }} of a ${{ "{:,.0f}".format(rules.bankroll) }} bankroll. Never chase losses.</li>
+  <li><strong>Judge yourself on CLV,</strong> not on a week's record.</li>
+  <li><strong>At {{ rules.odds|price }} you need {{ break_even_std|pct }} to break even.</strong> Most bettors don't get there, and none of the model's holdout tiers above did.</li>
+</ol>
+</div>
+
+<h2 id="glossary">Glossary</h2>
+<dl class="glossary">
+  <dt>ATS</dt><dd>Against the spread: a team's or a model's record at covering, rather than winning outright.</dd>
+  <dt>Bankroll</dt><dd>The money set aside for betting. Bet sizes are a fixed share of it.</dd>
+  <dt>Closing line</dt><dd>The last line before kickoff.</dd>
+  <dt>CLV</dt><dd>Closing line value: how many points better your number was than the closing line.</dd>
+  <dt>Consensus</dt><dd>The median line across books.</dd>
+  <dt>Cover</dt><dd>Win the bet against the spread.</dd>
+  <dt>Edge</dt><dd>Points between the model's margin and the line.</dd>
+  <dt>Favorite / underdog</dt><dd>The team giving points (−) / getting points (+).</dd>
+  <dt>Juice, vig</dt><dd>The book's cut, built into the price.</dd>
+  <dt>Key number</dt><dd>A common final margin (3, 7, 10, 14) where a half point matters most.</dd>
+  <dt>Line, spread</dt><dd>The points the favorite gives the underdog.</dd>
+  <dt>Paper bet</dt><dd>A bet the tracker records and grades but never places.</dd>
+  <dt>Price, odds</dt><dd>What a bet pays, in American odds: −110 risks $110 to win $100.</dd>
+  <dt>Push</dt><dd>A result exactly on the line; the bet is refunded.</dd>
+  <dt>Sharp</dt><dd>A bettor (or book) the market treats as well informed; sharp money moves lines.</dd>
+  <dt>Shortlist</dt><dd>The paper bets that one of your books offered at the recorded number or better.</dd>
+  <dt>Tier</dt><dd>A paper bet's edge bucket: {% for tier in tiers %}{{ tier.label }}{% if not loop.last %}, {% endif %}{% endfor %}.</dd>
+  <dt>Unit</dt><dd>A standard bet size. Results in units compare across bankrolls.</dd>
+</dl>
+</div>
+{% endblock %}

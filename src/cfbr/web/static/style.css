@@ -278,6 +278,16 @@ footer.site .built { display: block; margin-top: 4px; }
 .prose p, .prose li { margin: 6px 0; }
 .prose ul { padding-left: 20px; }
 .prose strong { color: var(--text); }
+.prose .toc { font-size: 13px; line-height: 1.8; margin: 0 0 8px; }
+.prose ol.rules-list { margin: 0; padding-left: 22px; }
+.prose ol.rules-list li { margin: 6px 0; }
+.prose dl.glossary { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; }
+.prose dl.glossary dt { font-weight: 600; color: var(--text); }
+.prose dl.glossary dd { margin: 0; }
+@media (max-width: 640px) {
+  .prose dl.glossary { grid-template-columns: 1fr; gap: 0; }
+  .prose dl.glossary dd { margin: 0 0 8px; }
+}
 
 /* Matchup tool. */
 .h2h { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end; margin: 0 0 14px; }
