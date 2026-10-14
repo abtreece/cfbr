@@ -563,9 +563,9 @@ def scores(
     season: Annotated[Optional[int], typer.Option(help="Defaults to the current season")] = None,
     config: ConfigOpt = None,
 ) -> None:
-    """Fill in final scores on the site for games played since the last `cfbr weekly`. One CFBD
-    call, only when a game should be over by now; cron runs it nightly. Display only: ratings
-    and paper bets wait for Sunday's `cfbr weekly`."""
+    """Fill in final scores on the site for games played since the last `cfbr weekly`, and grade
+    the open paper and real bets on them. One CFBD call, only when a game should be over by now;
+    cron runs it nightly. Ratings and new bets wait for Sunday's `cfbr weekly`."""
     from cfbr.alerts import send
     from cfbr.ingest.client import CFBDClient, QuotaExceeded
     from cfbr.ingest.fetch import current_season
@@ -587,7 +587,7 @@ def scores(
         res = refresh_scores(cfg, season, fetch)
     except QuotaExceeded as e:
         typer.echo(str(e))
-        return
+        res = None
     except Exception as e:
         log.exception("scores refresh failed")
         send(cfg, "cfbr scores failed", f"{type(e).__name__}: {e}"[:300])
@@ -598,6 +598,19 @@ def scores(
         typer.echo("no games due for a score; no call made")
     else:
         typer.echo(f"{res[0]} game(s) due, {res[1]} filled in (CFBD calls: {client.calls})")
+    # Grade bets on finished games from the saved response (no call), so a run that found
+    # nothing new still settles what an earlier one couldn't. Isolated like weekly's bets step.
+    from cfbr.bets.run import settle_midweek
+    from cfbr.web.scores import read_scores
+
+    try:
+        settled = settle_midweek(cfg, season, read_scores(cfg.paths.raw_dir, season))
+    except Exception as e:
+        log.exception("midweek bet settlement failed")
+        send(cfg, "cfbr scores: bet settlement failed", f"{type(e).__name__}: {e}"[:300])
+        raise typer.Exit(code=6)
+    if settled is not None and any(settled):
+        typer.echo(f"bets settled: {settled[0]} paper, {settled[1]} real")
 
 
 @app.command()
