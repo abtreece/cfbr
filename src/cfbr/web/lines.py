@@ -11,8 +11,13 @@ snapshot (:func:`refresh_lines`).
 of keeping a stale Odds API line. ``book_lines.parquet`` is rewritten alongside it with each
 book's line for those same games (:func:`book_lines`), for the shortlist's "now" numbers.
 
+A game that kicked off after CFBD's lines were fetched has no CFBD closing line yet (CFBD's is
+from before the week), so until the next ``cfbr weekly`` it shows the consensus from the newest
+Odds API snapshot before its kickoff (:func:`kickoff_closes`); midweek scores
+(:mod:`cfbr.web.scores`) are then graded against the line the game actually closed near.
+
 Display only: lines are never model inputs, nothing here touches ratings, predictions or a
-ledger, and finished games keep their closing line from CFBD.
+ledger, and finished games keep their closing line from CFBD once CFBD has one.
 """
 
 from __future__ import annotations
@@ -35,6 +40,11 @@ BOOK_LINES_SCHEMA = {"game_id": pl.Int64, "book": pl.Utf8, "home_spread": pl.Flo
                      "home_price": pl.Int64, "away_price": pl.Int64, "as_of": pl.Utf8}
 
 
+def _aliases(raw_dir: Path, season: int) -> dict[str, set[str]]:
+    teams_path = raw_dir / "teams_fbs" / str(season) / "season.json"
+    return team_aliases(json.loads(teams_path.read_text())) if teams_path.exists() else {}
+
+
 def odds_books(raw_dir: Path, season: int, games: pl.DataFrame) -> tuple[datetime, pl.DataFrame] | None:
     """(snapshot time, per-book home spreads and prices) from the newest Odds API snapshot.
     ``games`` needs game_id, home_team, away_team, kickoff_ts. None without a snapshot."""
@@ -42,9 +52,46 @@ def odds_books(raw_dir: Path, season: int, games: pl.DataFrame) -> tuple[datetim
     if snap is None:
         return None
     ts, events = snap
-    teams_path = raw_dir / "teams_fbs" / str(season) / "season.json"
-    aliases = team_aliases(json.loads(teams_path.read_text())) if teams_path.exists() else {}
-    return ts, odds_frame(events, games.select("game_id", "home_team", "away_team", "kickoff_ts"), aliases)
+    return ts, odds_frame(events, games.select("game_id", "home_team", "away_team", "kickoff_ts"),
+                          _aliases(raw_dir, season))
+
+
+CLOSES_SCHEMA = {"game_id": pl.Int64, "close": pl.Float64, "close_as_of": pl.Utf8}
+
+
+def kickoff_closes(raw_dir: Path, season: int, games: pl.DataFrame, cfbd_as_of: str | None,
+                   now: datetime | None = None) -> pl.DataFrame:
+    """game_id, close (median home spread across books), close_as_of (snapshot time) for each
+    game that kicked off after CFBD's lines were fetched, from the newest Odds API snapshot
+    taken between that fetch and its kickoff that carries the game. Empty without
+    ``cfbd_as_of`` (a finished season, or no live CFBD lines yet)."""
+    try:
+        after = datetime.fromisoformat(cfbd_as_of) if cfbd_as_of else None
+    except ValueError:
+        after = None
+    if after is None:
+        return pl.DataFrame(schema=CLOSES_SCHEMA)
+    now = now or datetime.now(UTC)
+    kickoff = pl.col("kickoff_ts").dt.convert_time_zone("UTC")
+    g = games.filter((kickoff > after) & (kickoff <= now)).select(
+        "game_id", "home_team", "away_team", kickoff.alias("kickoff_ts"))
+    snaps = [(datetime.strptime(p.stem, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC), p)
+             for p in sorted((raw_dir / "odds" / str(season) / "snapshots").glob("*.json"))]
+    snaps = [(ts, p) for ts, p in snaps if ts > after]
+    if g.height == 0 or not snaps:
+        return pl.DataFrame(schema=CLOSES_SCHEMA)
+    aliases = _aliases(raw_dir, season)
+    frames: dict[Path, pl.DataFrame] = {}
+    rows = []
+    for gid, kick in g.select("game_id", "kickoff_ts").iter_rows():
+        for ts, p in reversed([(ts, p) for ts, p in snaps if ts < kick]):
+            if p not in frames:
+                frames[p] = odds_frame(json.loads(p.read_text()), g, aliases)
+            books = frames[p].filter(pl.col("game_id") == gid)
+            if books.height:
+                rows.append({"game_id": gid, "close": books["spread"].median(), "close_as_of": ts.isoformat()})
+                break
+    return pl.DataFrame(rows, schema=CLOSES_SCHEMA)
 
 
 def consensus(books: tuple[datetime, pl.DataFrame] | None) -> tuple[datetime, pl.DataFrame] | None:
@@ -84,16 +131,25 @@ def newer_than(fresh: tuple[datetime, pl.DataFrame] | None,
 
 
 def apply_lines(games: pl.DataFrame, fresh: tuple[datetime, pl.DataFrame] | None,
-                cfbd_as_of: str | None) -> pl.DataFrame:
+                cfbd_as_of: str | None, closes: pl.DataFrame | None = None) -> pl.DataFrame:
     """Set ``spread`` from ``cfbd_spread`` (CFBD's line), then, for games still unplayed when
     the snapshot was taken, from the Odds API consensus in ``fresh`` where it has the game.
     Adds per-game ``line_source`` ("odds"/"cfbd") and ``line_as_of`` (ISO time). A game that
     kicked off before the snapshot keeps CFBD's line (a snapshot after kickoff carries live
-    lines); finished games keep CFBD's closing line."""
+    lines), unless ``closes`` (:func:`kickoff_closes`) has its pre-kickoff Odds API close;
+    finished games keep CFBD's closing line (``closes`` only holds games CFBD has none for)."""
     has_cfbd = pl.col("cfbd_spread").is_not_null()
     out = games.with_columns(spread=pl.col("cfbd_spread"),
                              line_source=pl.when(has_cfbd).then(pl.lit("cfbd")),
                              line_as_of=pl.when(has_cfbd).then(pl.lit(cfbd_as_of)))
+    if closes is not None and closes.height:
+        out = out.join(closes, on="game_id", how="left")
+        hit = pl.col("close").is_not_null()
+        out = out.with_columns(
+            spread=pl.when(hit).then(pl.col("close")).otherwise(pl.col("spread")),
+            line_source=pl.when(hit).then(pl.lit("odds")).otherwise(pl.col("line_source")),
+            line_as_of=pl.when(hit).then(pl.col("close_as_of")).otherwise(pl.col("line_as_of")),
+        ).drop("close", "close_as_of")
     if fresh is None:
         return out
     ts, cons = fresh
@@ -151,8 +207,9 @@ def refresh_lines(cfg: Config, season: int) -> int | None:
         fresh = newer_than(consensus(books), meta.get("cfbd_lines_as_of"))
         if fresh is None:
             return None
+        closes = kickoff_closes(cfg.paths.raw_dir, season, games, meta.get("cfbd_lines_as_of"))
         out = apply_lines(games.drop([c for c in ("line_source", "line_as_of") if c in games.columns]),
-                          fresh, meta.get("cfbd_lines_as_of"))
+                          fresh, meta.get("cfbd_lines_as_of"), closes)
         for name, df in (("games", out), ("book_lines", book_lines(out, books))):
             tmp = d / f".{name}.parquet.tmp"
             df.write_parquet(tmp)

@@ -34,6 +34,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
 | `cfbr check` | Daily dead-man's switch: alert when no successful `weekly` run is recorded since the last Sunday in season, or the backup is stale |
 | `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
+| `cfbr scores` | Fill in final scores on the site for games played since the last `weekly` (one CFBD call, only when a game should be over); display only, ratings and paper bets wait for Sunday. Cron runs it nightly |
 | `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon, plus weekdays 3× with `--if-games-within 168` for fresher site lines |
 | `cfbr market-ratings --season 2026` | Diagnostic: invert the closing lines into market-implied ratings per slot and compare with the model's (`results/market_ratings_{season}.md`); no API calls |
 | `cfbr moneyline-eval` | Market-only test: is a side's moneyline a better buy than its spread at −110, both priced with the points-to-cents table (`results/moneyline_pricing.md`); no API calls |
@@ -123,6 +124,15 @@ On macOS, `tests/test_backup.py` needs GNU rsync (`brew install rsync`); the sys
 10 0 * * 0        [ "$(TZ=America/Chicago date +\%H)" = "18" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
 30 2,3 * * 0      [ "$(TZ=America/Chicago date +\%H)" = "21" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
 40 21,22 * * 0,1  [ "$(TZ=America/Chicago date +\%H)" = "16" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr odds-snapshot >> data/odds-snapshot.log 2>&1
+```
+
+`scores` fills in midweek final scores on the site (Tuesday–Friday games, and Saturday's early ones on Saturday night), so they don't sit unplayed until Sunday. It makes one CFBD `/games` call only when a game on the site is 3.5 h to 4 days past kickoff and not yet final, so it's free on nights without games; about 1 call per game night, 15–25 a month. It stops calling once 120 calls are left in the month (`[ingest].scores_quota_reserve`) so it never spends Sunday's. The response is saved as `data/raw/games/{season}/scores.json`, which the store never reads: ratings stay "after week N" and paper bets are settled only by `weekly`. Like the lines refresh, it skips while `weekly` or a deploy holds the lock, writes `meta.json` last, and needs no restart.
+
+```cron
+# Midweek scores (Central): 11 PM nightly, and a 9 AM catch-up Mon-Sat for late finishes.
+# 11 PM Central is 04:00 or 05:00 UTC the next day, so every day-of-week runs.
+0 4,5 * * *       [ "$(TZ=America/Chicago date +\%H)" = "23" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr scores >> data/scores.log 2>&1
+15 14,15 * * 1-6  [ "$(TZ=America/Chicago date +\%H)" = "09" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr scores >> data/scores.log 2>&1
 ```
 
 `weekly` takes a lock, so overlapping runs are refused. A week is only ingested once all of its FBS games are final, and re-running a week replaces that week's line in `out/{season}/accuracy.csv` instead of adding a duplicate. Exit codes: 3 = API quota nearly exhausted (the run still completes on cached data, so rankings for the last ingested week are published), 4 = another run in progress, 5 = no completed weeks yet. Failures (except 5) and post-run health-check problems send a push alert through ntfy: install the ntfy app and subscribe to the topic in `.keys` (`NTFY_TOPIC`). A successful run also sends a silent (priority `min`) "cfbr weekly ok" message carrying the paper-bet ledger's hash-chain head, which doubles as a heartbeat and as a timestamp for the ledger kept off this machine.

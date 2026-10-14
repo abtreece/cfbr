@@ -558,6 +558,47 @@ def odds_snapshot(
 
 
 @app.command()
+def scores(
+    season: Annotated[Optional[int], typer.Option(help="Defaults to the current season")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """Fill in final scores on the site for games played since the last `cfbr weekly`. One CFBD
+    call, only when a game should be over by now; cron runs it nightly. Display only: ratings
+    and paper bets wait for Sunday's `cfbr weekly`."""
+    from cfbr.alerts import send
+    from cfbr.ingest.client import CFBDClient, QuotaExceeded
+    from cfbr.ingest.fetch import current_season
+    from cfbr.web.scores import refresh_scores
+
+    cfg = _default_config(config)
+    season = season or current_season()
+    client = CFBDClient(cfg, refresh=True)
+
+    def fetch() -> list:
+        # A larger reserve than ingest's own, so midweek scores never spend Sunday's calls.
+        left = client.budget_left()
+        if left <= cfg.ingest.scores_quota_reserve:
+            raise QuotaExceeded(f"{left} CFBD calls left this month (scores stop at "
+                                f"{cfg.ingest.scores_quota_reserve}); scores wait for Sunday")
+        return client.get("/games", {"year": season, "seasonType": "both"}, season, "scores")
+
+    try:
+        res = refresh_scores(cfg, season, fetch)
+    except QuotaExceeded as e:
+        typer.echo(str(e))
+        return
+    except Exception as e:
+        send(cfg, "cfbr scores failed", f"{type(e).__name__}: {e}"[:300])
+        raise typer.Exit(code=1)
+    finally:
+        client.close()
+    if res is None:
+        typer.echo("no games due for a score; no call made")
+    else:
+        typer.echo(f"{res[0]} game(s) due, {res[1]} filled in (CFBD calls: {client.calls})")
+
+
+@app.command()
 def sim(
     season: Annotated[int, typer.Option()],
     week: Annotated[int, typer.Option(help="Last completed regular-season week (simulate from its ratings)")],

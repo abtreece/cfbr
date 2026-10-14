@@ -22,7 +22,8 @@ from cfbr.model.calibrate import STAGE2_TERMS
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 from cfbr.report.roster_web import write_roster_web
-from cfbr.web.lines import apply_lines, book_lines, consensus, newer_than, odds_books
+from cfbr.web.lines import apply_lines, book_lines, consensus, kickoff_closes, newer_than, odds_books
+from cfbr.web.scores import apply_scores, read_scores
 
 ROSTER_FILES = ("roster_players", "roster_departures", "roster_summary")
 
@@ -218,12 +219,18 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
     out.mkdir(parents=True, exist_ok=True)
     ratings = season_ratings(eng, season, now)
     games = season_games(eng, season)
+    live = not season_over(eng, season, now)
+    # Midweek final scores from `cfbr scores` (display only; see cfbr.web.scores), so a rebuild
+    # between Sundays doesn't put games already shown as final back to unplayed.
+    if live:
+        games = apply_scores(games, read_scores(eng.cfg.paths.raw_dir, season))
     # Display lines: CFBD's (kept as cfbd_spread), with the newest Odds API consensus on unplayed
     # games, so a rebuild never rolls the site back to older lines (see cfbr.web.lines).
     cfbd_as_of = lines_as_of(eng.cfg.paths.raw_dir, season)
     books = odds_books(eng.cfg.paths.raw_dir, season, games)
     fresh = newer_than(consensus(books), cfbd_as_of)
-    games = apply_lines(games.rename({"spread": "cfbd_spread"}), fresh, cfbd_as_of)
+    closes = kickoff_closes(eng.cfg.paths.raw_dir, season, games, cfbd_as_of, now)
+    games = apply_lines(games.rename({"spread": "cfbd_spread"}), fresh, cfbd_as_of, closes)
     # Write to temp names then rename, so a running server never reads a half-written file.
     # meta.json goes last: its mtime is the server's reload signal, and the server treats a
     # parquet newer than meta.json as a rebuild in progress (see cfbr.web.store).
@@ -239,7 +246,6 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
     except Exception:
         log.exception("roster web data for %d failed; continuing without it", season)
     cal = eng.calibration(season)
-    live = not season_over(eng, season, now)
     meta = {
         "season": season,
         "built_at": now.isoformat(timespec="seconds"),
