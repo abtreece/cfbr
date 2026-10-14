@@ -540,6 +540,7 @@ def odds_snapshot(
     try:
         path = fetch_odds_snapshot(cfg, season)
     except Exception as e:
+        log.exception("odds snapshot failed")  # leave a trace in the cron log, not only the push
         send(cfg, "cfbr odds-snapshot failed", f"{type(e).__name__}: {e}"[:300])
         raise typer.Exit(code=1)
     typer.echo(f"{n} games within {window:g} h; wrote {path}")
@@ -588,6 +589,7 @@ def scores(
         typer.echo(str(e))
         return
     except Exception as e:
+        log.exception("scores refresh failed")
         send(cfg, "cfbr scores failed", f"{type(e).__name__}: {e}"[:300])
         raise typer.Exit(code=1)
     finally:

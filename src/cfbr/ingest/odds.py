@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import time
 import unicodedata
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -71,19 +72,42 @@ def credits_left(raw_dir: Path, monthly_quota: int) -> int:
     return monthly_quota - sum(int(r.get("last") or 0) for r in rows)
 
 
+# Transient failures are retried (attempts, then waits of 2 s and 4 s), as the CFBD client does:
+# a 502 at a closing-snapshot run would otherwise cost that window's paper-bet closes. Failed
+# responses carry no usage headers and aren't charged, so credits_left is unaffected.
+RETRY_STATUS = (429, 500, 502, 503, 504)
+ATTEMPTS = 3
+
+
 def _get(cfg: Config, path: str, params: dict) -> httpx.Response:
     key = odds_api_key()
     if key is None:
         raise RuntimeError(f"The Odds API key not set ({' or '.join(KEY_NAMES)} in env or .keys)")
-    resp = httpx.get(BASE_URL + path, params={**params, "apiKey": key}, timeout=60.0)
-    hdr = resp.headers
-    entry = {"ts": datetime.now(UTC).isoformat(), "endpoint": path, "params": params, "status": resp.status_code,
+    for attempt in range(ATTEMPTS):
+        last = attempt == ATTEMPTS - 1
+        try:
+            resp = httpx.get(BASE_URL + path, params={**params, "apiKey": key}, timeout=60.0)
+        except httpx.TransportError as e:
+            _record(cfg, path, params, None, httpx.Headers())
+            if last:
+                raise
+            log.warning("The Odds API %s: %s; retrying", path, type(e).__name__)
+        else:
+            _record(cfg, path, params, resp.status_code, resp.headers)
+            if resp.status_code not in RETRY_STATUS or last:
+                break
+            log.warning("The Odds API %s: HTTP %d; retrying", path, resp.status_code)
+        time.sleep(2 ** attempt * 2)
+    resp.raise_for_status()
+    return resp
+
+
+def _record(cfg: Config, path: str, params: dict, status: int | None, hdr: httpx.Headers) -> None:
+    entry = {"ts": datetime.now(UTC).isoformat(), "endpoint": path, "params": params, "status": status,
              "remaining": hdr.get("x-requests-remaining"), "used": hdr.get("x-requests-used"),
              "last": hdr.get("x-requests-last")}
     with open(_ledger(cfg.paths.raw_dir), "a") as f:
         f.write(json.dumps(entry) + "\n")
-    resp.raise_for_status()
-    return resp
 
 
 def fetch_odds_snapshot(cfg: Config, season: int) -> Path:
