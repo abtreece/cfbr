@@ -1,7 +1,9 @@
-"""Weekly paper-bet step: settle finished bets, then record new ones."""
+"""Weekly paper-bet step: settle finished bets, then record new ones; and the midweek
+settlement of bets whose games ended since (:func:`settle_midweek`, from ``cfbr scores``)."""
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 from datetime import UTC, datetime
@@ -125,11 +127,86 @@ def closing_lines(cfg: Config, ds: Dataset, games: pl.DataFrame, ledger: pl.Data
     cfbd = consensus_spread(ds.lines, cfg.backtest.spread_consensus).select(
         "game_id", closing_line="spread", closing_books=pl.col("n_providers").cast(pl.Int32)).with_columns(
         closing_source=pl.lit("cfbd"))
+    snap = snapshot_closes(cfg, games, ledger, season)
+    return pl.concat([snap, cfbd.filter(~pl.col("game_id").is_in(snap["game_id"].to_list()))], how="diagonal_relaxed")
+
+
+def snapshot_closes(cfg: Config, games: pl.DataFrame, ledger: pl.DataFrame, season: int) -> pl.DataFrame:
+    """game_id, closing_line, closing_books, closing_source="snapshot" for the final games
+    (``games``: game_id, home_team, away_team, kickoff_ts, completed) of ``ledger``'s open bets
+    that have a pre-kickoff Odds API snapshot close (see bets.closing)."""
     todo = games.filter(pl.col("game_id").is_in(ledger.filter(pl.col("status") == "open")["game_id"].to_list())
                         & pl.col("completed"))
     snap = snapshot_closing(cfg, todo.select("game_id", "home_team", "away_team", "kickoff_ts"), season)
-    snap = snap.select("game_id", "closing_line", "closing_books").with_columns(closing_source=pl.lit("snapshot"))
-    return pl.concat([snap, cfbd.filter(~pl.col("game_id").is_in(snap["game_id"].to_list()))], how="diagonal_relaxed")
+    return snap.select("game_id", "closing_line", "closing_books").with_columns(closing_source=pl.lit("snapshot"))
+
+
+def final_games(rows: list | None) -> pl.DataFrame:
+    """The completed games in a CFBD /games response, as ``settle`` and ``snapshot_closes`` take them."""
+    recs = [{"game_id": g["id"], "home_team": g.get("homeTeam"), "away_team": g.get("awayTeam"),
+             "kickoff_ts": datetime.fromisoformat(g["startDate"].replace("Z", "+00:00")).astimezone(UTC),
+             "completed": True, "home_points": g["homePoints"], "away_points": g["awayPoints"]}
+            for g in rows or [] if g.get("completed") and g.get("startDate")
+            and g.get("homePoints") is not None and g.get("awayPoints") is not None]
+    return pl.DataFrame(recs, schema={"game_id": pl.Int64, "home_team": pl.Utf8, "away_team": pl.Utf8,
+                                      "kickoff_ts": pl.Datetime("us", "UTC"), "completed": pl.Boolean,
+                                      "home_points": pl.Int64, "away_points": pl.Int64})
+
+
+def settle_midweek(cfg: Config, season: int, rows: list | None) -> tuple[int, int] | None:
+    """Grade open paper bets (``bets.csv``) and real bets (``bets_real.csv``) whose games are
+    final in ``rows`` (``cfbr scores``'s CFBD /games response), so /bets doesn't wait for
+    Sunday. Same grading as :func:`run_bets` with the same close: only games with a pre-kickoff
+    snapshot close are graded here, since one that would fall back to CFBD's close has to wait
+    for Sunday's lines. Never records a bet. Takes the weekly lock (non-blocking). Returns None
+    when it did nothing (lock held, no pricing table), else (paper bets graded, real bets graded)."""
+    from cfbr.bets.real import ledger_path as real_path
+    from cfbr.bets.real import read_real, settle_real, update_real
+
+    final = final_games(rows)
+    out_dir = cfg.paths.out_dir / str(season)
+    ledger_path = out_dir / "bets.csv"
+    table_path = cfg.paths.out_dir / "pricing_table.json"
+    with open(cfg.paths.db_path.parent / ".weekly.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log.info("weekly lock held; midweek settlement skipped (weekly settles them)")
+            return None
+        n_paper = n_real = 0
+        ledger = read_ledger(ledger_path)
+        closes = snapshot_closes(cfg, final, ledger, season)
+        if closes.height:
+            if not table_path.exists():
+                log.warning("%s missing; paper bets wait for cfbr weekly", table_path)
+                return None
+            table = PricingTable.load(table_path)
+            graded = final.filter(pl.col("game_id").is_in(closes["game_id"].to_list()))
+            before = ledger.filter(pl.col("status") == "open").height
+            ledger = settle(ledger, graded.select("game_id", "completed", "home_points", "away_points"), closes, table)
+            n_paper = before - ledger.filter(pl.col("status") == "open").height
+            if n_paper:
+                tmp = ledger_path.with_suffix(".csv.tmp")
+                ledger.sort("kickoff_ts", "game_id").write_csv(tmp)
+                tmp.replace(ledger_path)
+                record(cfg.paths.out_dir, season)
+                md_tmp = out_dir / "bets.md.tmp"
+                md_tmp.write_text(summary_markdown(ledger, cfg.bets, season, table))
+                md_tmp.replace(out_dir / "bets.md")
+        rp = real_path(cfg.paths.out_dir, season)
+        if rp.exists():
+            real = read_real(rp)
+            rcloses = snapshot_closes(cfg, final, real, season)
+            if rcloses.height:
+                rgraded = final.filter(pl.col("game_id").is_in(rcloses["game_id"].to_list()))
+                before = real.filter(pl.col("status") == "open").height
+                real = update_real(rp, lambda df: settle_real(df, rgraded, rcloses))
+                n_real = before - real.filter(pl.col("status") == "open").height
+    if n_paper:
+        m = summarize(ledger, cfg.bets)
+        log.info("paper bets settled midweek: %d (season %d-%d-%d, avg CLV %s)", n_paper, m["won"], m["lost"],
+                 m["push"], "n/a" if m["n_clv"] == 0 else f"{m['avg_clv']:+.2f}")
+    return n_paper, n_real
 
 
 def extra_pricing_lines(cfg: Config, games: pl.DataFrame, season: int, game_ids: list[int]) -> pl.DataFrame | None:

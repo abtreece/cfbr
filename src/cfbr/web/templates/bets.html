@@ -86,6 +86,7 @@
       Every other book, including offshore books ({{ rules.offshore_books|join(", ") }}), counts toward the consensus but never sets the best line. In the Books tooltip, "(pricing only)" marks a line used only to price the bet, never in the consensus.</li>
     <li><strong>CLV</strong> is how many points the recorded line beat the <strong>Close</strong>: the consensus in the last snapshot before kickoff (at most {{ close_max_age|num(0) }} hours earlier), or CFBD's post-game consensus when none qualifies. It is the first sign of a real edge; win rate is mostly noise at this sample size.</li>
     {% if show_cents or show_cover %}<li>{% if show_cents %}<strong>Edge ¢</strong> prices the edge in cents of fair odds, assuming {{ MODEL }} is right. {% endif %}{% if show_cover %}<strong>Cover %</strong> is a calibrated estimate that found almost no signal; reporting only.{% endif %}</li>{% endif %}
+    <li>A bet is graded the night its game ends, once the final score is posted and the game has a pre-kickoff close; otherwise at the Sunday run.</li>
     <li><strong>Tiers</strong> group bets by edge size; none cleared break-even with confidence in the 2015–2021 backtest.</li>
   </ul>
 </details>
