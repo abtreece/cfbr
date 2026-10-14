@@ -142,6 +142,45 @@ def test_credits_left_and_quota_guard(tmp_path, monkeypatch):
         odds.fetch_odds_snapshot(cfg, 2026)  # 51 - 2 credits would dip under the 50 reserve
 
 
+def _resp(status, remaining=None):
+    import httpx
+
+    headers = {"x-requests-remaining": remaining, "x-requests-last": "2"} if remaining else {}
+    return httpx.Response(status, json=[], headers=headers, request=httpx.Request("GET", odds.BASE_URL))
+
+
+def test_odds_api_retries_transient_failures(tmp_path, monkeypatch):
+    import httpx
+
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(odds, "odds_api_key", lambda: "k")
+    waits = []
+    monkeypatch.setattr(odds.time, "sleep", waits.append)
+    seq = [_resp(502), httpx.ConnectTimeout("slow"), _resp(200, "446")]
+
+    def get(*a, **k):
+        r = seq.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(odds.httpx, "get", get)
+    assert odds._get(cfg, "/v4/x", {}).status_code == 200
+    assert waits == [2, 4]
+    rows = [json.loads(line) for line in (tmp_path / "_odds_calls.jsonl").read_text().splitlines()]
+    assert [r["status"] for r in rows] == [502, None, 200]  # every attempt in the ledger
+    assert credits_left(tmp_path, 500) == 446  # failed attempts carry no usage and cost nothing
+
+    # Three failures: the last error is raised; a client error is never retried.
+    seq[:] = [_resp(503), _resp(503), _resp(502)]
+    with pytest.raises(httpx.HTTPStatusError):
+        odds._get(cfg, "/v4/x", {})
+    seq[:] = [_resp(401), _resp(200)]
+    with pytest.raises(httpx.HTTPStatusError):
+        odds._get(cfg, "/v4/x", {})
+    assert len(seq) == 1
+
+
 def test_current_books_merges_feeds_only_when_close_in_time(tmp_path):
     from cfbr.bets.run import current_books
 
