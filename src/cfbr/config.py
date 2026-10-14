@@ -28,6 +28,7 @@ class Ingest(BaseModel):
     recruiting_lookback: int = 3
     monthly_quota: int = 1000
     quota_reserve: int = 50
+    scores_quota_reserve: int = 120
 
 
 class GarbageTime(BaseModel):

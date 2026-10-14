@@ -14,6 +14,9 @@ recruiting_lookback = 3
 monthly_quota = 1000
 # Refuse to start a command if fewer than this many calls would remain.
 quota_reserve = 50
+# `cfbr scores` (midweek final scores for the site) stops calling at this many calls left,
+# so it never spends what Sunday's `cfbr weekly` needs.
+scores_quota_reserve = 120
 
 # Thresholds are Bill Connelly's (SP+) garbage-time definition. tuned.toml disables the filter.
 [prep.garbage_time]
