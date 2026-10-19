@@ -114,7 +114,7 @@ def _status_error(code):
     return httpx.HTTPStatusError(f"{code}", request=req, response=httpx.Response(code, request=req))
 
 
-def _outage_run(monkeypatch, tmp_path, errors):
+def _outage_run(monkeypatch, tmp_path, errors, exit_code=5):
     """Run _weekly_run with fetch.weekly raising ``errors`` in turn, then succeeding; nothing
     completed, so a run that gets past ingest ends with exit 5. Returns the sleeps taken."""
     import time
@@ -140,15 +140,24 @@ def _outage_run(monkeypatch, tmp_path, errors):
     monkeypatch.setattr(time, "sleep", sleeps.append)
     with pytest.raises(typer.Exit) as e:
         cli._weekly_run(None)
-    assert e.value.exit_code == 5
+    assert e.value.exit_code == exit_code
     return sleeps
 
 
 def test_weekly_run_waits_out_a_cfbd_outage(monkeypatch, tmp_path):
     import httpx
 
-    sleeps = _outage_run(monkeypatch, tmp_path, [_status_error(502), httpx.ConnectTimeout("timeout")])
+    sleeps = _outage_run(monkeypatch, tmp_path, [_status_error(522), httpx.ConnectTimeout("timeout")])
     assert sleeps == [600, 600]
+
+
+def test_weekly_run_stops_when_the_quota_runs_out_on_a_retry(monkeypatch, tmp_path):
+    """Exit 3 straight from ingest (not 5 after it): the failed attempt may have cached games
+    without their plays."""
+    from cfbr.ingest.client import QuotaExceeded
+
+    sleeps = _outage_run(monkeypatch, tmp_path, [_status_error(502), QuotaExceeded("quota")], exit_code=3)
+    assert sleeps == [600]
 
 
 def test_weekly_run_gives_up_after_the_last_retry(monkeypatch, tmp_path):

@@ -342,6 +342,11 @@ def _weekly_run(config: ConfigOpt = None) -> None:
             fetch.weekly(client, season, cal_week)
             break
         except QuotaExceeded as e:
+            if attempt:
+                # A failed attempt may have cached a /games file showing a completed week whose
+                # plays never came; ranking now would publish that week without them.
+                log.error("%s during an outage retry; stopping before publishing a half-fetched cache", e)
+                raise typer.Exit(code=3)
             # Keep going on whatever the cache holds (rankings for the last ingested week are
             # still worth publishing), but exit 3 at the end so the quota alert fires.
             log.error("%s; continuing on cached data", e)
@@ -352,7 +357,7 @@ def _weekly_run(config: ConfigOpt = None) -> None:
             # A CFBD outage (5xx, 429, timeout) outlasts the client's few-second retries. Wait it
             # out rather than publishing from a half-fetched cache; what was fetched stays cached,
             # so a retry only repeats the calls that failed (plus the always-live lines).
-            transient = not isinstance(e, httpx.HTTPStatusError) or e.response.status_code in (429, 500, 502, 503, 504)
+            transient = not isinstance(e, httpx.HTTPStatusError) or e.response.status_code == 429 or e.response.status_code >= 500
             if not transient or attempt == retries:
                 raise
             log.warning("CFBD unavailable (%s); retrying ingest in %g min (retry %d of %d)",
