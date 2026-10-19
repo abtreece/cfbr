@@ -29,6 +29,8 @@ class Ingest(BaseModel):
     monthly_quota: int = 1000
     quota_reserve: int = 50
     scores_quota_reserve: int = 120
+    outage_retries: int = 6
+    outage_wait_minutes: float = 10.0
 
 
 class GarbageTime(BaseModel):
