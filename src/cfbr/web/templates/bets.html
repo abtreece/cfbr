@@ -235,12 +235,18 @@
       <select name="pick" required>
         <option value="">— pick a side —</option>
         {% for o in real.sides %}
-        <option value="{{ o.value }}"{% if o.value == real.form.pick %} selected{% endif %}>{{ o.team }} {{ o.vs }} {{ o.opponent }} · {{ o.kickoff|kickoff }}{% if o.line is not none %} · {{ o.line|spread }}{% endif %}</option>
+        <option value="{{ o.value }}"{% if o.value == real.form.pick %} selected{% endif %}>{{ o.team }} {{ o.vs }} {{ o.opponent }} · {{ o.kickoff|kickoff }}{% if o.started %} · started{% endif %}{% if o.line is not none %} · {{ o.line|spread }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>
-    <label>Line <span class="muted">(your side)</span>
-      <input type="text" name="line" inputmode="decimal" required placeholder="+3.5" value="{{ real.form.line if real.form.line is not none else '' }}">
+    <label>Bet
+      <select name="market">
+        <option value="spread"{% if real.form.market != "moneyline" %} selected{% endif %}>Spread</option>
+        <option value="moneyline"{% if real.form.market == "moneyline" %} selected{% endif %}>Moneyline</option>
+      </select>
+    </label>
+    <label>Line <span class="muted">(your side; blank for moneyline)</span>
+      <input type="text" name="line" inputmode="decimal" placeholder="+3.5" value="{{ real.form.line if real.form.line is not none else '' }}">
     </label>
     <label>Price
       <input type="text" name="odds" inputmode="numeric" required placeholder="-110" value="{{ real.form.odds if real.form.odds is not none else '' }}">
@@ -255,9 +261,10 @@
     <label>Placed ({{ tz_label }}) <span class="muted">blank = now</span>
       <input type="datetime-local" name="placed" value="{{ real.form.placed or '' }}">
     </label>
+    <label class="check"><input type="checkbox" name="live"{% if real.form.live %} checked{% endif %}> Live (in-game)</label>
     <button type="submit">Record</button>
   </form>
-  <p class="note">The line is from your team's side (+3.5 for a 3.5-point dog). Written to the real-bet ledger the same way as <code>cfbr real-bet</code>; the paper record is untouched.</p>
+  <p class="note">The line is from your team's side (+3.5 for a 3.5-point dog). A live bet is placed after kickoff; live bets and moneylines get no CLV. Written to the real-bet ledger the same way as <code>cfbr real-bet</code>; the paper record is untouched.</p>
 </details>
 {% if real.rows %}
 <div class="tiles">
@@ -274,7 +281,7 @@
     <tr>
       <td class="opt">{{ b.kickoff|kickoff }}</td>
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams or []) }} @ {{ team_link(b.home_team, season, fbs_teams or []) }}<span class="m-only muted"><br>{{ b.kickoff|kickoff }} {{ tz_label }}</span></td>
-      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}</td>
+      <td class="strong wrap">{{ b.team }} {{ "ML" if b.moneyline else b.team_line|spread }}{% if b.live %} <span class="badge">live</span>{% endif %}</td>
       <td class="num">{{ b.odds|price }}</td>
       <td class="num">{{ b.risk_dollars|money(false) }} / {{ b.to_win|money(false) }}</td>
       <td class="num opt">{{ b.line_now|spread }}</td>
@@ -287,7 +294,7 @@
   </tbody>
 </table>
 </div>
-<p class="note">CLV &gt; 0 means the line beat the close used for the paper bets. Final scores are away–home.</p>
+<p class="note">CLV &gt; 0 means the line beat the close used for the paper bets; live bets and moneylines have none. Final scores are away–home.</p>
 {% else %}
 <p class="muted">No real bets recorded yet this season.</p>
 {% endif %}

@@ -7,6 +7,8 @@ and price, and its CLV is measured against the same close the paper bets use
 (``bets.run.closing_lines``).
 
 Stakes are dollars risked ("$10 at −110" risks $10 to win $9.09), not the paper ledger's units.
+A bet is a spread or a moneyline (``market``), placed pregame or in-game (``live``). Live bets and
+moneylines get no CLV: the pregame closing spread is no benchmark for either.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import fcntl
 import math
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -26,13 +28,19 @@ from cfbr.ingest.odds import norm_name
 REAL_SCHEMA: dict[str, pl.DataType] = {
     "game_id": pl.Int64, "season": pl.Int32, "week": pl.Int32, "kickoff_ts": pl.Utf8,
     "home_team": pl.Utf8, "away_team": pl.Utf8,
-    # Terms: never change once recorded. ``line`` is the home spread, like the paper ledger.
+    # Terms: never change once recorded. ``line`` is the home spread, like the paper ledger
+    # (empty for a moneyline).
     "side": pl.Utf8, "team": pl.Utf8, "line": pl.Float64, "odds": pl.Int32, "risk_dollars": pl.Float64,
-    "book": pl.Utf8, "placed_at": pl.Utf8, "recorded_at": pl.Utf8,
+    "book": pl.Utf8, "market": pl.Utf8, "live": pl.Boolean, "placed_at": pl.Utf8, "recorded_at": pl.Utf8,
     # Result: filled once, when the game is final.
     "status": pl.Utf8, "home_points": pl.Int32, "away_points": pl.Int32, "dollars": pl.Float64,
     "closing_line": pl.Float64, "closing_source": pl.Utf8, "clv": pl.Float64,
 }
+
+MARKETS = ("spread", "moneyline")
+# A live bet's placed time must fall in its game: from kickoff to this long after (a typo'd date
+# is still caught; no game runs this long).
+LIVE_WINDOW = timedelta(hours=6)
 
 
 class RealBetError(ValueError):
@@ -49,7 +57,9 @@ def read_real(path: Path) -> pl.DataFrame:
     df = pl.read_csv(path, schema_overrides=REAL_SCHEMA)
     missing = [c for c in REAL_SCHEMA if c not in df.columns]
     df = df.with_columns(pl.lit(None, dtype=REAL_SCHEMA[c]).alias(c) for c in missing)
-    return df.select(pl.col(c).cast(t) for c, t in REAL_SCHEMA.items())
+    df = df.select(pl.col(c).cast(t) for c, t in REAL_SCHEMA.items())
+    # Rows recorded before bets had a market were all pregame spreads.
+    return df.with_columns(pl.col("market").fill_null("spread"), pl.col("live").fill_null(False))
 
 
 def write_real(df: pl.DataFrame, path: Path) -> None:
@@ -88,32 +98,46 @@ def win_dollars(odds: int, risked: float) -> float:
     return risked * 100 / -odds if odds < 0 else risked * odds / 100
 
 
-def find_game(games: pl.DataFrame, team: str, placed_at: datetime) -> dict:
-    """``team``'s next game after ``placed_at`` (from ``games``: game_id, home_team, away_team,
-    kickoff_ts in UTC), matched on normalized name. Raises if the team has no game left, or if
-    the name is ambiguous (two teams' games kick off next at the same time)."""
+def find_game(games: pl.DataFrame, team: str, placed_at: datetime, live: bool = False) -> dict:
+    """``team``'s next game after ``placed_at`` (for a live bet, its latest game kicked off by
+    then), from ``games`` (game_id, home_team, away_team, kickoff_ts in UTC), matched on
+    normalized name. Raises if there is no such game, or if the name is ambiguous (two teams'
+    games kick off at the same time)."""
     want = norm_name(team)
     rows = [g for g in games.to_dicts()
-            if g["kickoff_ts"] is not None and g["kickoff_ts"] > placed_at
+            if g["kickoff_ts"] is not None
+            and (g["kickoff_ts"] <= placed_at if live else g["kickoff_ts"] > placed_at)
             and want in (norm_name(g["home_team"] or ""), norm_name(g["away_team"] or ""))]
     if not rows:
-        raise RealBetError(f"no {team!r} game after {placed_at:%Y-%m-%d %H:%M} UTC")
-    first = min(g["kickoff_ts"] for g in rows)
+        raise RealBetError(f"no {team!r} game {'kicked off by' if live else 'after'} {placed_at:%Y-%m-%d %H:%M} UTC")
+    first = (max if live else min)(g["kickoff_ts"] for g in rows)
     nxt = [g for g in rows if g["kickoff_ts"] == first]
     if len(nxt) > 1:
         raise RealBetError(f"{team!r} matches {len(nxt)} games at {first:%Y-%m-%d %H:%M} UTC; pass --game-id")
     return nxt[0]
 
 
-def new_bet(game: dict, team: str, team_line: float, odds: int, risked: float, book: str | None,
-            placed_at: datetime, recorded_at: datetime, season: int, week: int | None) -> dict:
-    """One row. ``team_line`` is from the bettor's side (Cincinnati +1.5); stored as the home spread."""
+def new_bet(game: dict, team: str, team_line: float | None, odds: int, risked: float, book: str | None,
+            placed_at: datetime, recorded_at: datetime, season: int, week: int | None,
+            market: str = "spread", live: bool = False) -> dict:
+    """One row. ``team_line`` is from the bettor's side (Cincinnati +1.5); stored as the home
+    spread. A moneyline has no line (``team_line`` is ignored)."""
     kickoff = game["kickoff_ts"]
-    if placed_at >= kickoff:
-        raise RealBetError(f"placed at {placed_at:%Y-%m-%d %H:%M} UTC, at or after kickoff ({kickoff:%Y-%m-%d %H:%M} UTC)")
+    if market not in MARKETS:
+        raise RealBetError(f"{market!r} is not a bet type")
+    if live and placed_at < kickoff:
+        raise RealBetError(f"placed at {placed_at:%Y-%m-%d %H:%M} UTC, before kickoff ({kickoff:%Y-%m-%d %H:%M} UTC), so not live")
+    if live and placed_at > kickoff + LIVE_WINDOW:
+        raise RealBetError(f"placed at {placed_at:%Y-%m-%d %H:%M} UTC, more than {LIVE_WINDOW.seconds // 3600} hours "
+                           f"after kickoff ({kickoff:%Y-%m-%d %H:%M} UTC)")
+    if not live and placed_at >= kickoff:
+        raise RealBetError(f"placed at {placed_at:%Y-%m-%d %H:%M} UTC, at or after kickoff ({kickoff:%Y-%m-%d %H:%M} UTC); "
+                           "mark it live if it was in-game")
     if odds == 0 or -100 < odds < 100:
         raise RealBetError(f"{odds} is not an American price")
-    if not math.isfinite(team_line):
+    if market == "moneyline":
+        team_line = None
+    elif team_line is None or not math.isfinite(team_line):
         raise RealBetError("line must be a number")
     if not math.isfinite(risked) or risked <= 0:
         raise RealBetError("stake must be a positive number")
@@ -124,28 +148,42 @@ def new_bet(game: dict, team: str, team_line: float, odds: int, risked: float, b
         raise RealBetError(f"{team!r} isn't in {game['away_team']} @ {game['home_team']}")
     return {"game_id": game["game_id"], "season": season, "week": week, "kickoff_ts": kickoff.isoformat(),
             "home_team": game["home_team"], "away_team": game["away_team"],
-            "side": side, "team": game[f"{side}_team"], "line": team_line if side == "home" else -team_line,
-            "odds": odds, "risk_dollars": risked, "book": book, "placed_at": placed_at.isoformat(),
+            "side": side, "team": game[f"{side}_team"],
+            "line": None if team_line is None else team_line if side == "home" else -team_line,
+            "odds": odds, "risk_dollars": risked, "book": book, "market": market, "live": live,
+            "placed_at": placed_at.isoformat(),
             "recorded_at": recorded_at.isoformat(), "status": "open"}
 
 
-TERMS = ["game_id", "side", "line", "odds", "risk_dollars", "book", "placed_at"]
+TERMS = ["game_id", "side", "line", "odds", "risk_dollars", "book", "market", "live", "placed_at"]
+
+
+def same_terms(bet: dict, terms: list[str] = TERMS) -> pl.Expr:
+    """Ledger rows whose ``terms`` all equal ``bet``'s (an empty term matches only empty)."""
+    return pl.all_horizontal(pl.col(c).is_null() if bet[c] is None else pl.col(c) == bet[c] for c in terms)
 
 
 def add_real(ledger: pl.DataFrame, bet: dict) -> pl.DataFrame:
     """Append ``bet``; refuse only an exact repeat (every term the same), so two separate
     wagers placed at the same moment (different book, price, line or stake) both record."""
-    dup = ledger.filter(pl.all_horizontal(
-        pl.col(c).is_null() if bet[c] is None else pl.col(c) == bet[c] for c in TERMS))
+    dup = ledger.filter(same_terms(bet))
     if dup.height:
         raise RealBetError("this bet is already recorded")
     return pl.concat([ledger, pl.DataFrame([bet], schema=REAL_SCHEMA)])
 
 
+def grade_real(bet: dict, home_points: int, away_points: int) -> str:
+    """A spread at its own line; a moneyline on the outright winner."""
+    if bet["market"] == "moneyline":
+        margin = home_points - away_points if bet["side"] == "home" else away_points - home_points
+        return "won" if margin > 0 else ("lost" if margin < 0 else "push")
+    return grade(bet["side"], bet["line"], home_points, away_points)
+
+
 def settle_real(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame) -> pl.DataFrame:
     """Grade open bets whose game is final, at the bet's own line and price; CLV against
-    ``closing`` (game_id, closing_line, closing_source), the paper ledger's close. Terms and
-    already-settled rows are never touched."""
+    ``closing`` (game_id, closing_line, closing_source), the paper ledger's close, for pregame
+    spreads only. Terms and already-settled rows are never touched."""
     final = {g["game_id"]: g for g in games.to_dicts()
              if g["completed"] and g["home_points"] is not None and g["away_points"] is not None}
     close = {c["game_id"]: c for c in closing.to_dicts()}
@@ -153,11 +191,11 @@ def settle_real(ledger: pl.DataFrame, games: pl.DataFrame, closing: pl.DataFrame
     for r in ledger.to_dicts():
         g = final.get(r["game_id"])
         if r["status"] == "open" and g is not None:
-            status = grade(r["side"], r["line"], g["home_points"], g["away_points"])
+            status = grade_real(r, g["home_points"], g["away_points"])
             r |= {"status": status, "home_points": g["home_points"], "away_points": g["away_points"],
                   "dollars": {"won": win_dollars(r["odds"], r["risk_dollars"]), "lost": -r["risk_dollars"]}.get(status, 0.0)}
             c = close.get(r["game_id"])
-            if c is not None and c["closing_line"] is not None:
+            if c is not None and c["closing_line"] is not None and r["market"] != "moneyline" and not r["live"]:
                 r |= {"closing_line": c["closing_line"], "closing_source": c.get("closing_source"),
                       "clv": clv(r["side"], r["line"], c["closing_line"])}
         rows.append(r)

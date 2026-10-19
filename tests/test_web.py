@@ -2273,7 +2273,7 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     # An open paper bet links to the form with its side, best line, price and book filled in.
     assert 'href="/bets?season=2026&amp;game=1&amp;side=home&amp;line=-3&amp;odds=-105&amp;book=TestBook#record"' in html
     pre = " ".join(c.get("/bets?season=2026&game=3&side=away&line=3.5&odds=-105&book=FanDuel#record").text.split())
-    assert 'value="3:away" selected' in pre and 'name="line" inputmode="decimal" required placeholder="+3.5" value="3.5"' in pre
+    assert 'value="3:away" selected' in pre and 'name="line" inputmode="decimal" placeholder="+3.5" value="3.5"' in pre
     assert 'name="odds" inputmode="numeric" required placeholder="-110" value="-105"' in pre and 'value="FanDuel"' in pre
 
     # Recording: through the ledger (home-perspective line, dollars risked), then back to the section.
@@ -2329,6 +2329,63 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     # The paper record and API are untouched.
     assert c.get("/api/bets").json()["summary"] == before["summary"]
     assert '"risk_dollars"' not in c.get("/api/bets").text
+
+
+def test_owner_records_a_live_moneyline_on_a_game_that_kicked_off(web_cfg, monkeypatch):
+    from cfbr.bets.real import read_real
+    from cfbr.web.access import OWNER_COOKIE, owner_token
+
+    monkeypatch.setenv("OWNER_KEY", "s3cret-key")
+    # Games 1 and 2 kicked off two hours ago (game 1 already final); game 3 is two days out.
+    now = datetime.now(UTC)
+    _write_season(web_dir(web_cfg), now, polls=True)
+    d = web_dir(web_cfg) / str(SEASON)
+    games = pl.read_parquet(d / "games.parquet")
+    games.with_columns(kickoff_ts=pl.when(pl.col("game_id").is_in([1, 2])).then(pl.lit(now - timedelta(hours=2)))
+                       .otherwise(pl.col("kickoff_ts")).cast(games.schema["kickoff_ts"])).write_parquet(d / "games.parquet")
+    (d / "meta.json").write_text((d / "meta.json").read_text())  # meta last, or the store sees a rebuild in progress
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
+    hdr = {"content-type": "application/x-www-form-urlencoded"}
+    path = web_cfg.paths.out_dir / str(SEASON) / "bets_real.csv"
+
+    # Started games are on the list for a live bet, marked as such; the form has the new fields.
+    html = " ".join(c.get("/bets").text.split())
+    assert 'value="2:away">Ohio State at Hawai&#39;i' in html and "· started" in html
+    assert 'value="1:home">' in html  # final, but kicked off within the last 3 days
+    assert 'name="market"' in html and 'value="moneyline"' in html and 'name="live"' in html
+
+    # A live moneyline: no line needed, placed time defaults to now (after kickoff).
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=2:away&market=moneyline&live=on&odds=%2B158&stake=10&book=DraftKings",
+               headers=hdr)
+    assert r.status_code == 303, r.text
+    row = read_real(path).to_dicts()[0]
+    assert row["market"] == "moneyline" and row["live"] is True and row["line"] is None
+    assert row["team"] == "Ohio State" and row["odds"] == 158 and row["status"] == "open"
+    html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
+    assert 'Ohio State ML <span class="badge">live</span>' in html and "$10 / $15.80" in html
+
+    # Refused, and nothing written: a double-submit; a bet after kickoff not marked live; a live
+    # bet on a game not yet started; an unknown bet type; a spread with no line.
+    local = (now - timedelta(minutes=30)).astimezone(ZoneInfo("America/Chicago")).strftime("%Y-%m-%dT%H:%M")
+    for body, msg in [(f"season={SEASON}&pick=2:away&market=moneyline&live=on&odds=158&stake=10&book=DraftKings", "recorded a moment ago"),
+                      (f"season={SEASON}&pick=2:away&market=moneyline&odds=158&stake=10", "mark it live"),
+                      (f"season={SEASON}&pick=3:away&market=moneyline&live=on&odds=158&stake=10", "so not live"),
+                      (f"season={SEASON}&pick=2:away&market=total&odds=158&stake=10", "pick a bet type"),
+                      (f"season={SEASON}&pick=2:away&market=spread&live=on&line=&odds=-110&stake=10&placed={local}",
+                       "line must be a number")]:
+        r = c.post("/bets/real", content=body, headers=hdr)
+        assert r.status_code == 422 and msg in r.text, body
+    assert read_real(path).height == 1
+    # An error keeps the bet type and live box as typed.
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&market=moneyline&live=on&odds=158&stake=10", headers=hdr)
+    assert '<option value="moneyline" selected>' in r.text and 'name="live" checked' in r.text
+
+    # A live spread with a typed in-game time records too.
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=2:home&market=spread&live=on&line=%2B6.5&odds=-115&stake=10&placed={local}",
+               headers=hdr)
+    assert r.status_code == 303
+    assert read_real(path).filter(pl.col("market") == "spread")["line"].to_list() == [6.5]
 
 
 def test_owner_reaches_a_season_with_no_bets_yet(web_cfg, monkeypatch):

@@ -1,6 +1,6 @@
 """The owner's real-bet ledger: kept apart from the paper ledger, graded at its own price."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import polars as pl
 import pytest
@@ -21,9 +21,9 @@ def _games() -> pl.DataFrame:
         "completed": [False, False, False]})
 
 
-def _bet(game_id=1, team="Cincinnati", line=1.5, odds=-110, risk=10.0, placed=PLACED):
+def _bet(game_id=1, team="Cincinnati", line=1.5, odds=-110, risk=10.0, placed=PLACED, market="spread", live=False):
     game = _games().filter(pl.col("game_id") == game_id).to_dicts()[0]
-    return new_bet(game, team, line, odds, risk, "DraftKings", placed, NOW, 2026, 7)
+    return new_bet(game, team, line, odds, risk, "DraftKings", placed, NOW, 2026, 7, market=market, live=live)
 
 
 def test_find_game_takes_the_team_s_next_game():
@@ -138,6 +138,75 @@ def test_weekly_settles_real_bets_with_paper_bets_off(monkeypatch):
     monkeypatch.setattr(run, "run_bets", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
     calls.clear()
     assert cli._bets_step(on, None, 2026, 6) is True and calls == ["real"]
+
+
+def test_live_bets_must_be_placed_during_the_game():
+    in_game = KICK + timedelta(hours=3)
+    bet = _bet(placed=in_game, live=True)
+    assert bet["live"] is True and bet["market"] == "spread"
+    with pytest.raises(RealBetError, match="before kickoff.*so not live"):
+        _bet(placed=KICK - timedelta(minutes=1), live=True)
+    with pytest.raises(RealBetError, match="more than 6 hours after kickoff"):
+        _bet(placed=KICK + timedelta(hours=6, minutes=1), live=True)
+    # Unmarked, an in-game time is still refused, with a pointer to the live flag.
+    with pytest.raises(RealBetError, match="mark it live"):
+        _bet(placed=in_game)
+    # find_game: a live bet is on the team's latest game kicked off by then, not its next one.
+    assert find_game(_games(), "Cincinnati", in_game, live=True)["game_id"] == 1
+    with pytest.raises(RealBetError, match="kicked off by"):
+        find_game(_games(), "Cincinnati", PLACED, live=True)
+
+
+def test_moneyline_has_no_line_and_grades_on_the_winner(tmp_path):
+    in_game = KICK.replace(hour=23, minute=30) + timedelta(hours=3)
+    ok = _bet(game_id=2, team="Oklahoma State", line=None, odds=327, placed=in_game, market="moneyline", live=True)
+    assert ok["line"] is None and ok["side"] == "away" and ok["market"] == "moneyline"
+    with pytest.raises(RealBetError, match="not a bet type"):
+        _bet(market="total")
+    with pytest.raises(RealBetError, match="line must be a number"):
+        _bet(line=None)  # a spread still needs one
+    hou = _bet(game_id=2, team="Houston", line=None, odds=-400, placed=in_game, market="moneyline", live=True)
+    pregame = _bet(game_id=2, team="Houston", line=-4.5, odds=-105)
+    led = add_real(add_real(add_real(read_real(tmp_path / "none.csv"), ok), hou), pregame)
+    games = pl.DataFrame({"game_id": [2], "completed": [True], "home_points": [35], "away_points": [32]})
+    closing = pl.DataFrame({"game_id": [2], "closing_line": [-4.0], "closing_source": ["snapshot"]})
+    houml, houats, okst = settle_real(led, games, closing).sort("odds").to_dicts()  # −400, −105, +327
+    # Houston won by 3: the Oklahoma State moneyline loses the stake, Houston's pays at −400,
+    # and Houston −4.5 loses at its own line.
+    assert okst["status"] == "lost" and okst["dollars"] == -10.0
+    assert houml["status"] == "won" and houml["dollars"] == pytest.approx(2.5)
+    assert houats["status"] == "lost"
+    # Only the pregame spread gets a close and CLV; the live moneylines get neither.
+    assert houats["clv"] == -0.5 and houats["closing_line"] == -4.0
+    assert okst["clv"] is None and okst["closing_line"] is None and houml["clv"] is None
+    m = summarize_real(settle_real(led, games, closing))
+    assert (m["won"], m["lost"], m["n_clv"]) == (1, 2, 1) and m["avg_clv"] == -0.5
+
+
+def test_a_live_spread_gets_no_clv(tmp_path):
+    led = add_real(read_real(tmp_path / "none.csv"), _bet(placed=KICK + timedelta(hours=1), live=True))
+    games = pl.DataFrame({"game_id": [1], "completed": [True], "home_points": [24], "away_points": [23]})
+    closing = pl.DataFrame({"game_id": [1], "closing_line": [-2.5], "closing_source": ["snapshot"]})
+    r = settle_real(led, games, closing).to_dicts()[0]
+    assert r["status"] == "won" and r["clv"] is None
+
+
+def test_a_ledger_from_before_markets_reads_as_pregame_spreads(tmp_path):
+    path = tmp_path / "bets_real.csv"
+    old = _bet()
+    del old["market"], old["live"]
+    pl.DataFrame([old]).write_csv(path)
+    led = read_real(path)
+    assert led["market"].to_list() == ["spread"] and led["live"].to_list() == [False]
+    # ...and still refuses the same bet recorded again.
+    with pytest.raises(RealBetError, match="already recorded"):
+        add_real(led, _bet())
+    # A moneyline and a live bet on the same game are separate wagers.
+    in_game = KICK + timedelta(hours=1)
+    led = add_real(led, _bet(placed=in_game, live=True))
+    led = add_real(led, _bet(placed=in_game, live=True, market="moneyline", line=None, odds=150))
+    write_real(led, path)
+    assert read_real(path).height == 3
 
 
 def test_win_dollars():
