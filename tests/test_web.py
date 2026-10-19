@@ -136,9 +136,84 @@ def test_pages_render(client, url):
     assert "<html" in r.text
 
 
-def test_index_redirects_to_rankings(client):
+def test_index_redirects_to_this_week(client):
     r = client.get("/", follow_redirects=False)
-    assert r.status_code == 307 and r.headers["location"] == "/rankings"
+    assert r.status_code == 307 and r.headers["location"] == "/week"
+
+
+def test_this_week_page(client):
+    html = " ".join(client.get("/week").text.split())
+    # Upcoming slate (week 2), movers (through week 1) and last week's results (week 1).
+    assert "2026 · Week 2" in html and "2 games" in html
+    assert "Texas A&amp;M</a> @ " in html and "Ohio State</a>" in html and "Toss-up" in html
+    assert 'href="/games?season=2026&amp;slot=r02"' in html
+    assert "through week 1" in html and 'href="/team/2026/Texas%20A%26M"' in html
+    assert "No rank changes yet" in html  # the fixture's week 1 table has rank_change 0 everywhere
+    assert "Week 1 results" in html and 'Games final</div><div class="tile-value">2<' in html
+    assert "Vegas MAE" in html and "on same games" in html
+    assert "No upsets" in html  # both week 1 favorites won
+    assert "FCS:Big Sky" not in html
+    assert client.get("/week?season=1999").status_code == 404
+
+
+def test_this_week_surprises_and_flags():
+    from cfbr.web.app import this_week
+
+    now = datetime.now(UTC)
+    games = _games(now).with_columns(
+        # Game 2: Hawai'i favored by 4 but lost 17-24 -> an upset. Game 3: the model is 5 points
+        # off the line -> flagged, listed first. Game 4 keeps its NaN spread: no edge, no flag.
+        pred_margin=pl.when(pl.col("game_id") == 2).then(4.0).when(pl.col("game_id") == 3).then(8.0)
+        .otherwise(pl.col("pred_margin")),
+        win_prob=pl.when(pl.col("game_id") == 2).then(0.62).when(pl.col("game_id") == 3).then(0.73)
+        .otherwise(pl.col("win_prob")))
+    s = Season({"season": SEASON, "live": True, "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}},
+               _ensure(_ratings(), ("ap_rank", "coaches_rank", "cfp_rank")),
+               _ensure(games, [f"{a}_{c}" for a in ("home", "away") for c in ("ap_rank", "coaches_rank", "cfp_rank")]))
+    w = this_week(s, now, 3.0)
+    assert w["last_slot"] == "r01" and w["next_slot"] == "r02"
+    assert [u["game_id"] for u in w["upsets"]] == [2] and w["upsets"][0]["fav_prob"] == 0.62
+    assert w["n_upcoming"] == 2 and w["n_flagged"] == 1
+    assert [g["game_id"] for g in w["upcoming"]] == [3, 4] and w["upcoming"][0]["flag"] == "edge"
+    assert w["movers"]["top"][0]["team"] == "Texas A&M" and w["results"]["n_games"] == 2
+    # A locked viewer gets the schedule only.
+    w = this_week(s, now, 3.0, locked=True)
+    assert w["movers"] is None and w["results"] is None and w["upsets"] == [] and w["n_upcoming"] == 2
+
+
+def test_this_week_midweek_keeps_the_slate_and_last_full_week():
+    """Week 2's Tuesday game is final while Saturday's is pending: the slate still shows the
+    pending game and the results section stays on week 1, the last week that is over."""
+    from cfbr.web.app import this_week
+
+    now = datetime.now(UTC)
+    games = _games(now).with_columns(
+        completed=pl.when(pl.col("game_id") == 3).then(True).otherwise(pl.col("completed")),
+        kickoff_ts=pl.when(pl.col("game_id") == 3).then(now - timedelta(days=1)).otherwise(pl.col("kickoff_ts")),
+        home_points=pl.when(pl.col("game_id") == 3).then(20).otherwise(pl.col("home_points")),
+        away_points=pl.when(pl.col("game_id") == 3).then(17).otherwise(pl.col("away_points")),
+        margin=pl.when(pl.col("game_id") == 3).then(3.0).otherwise(pl.col("margin")))
+    s = Season({"season": SEASON, "live": True, "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}},
+               _ensure(_ratings(), ("ap_rank", "coaches_rank", "cfp_rank")),
+               _ensure(games, [f"{a}_{c}" for a in ("home", "away") for c in ("ap_rank", "coaches_rank", "cfp_rank")]))
+    w = this_week(s, now, 3.0)
+    assert w["next_slot"] == "r02" and [g["game_id"] for g in w["upcoming"]] == [4]
+    assert w["last_slot"] == "r01" and w["results"]["n_games"] == 2
+    # Once Saturday's game is also final, week 2 is the week that is over.
+    s2 = Season(s.meta, s.ratings, s.games.with_columns(completed=True, kickoff_ts=now - timedelta(days=1)))
+    w = this_week(s2, now, 3.0)
+    assert w["next_slot"] is None and w["last_slot"] == "r02"
+
+
+def test_this_week_after_the_season(web_cfg):
+    from cfbr.web.app import this_week
+
+    now = datetime.now(UTC)
+    s = Store(web_dir(web_cfg), web_cfg.paths.results_dir, web_cfg.paths.out_dir)
+    _write_season(web_dir(web_cfg), now - timedelta(days=400), live=False)
+    season = s.season(SEASON)
+    w = this_week(season, now, 3.0)
+    assert w["next_slot"] is None and w["last_slot"] == "r01" and w["upcoming"] == []
 
 
 def test_rankings_default_to_latest_week_and_link_teams(client):
@@ -178,7 +253,7 @@ def test_conference_filter(client):
 
 
 def test_team_names_are_escaped(client):
-    for url in ("/rankings", "/games?slot=r01", "/team/2026/%3Cb%3EEvil%3C%2Fb%3E"):
+    for url in ("/rankings", "/games?slot=r01", "/team/2026/%3Cb%3EEvil%3C%2Fb%3E", "/week"):
         html = client.get(url).text
         assert "<b>Evil</b>" not in html
         assert "&lt;b&gt;Evil&lt;/b&gt;" in html
@@ -704,7 +779,7 @@ def free_client(web_cfg):
 
 @pytest.mark.parametrize("url", [
     "/rankings?season=2026", "/rankings?season=2026&week=1", "/team/2026/Ohio%20State", "/team/2026/Texas%20A%26M",
-    "/games?season=2026&slot=r01", "/games?season=2026&slot=r02",
+    "/games?season=2026&slot=r01", "/games?season=2026&slot=r02", "/week?season=2026", "/week",
 ])
 def test_free_viewers_see_no_live_model_output(free_client, url):
     r = free_client.get(url)
@@ -1899,10 +1974,10 @@ def test_nav_and_skip_link(client):
     html = client.get("/rankings").text
     nav = html[html.index('<nav aria-label="Sections">'):html.index("</nav>")]
     assert [s.split("</a>")[0].split(">")[-1] for s in nav.split("<a ")[1:]] == \
-        ["Rankings", "Games", "Projections", "Bets"]
+        ["This week", "Rankings", "Games", "Projections", "Bets"]
     assert '<a class="skip" href="#main">' in html and '<main id="main"' in html
     # Old routes still work under the new labels.
-    for url, label in (("/odds", None), ("/accuracy", "Rankings"), ("/matchup", "Games")):
+    for url, label in (("/odds", None), ("/accuracy", "Rankings"), ("/matchup", "Games"), ("/week", "This week")):
         if label:
             assert f'aria-current="page">{label}</a>' in client.get(url).text, url
 

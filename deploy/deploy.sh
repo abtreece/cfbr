@@ -27,7 +27,7 @@ restart_and_check() {
     sleep 1
   done
   for path in / /accuracy /bets /api/bets; do
-    # -L: / answers 307 -> /rankings; check the page a visitor lands on.
+    # -L: / answers 307 -> /week; check the page a visitor lands on.
     code="$(curl -sL -o /dev/null -w '%{http_code}' "${base_url}${path}")"
     echo "${path} ${code}"
     [[ "${code}" == "200" ]] || failed=1
