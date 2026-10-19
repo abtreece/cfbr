@@ -50,7 +50,7 @@
     <tr>
       <td class="opt">{{ b.kickoff|kickoff }}</td>
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}<span class="m-only muted"><br>{{ b.kickoff|kickoff }} {{ tz_label }}</span></td>
-      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}{% if b.line_now is not none and b.line_now != b.team_line %}<span class="m-only muted"><br>now {{ b.line_now|spread }}</span>{% endif %}</td>
+      <td class="strong wrap">{{ b.team }} {{ b.team_line|spread }}{% if b.line_now is not none and b.line_now != b.team_line %}<span class="m-only muted"><br>now {{ b.line_now|spread }}</span>{% endif %}{% if b.record_link %} <a class="record-link" href="{{ b.record_link }}" title="Record a real bet on this">Record</a>{% endif %}</td>
       <td class="num opt" title="{{ MODEL }}'s expected margin for {{ b.team }}" data-v="{{ b.model_team }}">{{ b.model_team|margin }}</td>
       <td class="num">{{ b.edge_pts|num }}</td>
       <td class="num opt">{{ b.line_now|spread }}{% if b.line_now_older %}<sup class="muted" title="Older line: as of {{ b.line_now_as_of|iso_ts }}">*</sup>{% endif %}</td>
@@ -225,6 +225,41 @@
 {% if real %}{% set rs = real.summary %}
 <h2 id="mine">My real bets <span class="muted">· only you see this section</span></h2>
 <p class="note">Unlike the paper bets above, these are real wagers I placed, graded at their own number and price. <a href="/owner/logout">Hide (log out)</a></p>
+{% if real.saved %}<p class="callout" id="saved"><strong>Recorded.</strong> It settles the night its game ends.</p>{% endif %}
+<details class="record"{% if real.error or real.form.pick %} open{% endif %} id="record">
+  <summary>Record a bet <span class="change">Open form</span></summary>
+  {% if real.error %}<p class="callout error"><strong>Not recorded:</strong> {{ real.error }}.</p>{% endif %}
+  <form class="record-bet" method="post" action="/bets/real" autocomplete="off">
+    <input type="hidden" name="season" value="{{ season }}">
+    <label class="wide">Team
+      <select name="pick" required>
+        <option value="">— pick a side —</option>
+        {% for o in real.sides %}
+        <option value="{{ o.value }}"{% if o.value == real.form.pick %} selected{% endif %}>{{ o.team }} {{ o.vs }} {{ o.opponent }} · {{ o.kickoff|kickoff }}{% if o.line is not none %} · {{ o.line|spread }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Line <span class="muted">(your side)</span>
+      <input type="text" name="line" inputmode="decimal" required placeholder="+3.5" value="{{ real.form.line if real.form.line is not none else '' }}">
+    </label>
+    <label>Price
+      <input type="text" name="odds" inputmode="numeric" required placeholder="-110" value="{{ real.form.odds if real.form.odds is not none else '' }}">
+    </label>
+    <label>Stake $
+      <input type="text" name="stake" inputmode="decimal" required placeholder="10" value="{{ real.form.stake if real.form.stake is not none else '' }}">
+    </label>
+    <label>Book
+      <input type="text" name="book" list="books" placeholder="DraftKings" value="{{ real.form.book or '' }}">
+      <datalist id="books">{% for b in rules.selectable_books %}<option value="{{ b }}">{% endfor %}</datalist>
+    </label>
+    <label>Placed ({{ tz_label }}) <span class="muted">blank = now</span>
+      <input type="datetime-local" name="placed" value="{{ real.form.placed or '' }}">
+    </label>
+    <button type="submit">Record</button>
+  </form>
+  <p class="note">The line is from your team's side (+3.5 for a 3.5-point dog). Written to the real-bet ledger the same way as <code>cfbr real-bet</code>; the paper record is untouched.</p>
+</details>
+{% if real.rows %}
 <div class="tiles">
   {{ tile("Record", rs.won ~ "–" ~ rs.lost ~ "–" ~ rs.push, (rs.open ~ " open · " ~ rs.open_risk|money(false) ~ " at risk") if rs.open else "won–lost–push") }}
   {{ tile("Profit", rs.dollars|money, ("ROI " ~ rs.roi|pct ~ " on " ~ rs.risked|money(false)) if rs.settled else "after games settle") }}
@@ -253,5 +288,8 @@
 </table>
 </div>
 <p class="note">CLV &gt; 0 means the line beat the close used for the paper bets. Final scores are away–home.</p>
+{% else %}
+<p class="muted">No real bets recorded yet this season.</p>
+{% endif %}
 {% endif %}
 {% endblock %}
