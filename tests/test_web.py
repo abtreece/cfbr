@@ -137,6 +137,23 @@ def test_pages_render(client, url):
     assert "<html" in r.text
 
 
+def test_static_urls_carry_a_content_hash(client, tmp_path):
+    import hashlib
+
+    from cfbr.web.app import HERE, asset_versions
+
+    # A changed stylesheet gets a new URL, so a browser can't pair new markup with a cached old one.
+    html = client.get("/rankings").text
+    for name in ("style.css", "app.js"):
+        v = hashlib.sha256((HERE / "static" / name).read_bytes()).hexdigest()[:10]
+        assert f'/static/{name}?v={v}"' in html, name
+        assert client.get(f"/static/{name}?v={v}").status_code == 200
+    (tmp_path / "a.css").write_text("a{}")
+    before = asset_versions(tmp_path)["a.css"]
+    (tmp_path / "a.css").write_text("a{color:red}")
+    assert asset_versions(tmp_path)["a.css"] != before
+
+
 def test_index_redirects_to_this_week(client):
     r = client.get("/", follow_redirects=False)
     assert r.status_code == 307 and r.headers["location"] == "/week"
@@ -2274,7 +2291,7 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     assert 'href="/bets?season=2026&amp;game=1&amp;side=home&amp;line=-3&amp;odds=-105&amp;book=TestBook#record"' in html
     pre = " ".join(c.get("/bets?season=2026&game=3&side=away&line=3.5&odds=-105&book=FanDuel#record").text.split())
     assert 'value="3:away" selected' in pre and 'name="line" inputmode="decimal" placeholder="+3.5" value="3.5"' in pre
-    assert 'name="odds" inputmode="numeric" required placeholder="-110" value="-105"' in pre and 'value="FanDuel"' in pre
+    assert 'name="odds" inputmode="numeric" required placeholder="-110 or +158" value="-105"' in pre and 'value="FanDuel"' in pre
 
     # Recording: through the ledger (home-perspective line, dollars risked), then back to the section.
     r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=%2B3.5&odds=-105&stake=25&book=FanDuel", headers=hdr)
