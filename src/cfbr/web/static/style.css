@@ -297,3 +297,12 @@ footer.site .built { display: block; margin-top: 4px; }
 .h2h-find { display: block; width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 6px 8px; font: inherit; font-size: 14px;
   color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
 .h2h .h2h-neutral { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text-2); }
+
+/* "This week" landing page: upcoming slate, rankings movers, last week's results. */
+.week-section { margin-bottom: 8px; }
+.week-section h3 { font-size: 15px; margin: 14px 0 6px; font-weight: 620; }
+.week-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.movers-lists h3:first-child { margin-top: 0; }
+ol.movers { margin: 0; padding-left: 22px; font-size: 14px; line-height: 1.7; }
+.note.more { font-size: 14px; }
+@media (max-width: 640px) { .week-grid { grid-template-columns: 1fr; } }

@@ -12,10 +12,11 @@
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <header class="site">
-    <a class="brand" href="/rankings">CFB Ratings</a>
+    <a class="brand" href="/week">CFB Ratings</a>
     <nav aria-label="Sections">
       {% set path = request.url.path %}
       {# Labels, not routes, changed with the reorganization: old links and bookmarks keep working. #}
+      <a href="/week" {% if path.startswith('/week') %}aria-current="page"{% endif %}>This week</a>
       <a href="/rankings" {% if path.startswith(('/rankings', '/team', '/roster', '/player', '/accuracy', '/lab')) %}aria-current="page"{% endif %}>Rankings</a>
       <a href="/games" {% if path.startswith(('/games', '/matchup')) %}aria-current="page"{% endif %}>Games</a>
       <a href="/odds" {% if path.startswith('/odds') %}aria-current="page"{% endif %}>Projections</a>

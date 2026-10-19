@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% from "macros.html" import season_select, tile, team_link, poll_rank, delta, premium_notice %}
+{% block title %}{{ season }} this week · CFB Ratings{% endblock %}
+{% block content %}
+<form class="filters" method="get" action="/week">
+  {{ season_select(seasons, season) }}
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+
+<h1>{{ season }}{% if next_slot %} · {{ next_slot|slot_label }}{% elif last_slot %} · after {{ last_slot|slot_label }}{% endif %}</h1>
+<p class="lede">
+  {% if next_slot %}What happened last week, who moved, and what's next.
+  {% elif last_slot %}The season is over: how it finished.
+  {% else %}The season hasn't started. <a href="/rankings?season={{ season }}&amp;week=0">Preseason ratings →</a>{% endif %}
+  {% if not locked and week is not none %}{% if week == FINAL %}Final {{ MODEL }} ratings.{% else %}{{ MODEL }} ratings through {{ s.label(week)|lower }}.{% endif %}{% endif %}
+</p>
+{% if locked %}{{ premium_notice(season, "predictions and rankings") }}
+{% if free_season %}<p><a href="/week?season={{ free_season }}">See {{ free_season }} instead →</a></p>{% endif %}{% endif %}
+
+{# -- Upcoming slate ------------------------------------------------------------------ #}
+{% if next_slot %}
+<section class="week-section" id="upcoming">
+<h2>{{ next_slot|slot_label }} <span class="muted">{{ n_upcoming }} game{{ "s" if n_upcoming != 1 }}</span></h2>
+{% if not locked %}<p class="note">{% if n_flagged %}{{ n_flagged }} flagged first: {{ MODEL }} picks the underdog, or is {{ threshold|num(0) }}+ points off the Vegas line. {% endif %}A disagreement isn't an edge by itself; see <a href="/accuracy?season={{ season }}">the track record</a>.</p>{% endif %}
+{% if s.meta.lines_as_of and live %}<p class="note lines-as-of">Vegas lines as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.</p>{% endif %}
+<div class="table-wrap">
+<table class="data" id="slate">
+  <thead><tr><th>Kickoff ({{ tz_label }})</th><th>Matchup</th>{% if not locked %}<th>{{ MODEL }}</th>{% endif %}<th>Vegas</th>{% if not locked %}<th>Edge</th>{% endif %}</tr></thead>
+  <tbody>
+  {% for g in upcoming %}
+    <tr{% if g.flag and not locked %} class="flagged"{% endif %}>
+      <td>{{ g.kickoff_ts|kickoff }}</td>
+      <td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}</td>
+      {% if not locked %}<td class="strong wrap">{{ g.model_pick or "—" }}{% if g.fav_prob %} <span class="muted">{{ prob(g.fav_prob) }}</span>{% endif %}</td>{% endif %}
+      <td class="wrap">{{ g.vegas_pick or "—" }}</td>
+      {% if not locked %}<td class="wrap{% if g.flag %} strong{% endif %}">{{ g.edge or "—" }}{% if g.flag == "upset" %} <span class="badge">upset pick</span>{% endif %}</td>{% endif %}
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No games left to play this week.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="note more"><a href="/games?season={{ season }}&amp;slot={{ next_slot }}">All {{ n_upcoming }} {{ next_slot|slot_label|lower }} games →</a>{% if not locked and n_flagged %} · <a href="/games?season={{ season }}&amp;slot={{ next_slot }}&amp;show=flagged">Flagged only →</a>{% endif %}{% if not locked %} · <a href="/matchup?season={{ season }}">Price any matchup →</a>{% endif %}</p>
+</section>
+{% endif %}
+
+{# -- Movers --------------------------------------------------------------------------- #}
+{% if movers %}
+<section class="week-section" id="movers">
+<h2>Rankings <span class="muted">{{ "final" if week == FINAL else "through " ~ s.label(week)|lower }}</span></h2>
+<div class="week-grid">
+  <div class="table-wrap">
+    <table class="data" id="top">
+      <thead><tr><th class="num">#</th><th>Team</th><th class="num">±</th><th class="num">Rating</th></tr></thead>
+      <tbody>
+      {% for r in movers.top %}
+        <tr><td class="num">{{ r.rank }}</td><td><a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a> <span class="muted">{{ r.w }}–{{ r.l }}</span></td>
+          <td class="num">{{ delta(r.rank_change, 0) }}</td><td class="num">{{ r.rating|signed }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="movers-lists">
+    <h3>Risers</h3>
+    {% if movers.risers %}<ol class="movers">{% for r in movers.risers %}<li><a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a> <span class="up">▲ {{ r.rank_change }}</span> <span class="muted">to #{{ r.rank }}</span></li>{% endfor %}</ol>
+    {% else %}<p class="muted">No rank changes yet.</p>{% endif %}
+    <h3>Fallers</h3>
+    {% if movers.fallers %}<ol class="movers">{% for r in movers.fallers %}<li><a href="/team/{{ season }}/{{ r.team|q }}">{{ r.team }}</a> <span class="down">▼ {{ -r.rank_change }}</span> <span class="muted">to #{{ r.rank }}</span></li>{% endfor %}</ol>
+    {% else %}<p class="muted">No rank changes yet.</p>{% endif %}
+  </div>
+</div>
+<p class="note more"><a href="/rankings?season={{ season }}">Full rankings →</a></p>
+</section>
+{% endif %}
+
+{# -- Last week ----------------------------------------------------------------------- #}
+{% if last_slot %}
+<section class="week-section" id="results">
+<h2>{{ last_slot|slot_label }} results</h2>
+{% if results and results.n_games %}
+<div class="tiles">
+  {{ tile("Games final", results.n_games) }}
+  {{ tile("Winners picked", results.su_accuracy|pct(0)) }}
+  {{ tile(MODEL ~ " MAE", results.mae|num ~ " pts", ("Vegas " ~ results.line_mae|num ~ " on same games") if results.n_lined else none) }}
+  {% if results.ats_n %}{{ tile("Against the spread", results.ats_wins ~ "–" ~ (results.ats_n - results.ats_wins)) }}{% endif %}
+  {% if std and std.ats_n %}{{ tile("Season ATS", std.ats_win_rate|pct(1), std.ats_n ~ " game" ~ ("s" if std.ats_n != 1) ~ " · break-even 52.4%") }}{% endif %}
+</div>
+{% endif %}
+{% if upsets %}
+<h3>Biggest surprises</h3>
+<p class="note">Games {{ MODEL }}'s favorite lost, the most confident pick first.</p>
+<div class="table-wrap">
+<table class="data" id="upsets">
+  <thead><tr><th>Matchup</th><th>Final</th><th>{{ MODEL }} had</th><th>Vegas had</th></tr></thead>
+  <tbody>
+  {% for g in upsets %}
+    <tr><td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}</td>
+      <td>{{ g.away_points }}–{{ g.home_points }}</td>
+      <td class="wrap">{{ g.model_pick }} <span class="muted">{{ prob(g.fav_prob) }}</span></td>
+      <td class="wrap">{{ g.vegas_pick or "—" }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% elif results and not locked %}<p class="note">No upsets: every {{ MODEL }} favorite won.</p>{% endif %}
+<p class="note more"><a href="/games?season={{ season }}&amp;slot={{ last_slot }}">All {{ last_slot|slot_label|lower }} results →</a>{% if not locked %} · <a href="/accuracy?season={{ season }}">Season track record →</a>{% endif %}</p>
+</section>
+{% endif %}
+{% endblock %}

@@ -438,6 +438,72 @@ def season_summary(s: Season) -> dict:
     return out
 
 
+# -- "This week" landing page -----------------------------------------------------
+
+MOVERS = 5        # risers and fallers shown
+TOP_N = 10        # top of the table shown
+UPSETS = 6        # last week's biggest surprises shown
+SLATE = 12        # upcoming games shown before "all games" link
+
+
+def last_played_slot(s: Season) -> str | None:
+    """The most recent slot with a final score, or None before the season starts."""
+    done = s.games.filter(pl.col("completed"))
+    return done.sort("slot_order")["slot"][-1] if done.height else None
+
+
+def movers(s: Season, week: int) -> dict:
+    """Top of the table and the biggest rank changes at ``week`` (FBS only). Rank changes
+    are against the previous table, so the preseason table has none."""
+    cur = s.ratings.filter(pl.col("fbs") & (pl.col("week") == week)).sort("rank")
+    moved = cur.filter(pl.col("rank_change").is_not_null() & (pl.col("rank_change") != 0))
+    return {
+        "top": cur.head(TOP_N).to_dicts(),
+        "risers": moved.filter(pl.col("rank_change") > 0).sort("rank_change", descending=True).head(MOVERS).to_dicts(),
+        "fallers": moved.filter(pl.col("rank_change") < 0).sort("rank_change").head(MOVERS).to_dicts(),
+    }
+
+
+def this_week(s: Season, now: datetime, threshold: float, locked: bool = False) -> dict:
+    """Everything the landing page shows: last week's results and surprises, the rankings
+    movers, and the upcoming slate with the flagged games first. Model fields are already
+    null for a locked viewer (see :func:`public_view`), so the sections that need them come
+    back empty rather than being computed and hidden."""
+    live = bool(s.meta.get("live"))
+    last = last_played_slot(s)
+    nxt = default_slot(s, now) if live else None
+    if nxt == last:  # every game of the next slot is already final (season over, or between slots)
+        nxt = None
+    out: dict = {"last_slot": last, "next_slot": nxt, "live": live, "results": None, "upsets": [],
+                 "upcoming": [], "n_upcoming": 0, "n_flagged": 0, "movers": None, "std": None, "week": None}
+    if last is not None:
+        done = s.games.filter((pl.col("slot") == last) & pl.col("completed"))
+        if not locked:
+            out["results"] = summarize(done)
+            rows = [game_row(g, now, live, threshold) for g in done.to_dicts()]
+            # Surprises: games the model's favorite lost, the most confident first. A toss-up
+            # that went either way is not a surprise.
+            upsets = [r for r in rows if r["model_pick"] and r["fav_prob"] and not _missing(r["margin"])
+                      and r["margin"] != 0 and (r["pred_margin"] > 0) != (r["margin"] > 0) and r["fav_prob"] > 0.5]
+            upsets.sort(key=lambda r: -r["fav_prob"])
+            out["upsets"] = upsets[:UPSETS]
+    if nxt is not None:
+        g = s.games.filter(pl.col("slot") == nxt)
+        cutoff = pl.lit(now - STALE_GAME).cast(g.schema["kickoff_ts"])
+        g = g.filter(~pl.col("completed") & (pl.col("kickoff_ts") > cutoff))
+        rows = [game_row(r, now, live, threshold) for r in g.to_dicts()]
+        # Flagged games first, biggest disagreement first; then the rest by kickoff.
+        rows.sort(key=lambda r: (0 if r["flag"] else 1, -(r["edge_pts"] or 0) if r["flag"] else 0,
+                                 r["kickoff_ts"].timestamp() if r["kickoff_ts"] else 0))
+        out["n_upcoming"], out["n_flagged"] = len(rows), sum(1 for r in rows if r["flag"])
+        out["upcoming"] = rows[:SLATE]
+    if not locked:
+        week = default_week(s)
+        out["week"], out["movers"] = week, movers(s, week)
+        out["std"] = season_summary(s) if s.games.filter(pl.col("completed")).height else None
+    return out
+
+
 # -- app --------------------------------------------------------------------------
 
 def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
@@ -519,7 +585,18 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index():
-        return RedirectResponse("/rankings")
+        return RedirectResponse("/week")
+
+    @app.get("/week", response_class=HTMLResponse, include_in_schema=False)
+    def week_page(request: Request, season: int | None = None, premium: bool = Depends(premium_viewer)):
+        """The landing page: what happened last week, who moved, and what is next."""
+        s, locked = view(get_season(season), premium)
+        now = datetime.now(UTC)
+        fbs_teams = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
+        resp = render(request, "week.html", s=s, season=s.meta["season"], locked=locked, fbs_teams=fbs_teams,
+                      threshold=cfg.bets.threshold, free_season=latest_free_season() if locked else None,
+                      **this_week(s, now, cfg.bets.threshold, locked))
+        return private(resp, s)
 
     @app.get("/rankings", response_class=HTMLResponse, include_in_schema=False)
     def rankings_page(request: Request, season: int | None = None, week: int | None = None,
