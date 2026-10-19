@@ -4,6 +4,7 @@ import json
 import math
 import os
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -2276,25 +2277,30 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     # Not the owner: no form, no "Record" links, and the route doesn't exist.
     html = c.get("/bets").text
     assert 'id="record"' not in html and "record-link" not in html
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=3&odds=-110&stake=10", headers=hdr)
+    r = c.post("/bets/real", content=f"season={SEASON}&game=3&side=away&line=3&odds=-110&stake=10", headers=hdr)
     assert r.status_code == 404 and not path.exists()
 
     c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
-    # The owner gets the form even with no real bets yet: upcoming sides only (game 3 kicks
-    # off in two days; games 1 and 2 are final), the consensus from each side as a hint.
+    # The owner gets the form even with no real bets yet: upcoming games only (game 3 kicks off
+    # in two days; games 1 and 2 were weeks ago), one line per game, away @ home, with the
+    # consensus as a hint. The team is a separate choice, named once a game is picked.
     html = " ".join(c.get("/bets").text.split())
     assert 'id="record"' in html and 'action="/bets/real"' in html and "No real bets recorded yet" in html
-    assert 'value="3:home">Ohio State vs Texas A&amp;M' in html and "· −3" in html
-    assert 'value="3:away">Texas A&amp;M at Ohio State' in html and "· +3" in html
-    assert 'value="1:home"' not in html
+    assert ('<option value="3" data-away="Texas A&amp;M" data-home="Ohio State">Texas A&amp;M @ Ohio State'
+            in html and "· Ohio State −3" in html)
+    assert '<option value="1"' not in html and html.count('name="side"') == 2
+    assert '<span data-side="away">Away team</span>' in html and '<span data-side="home">Home team</span>' in html
     # An open paper bet links to the form with its side, best line, price and book filled in.
     assert 'href="/bets?season=2026&amp;game=1&amp;side=home&amp;line=-3&amp;odds=-105&amp;book=TestBook#record"' in html
     pre = " ".join(c.get("/bets?season=2026&game=3&side=away&line=3.5&odds=-105&book=FanDuel#record").text.split())
-    assert 'value="3:away" selected' in pre and 'name="line" inputmode="decimal" placeholder="+3.5" value="3.5"' in pre
+    assert 'data-home="Ohio State" selected>' in pre and 'name="line" inputmode="decimal" placeholder="+3.5" value="3.5"' in pre
+    # A prefilled game names its teams on the buttons, with the link's side chosen.
+    assert 'value="away" required checked> <span data-side="away">Texas A&amp;M</span>' in pre
+    assert '<span data-side="home">Ohio State</span>' in pre
     assert 'name="odds" inputmode="numeric" required placeholder="-110 or +158" value="-105"' in pre and 'value="FanDuel"' in pre
 
     # Recording: through the ledger (home-perspective line, dollars risked), then back to the section.
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=%2B3.5&odds=-105&stake=25&book=FanDuel", headers=hdr)
+    r = c.post("/bets/real", content=f"season={SEASON}&game=3&side=away&line=%2B3.5&odds=-105&stake=25&book=FanDuel", headers=hdr)
     assert r.status_code == 303 and r.headers["location"] == f"/bets?season={SEASON}&saved=1#mine"
     led = read_real(path)
     assert led.height == 1
@@ -2303,44 +2309,51 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     assert row["odds"] == -105 and row["risk_dollars"] == 25.0 and row["book"] == "FanDuel" and row["status"] == "open"
     assert row["week"] == 2 and abs(datetime.fromisoformat(row["placed_at"]) - now) < timedelta(minutes=5)
     html = " ".join(c.get(f"/bets?season={SEASON}&saved=1").text.split())
-    assert "Recorded." in html and "Texas A&amp;M +3.5" in html and "$25 / $23" in html
+    # The confirmation names the bet, so a wrong team is caught right away.
+    assert "Recorded: Texas A&amp;M +3.5 −105." in html and "$25 / $23" in html
 
     # Refusals come back on the page with what was typed, and write nothing.
-    for body, msg in [(f"season={SEASON}&pick=3:away&line=3.5&odds=-105&stake=25&book=FanDuel", "recorded a moment ago"),
-                      (f"season={SEASON}&pick=&line=3&odds=-110&stake=10", "pick a team"),
-                      (f"season={SEASON}&pick=3:home&line=abc&odds=-110&stake=10", "line must be a number"),
-                      (f"season={SEASON}&pick=3:home&line=-3&odds=-50&stake=10", "not an American price"),
-                      (f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=0", "stake must be a positive"),
-                      (f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=10&placed=2099-01-01T00:00", "in the future"),
-                      (f"season={SEASON}&pick=999:home&line=-3&odds=-110&stake=10", "no game 999")]:
+    for body, msg in [(f"season={SEASON}&game=3&side=away&line=3.5&odds=-105&stake=25&book=FanDuel", "recorded a moment ago"),
+                      (f"season={SEASON}&game=&line=3&odds=-110&stake=10", "pick a game"),
+                      (f"season={SEASON}&game=3&line=3&odds=-110&stake=10", "pick the team you bet on"),
+                      (f"season={SEASON}&game=3&side=home&line=abc&odds=-110&stake=10", "line must be a number"),
+                      (f"season={SEASON}&game=3&side=home&line=-3&odds=-50&stake=10", "not an American price"),
+                      (f"season={SEASON}&game=3&side=home&line=-3&odds=-110&stake=0", "stake must be a positive"),
+                      (f"season={SEASON}&game=3&side=home&line=-3&odds=-110&stake=10&placed=2099-01-01T00:00", "in the future"),
+                      (f"season={SEASON}&game=999&side=home&line=-3&odds=-110&stake=10", "no game 999")]:
         r = c.post("/bets/real", content=body, headers=hdr)
         assert r.status_code == 422 and msg in r.text, body
-        pick = body.split("pick=")[1].split("&")[0]
-        assert "Not recorded:" in r.text and (not pick.startswith("3:") or f'value="{pick}" selected' in r.text), body
+        # What was typed comes back: the game and, when given, the side.
+        assert "Not recorded:" in r.text, body
+        if "game=3&" in body:
+            assert 'data-home="Ohio State" selected>' in r.text, body
+        if "side=home" in body:
+            assert 'value="home" required checked>' in r.text, body
     assert read_real(path).height == 1
     # A placed time is read as Central and must be before kickoff.
     local = (now - timedelta(hours=1)).astimezone(ZoneInfo("America/Chicago")).strftime("%Y-%m-%dT%H:%M")
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=10&placed={local}", headers=hdr)
+    r = c.post("/bets/real", content=f"season={SEASON}&game=3&side=home&line=-3&odds=-110&stake=10&placed={local}", headers=hdr)
     assert r.status_code == 303
     rows = read_real(path).sort("placed_at").to_dicts()
     assert len(rows) == 2 and abs(datetime.fromisoformat(rows[0]["placed_at"]) - (now - timedelta(hours=1))) < timedelta(minutes=2)
 
     # The same terms at another book is a separate wager, not a double-submit.
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=3.5&odds=-105&stake=25&book=DraftKings", headers=hdr)
+    r = c.post("/bets/real", content=f"season={SEASON}&game=3&side=away&line=3.5&odds=-105&stake=25&book=DraftKings", headers=hdr)
     assert r.status_code == 303 and read_real(path).height == 3
     # Malformed numbers are errors, never reinterpreted ("3+5" is not 35, "10+0" is not $100).
-    for body in (f"season={SEASON}&pick=3:home&line=3%2B5&odds=-110&stake=10",
-                 f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=10%2B0"):
+    for body in (f"season={SEASON}&game=3&side=home&line=3%2B5&odds=-110&stake=10",
+                 f"season={SEASON}&game=3&side=home&line=-3&odds=-110&stake=10%2B0"):
         assert c.post("/bets/real", content=body, headers=hdr).status_code == 422, body
     assert read_real(path).height == 3
     # A Record link for a game already final still opens the form on that game (a backdated
     # bet with a pre-kickoff placed time); without a placed time it is refused at kickoff.
     pre = c.get(f"/bets?season={SEASON}&game=1&side=home&line=-3&odds=-105&book=TestBook").text
-    assert 'value="1:home" selected' in pre
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=1:home&line=-3&odds=-105&stake=10", headers=hdr)
+    assert '<option value="1" data-away="&lt;b&gt;Evil&lt;/b&gt;" data-home="Texas A&amp;M" selected>' in pre
+    assert 'value="home" required checked>' in pre
+    r = c.post("/bets/real", content=f"season={SEASON}&game=1&side=home&line=-3&odds=-105&stake=10", headers=hdr)
     assert r.status_code == 422 and "after kickoff" in r.text
     # A typed placed time survives a validation error, so fixing another field doesn't turn it into "now".
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:home&line=abc&odds=-110&stake=10&placed={local}", headers=hdr)
+    r = c.post("/bets/real", content=f"season={SEASON}&game=3&side=home&line=abc&odds=-110&stake=10&placed={local}", headers=hdr)
     assert r.status_code == 422 and f'name="placed" value="{local}"' in r.text
 
     # The paper record and API are untouched.
@@ -2368,12 +2381,12 @@ def test_owner_records_a_live_moneyline_on_a_game_that_kicked_off(web_cfg, monke
 
     # Started games are on the list for a live bet, marked as such; the form has the new fields.
     html = " ".join(c.get("/bets").text.split())
-    assert 'value="2:away">Ohio State at Hawai&#39;i' in html and "· started" in html
-    assert 'value="1:home">' in html  # final, but kicked off within the last 3 days
+    assert 'data-home="Hawai&#39;i">Ohio State @ Hawai&#39;i' in html and "· started" in html
+    assert '<option value="1"' in html  # final, but kicked off within the last 3 days
     assert 'name="market"' in html and 'value="moneyline"' in html and 'name="live"' in html
 
     # A live moneyline: no line needed, placed time defaults to now (after kickoff).
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=2:away&market=moneyline&live=on&odds=%2B158&stake=10&book=DraftKings",
+    r = c.post("/bets/real", content=f"season={SEASON}&game=2&side=away&market=moneyline&live=on&odds=%2B158&stake=10&book=DraftKings",
                headers=hdr)
     assert r.status_code == 303, r.text
     row = read_real(path).to_dicts()[0]
@@ -2381,28 +2394,64 @@ def test_owner_records_a_live_moneyline_on_a_game_that_kicked_off(web_cfg, monke
     assert row["team"] == "Ohio State" and row["odds"] == 158 and row["status"] == "open"
     html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
     assert 'Ohio State ML <span class="badge">live</span>' in html and "$10 / $15.80" in html
+    assert "Recorded: Ohio State ML +158 (live)." in " ".join(c.get(f"/bets?season={SEASON}&saved=1").text.split())
 
     # Refused, and nothing written: a double-submit; a bet after kickoff not marked live; a live
     # bet on a game not yet started; an unknown bet type; a spread with no line.
     local = (now - timedelta(minutes=30)).astimezone(ZoneInfo("America/Chicago")).strftime("%Y-%m-%dT%H:%M")
-    for body, msg in [(f"season={SEASON}&pick=2:away&market=moneyline&live=on&odds=158&stake=10&book=DraftKings", "recorded a moment ago"),
-                      (f"season={SEASON}&pick=2:away&market=moneyline&odds=158&stake=10", "mark it live"),
-                      (f"season={SEASON}&pick=3:away&market=moneyline&live=on&odds=158&stake=10", "so not live"),
-                      (f"season={SEASON}&pick=2:away&market=total&odds=158&stake=10", "pick a bet type"),
-                      (f"season={SEASON}&pick=2:away&market=spread&live=on&line=&odds=-110&stake=10&placed={local}",
+    for body, msg in [(f"season={SEASON}&game=2&side=away&market=moneyline&live=on&odds=158&stake=10&book=DraftKings", "recorded a moment ago"),
+                      (f"season={SEASON}&game=2&side=away&market=moneyline&odds=158&stake=10", "mark it live"),
+                      (f"season={SEASON}&game=3&side=away&market=moneyline&live=on&odds=158&stake=10", "so not live"),
+                      (f"season={SEASON}&game=2&side=away&market=total&odds=158&stake=10", "pick a bet type"),
+                      (f"season={SEASON}&game=2&side=away&market=spread&live=on&line=&odds=-110&stake=10&placed={local}",
                        "line must be a number")]:
         r = c.post("/bets/real", content=body, headers=hdr)
         assert r.status_code == 422 and msg in r.text, body
     assert read_real(path).height == 1
     # An error keeps the bet type and live box as typed.
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&market=moneyline&live=on&odds=158&stake=10", headers=hdr)
+    r = c.post("/bets/real", content=f"season={SEASON}&game=3&side=away&market=moneyline&live=on&odds=158&stake=10", headers=hdr)
     assert '<option value="moneyline" selected>' in r.text and 'name="live" checked' in r.text
 
     # A live spread with a typed in-game time records too.
-    r = c.post("/bets/real", content=f"season={SEASON}&pick=2:home&market=spread&live=on&line=%2B6.5&odds=-115&stake=10&placed={local}",
+    r = c.post("/bets/real", content=f"season={SEASON}&game=2&side=home&market=spread&live=on&line=%2B6.5&odds=-115&stake=10&placed={local}",
                headers=hdr)
     assert r.status_code == 303
     assert read_real(path).filter(pl.col("market") == "spread")["line"].to_list() == [6.5]
+
+
+def test_owner_voids_a_mistaken_real_bet(web_cfg, monkeypatch):
+    from cfbr.bets.real import read_real
+    from cfbr.web.access import OWNER_COOKIE, owner_token
+
+    monkeypatch.setenv("OWNER_KEY", "s3cret-key")
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_real(web_cfg)  # one open bet: Ohio State +1.5 on game 1
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    hdr = {"content-type": "application/x-www-form-urlencoded"}
+    path = web_cfg.paths.out_dir / str(SEASON) / "bets_real.csv"
+    row = read_real(path).to_dicts()[0]
+    body = f"season={SEASON}&game_id={row['game_id']}&recorded_at={quote(row['recorded_at'], safe='')}"
+
+    # Not the owner: no button, and the route doesn't exist.
+    assert 'action="/bets/real/void"' not in c.get("/bets").text
+    assert c.post("/bets/real/void", content=body, headers=hdr).status_code == 404
+    assert read_real(path)["status"][0] == "open"
+
+    c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
+    assert 'action="/bets/real/void"' in c.get("/bets").text
+    r = c.post("/bets/real/void", content=body, headers=hdr)
+    assert r.status_code == 303 and r.headers["location"] == f"/bets?season={SEASON}&voided=1#mine"
+    led = read_real(path)
+    # Kept in the file, marked void and when; out of the record; no button on it any more.
+    assert led.height == 1 and led["status"][0] == "void" and led["voided_at"][0] is not None
+    html = " ".join(c.get(f"/bets?season={SEASON}&voided=1").text.split())
+    assert "Voided." in html and '<tr class="voided">' in html and 'action="/bets/real/void"' not in html
+    assert "0–0–0" in html
+    # Only an open bet can be voided, once; an unknown bet is refused too.
+    assert c.post("/bets/real/void", content=body, headers=hdr).status_code == 409
+    assert c.post("/bets/real/void", content=f"season={SEASON}&game_id=1&recorded_at=nope",
+                  headers=hdr).status_code == 409
+    assert '"risk_dollars"' not in c.get("/api/bets").text
 
 
 def test_owner_reaches_a_season_with_no_bets_yet(web_cfg, monkeypatch):
@@ -2414,6 +2463,6 @@ def test_owner_reaches_a_season_with_no_bets_yet(web_cfg, monkeypatch):
     assert c.get(f"/bets?season={SEASON}").status_code == 404
     c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
     html = c.get("/bets").text
-    assert 'id="record"' in html and 'value="3:home"' in html
+    assert 'id="record"' in html and '<option value="3"' in html
     assert c.get(f"/bets?season={SEASON}").status_code == 200
     assert c.get("/api/bets").status_code == 404

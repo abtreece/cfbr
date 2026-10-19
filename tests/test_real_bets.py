@@ -209,6 +209,34 @@ def test_a_ledger_from_before_markets_reads_as_pregame_spreads(tmp_path):
     assert read_real(path).height == 3
 
 
+def test_void_keeps_the_row_and_drops_it_from_the_record(tmp_path):
+    from cfbr.bets.real import void_real
+
+    led = add_real(add_real(read_real(tmp_path / "none.csv"), _bet()), _bet(game_id=2, team="Houston", line=-4.5))
+    target = led.to_dicts()[0]
+    led = void_real(led, target["game_id"], target["recorded_at"], NOW)
+    assert led.height == 2 and sorted(led["status"].to_list()) == ["open", "void"]
+    assert led.filter(pl.col("status") == "void")["voided_at"][0] == NOW.isoformat()
+    # Counts for nothing: not a bet, not open, never graded, and the same terms can be entered again.
+    m = summarize_real(led)
+    assert m["bets"] == 1 and m["open"] == 1
+    games = pl.DataFrame({"game_id": [1, 2], "completed": [True, True], "home_points": [24, 30], "away_points": [23, 26]})
+    settled = settle_real(led, games, pl.DataFrame({"game_id": [1], "closing_line": [-2.5], "closing_source": ["cfbd"]}))
+    assert settled.filter(pl.col("game_id") == 1)["status"].to_list() == ["void"]
+    assert add_real(led, _bet()).height == 3
+    # Only open bets: a void or settled bet can't be voided; an unknown one isn't found.
+    with pytest.raises(RealBetError, match="only an open bet"):
+        void_real(led, target["game_id"], target["recorded_at"], NOW)
+    graded = settled.filter(pl.col("game_id") == 2).to_dicts()[0]
+    with pytest.raises(RealBetError, match="this one is lost"):
+        void_real(settled, 2, graded["recorded_at"], NOW)
+    with pytest.raises(RealBetError, match="no such bet"):
+        void_real(led, 1, "nope", NOW)
+    # And it survives a write and read.
+    write_real(led, tmp_path / "bets_real.csv")
+    assert read_real(tmp_path / "bets_real.csv").filter(pl.col("status") == "void").height == 1
+
+
 def test_win_dollars():
     assert win_dollars(-110, 10) == pytest.approx(9.0909, abs=1e-4)
     assert win_dollars(-105, 10) == pytest.approx(9.5238, abs=1e-4)
