@@ -17,6 +17,10 @@ quota_reserve = 50
 # `cfbr scores` (midweek final scores for the site) stops calling at this many calls left,
 # so it never spends what Sunday's `cfbr weekly` needs.
 scores_quota_reserve = 120
+# `cfbr weekly` waits out a CFBD outage (5xx, 429, timeout) instead of crashing: up to this many
+# ingest retries this many minutes apart (an hour by default, so the 9 AM run still lands that morning).
+outage_retries = 6
+outage_wait_minutes = 10
 
 # Thresholds are Bill Connelly's (SP+) garbage-time definition. tuned.toml disables the filter.
 [prep.garbage_time]

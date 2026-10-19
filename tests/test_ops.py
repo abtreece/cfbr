@@ -105,3 +105,61 @@ def test_weekly_run_continues_on_cached_data_when_the_quota_is_hit(monkeypatch, 
     with pytest.raises(typer.Exit) as e:
         cli._weekly_run(None)
     assert e.value.exit_code == 3
+
+
+def _status_error(code):
+    import httpx
+
+    req = httpx.Request("GET", "https://apinext.collegefootballdata.com/lines")
+    return httpx.HTTPStatusError(f"{code}", request=req, response=httpx.Response(code, request=req))
+
+
+def _outage_run(monkeypatch, tmp_path, errors):
+    """Run _weekly_run with fetch.weekly raising ``errors`` in turn, then succeeding; nothing
+    completed, so a run that gets past ingest ends with exit 5. Returns the sleeps taken."""
+    import time
+
+    from cfbr.ingest import fetch
+    from cfbr.ingest.client import CFBDClient
+
+    cfg = _cfg(tmp_path)
+    cfg.ingest.outage_retries = 2
+    monkeypatch.setattr(cli, "_default_config", lambda config: cfg)
+    monkeypatch.setattr(fetch, "current_season", lambda: 2026)
+    monkeypatch.setattr(CFBDClient, "get", lambda self, *a, **k: [])
+    monkeypatch.setattr(CFBDClient, "calls_this_month", lambda self: 0)
+    monkeypatch.setattr(fetch, "latest_cached", lambda client, endpoint, year: [])
+    pending = list(errors)
+
+    def weekly(client, season, week):
+        if pending:
+            raise pending.pop(0)
+
+    monkeypatch.setattr(fetch, "weekly", weekly)
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    with pytest.raises(typer.Exit) as e:
+        cli._weekly_run(None)
+    assert e.value.exit_code == 5
+    return sleeps
+
+
+def test_weekly_run_waits_out_a_cfbd_outage(monkeypatch, tmp_path):
+    import httpx
+
+    sleeps = _outage_run(monkeypatch, tmp_path, [_status_error(502), httpx.ConnectTimeout("timeout")])
+    assert sleeps == [600, 600]
+
+
+def test_weekly_run_gives_up_after_the_last_retry(monkeypatch, tmp_path):
+    import httpx
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _outage_run(monkeypatch, tmp_path, [_status_error(502)] * 3)
+
+
+def test_weekly_run_does_not_retry_a_client_error(monkeypatch, tmp_path):
+    import httpx
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _outage_run(monkeypatch, tmp_path, [_status_error(401)])

@@ -304,7 +304,10 @@ def _bets_step(cfg, ds, season: int, week: int) -> bool:
 def _weekly_run(config: ConfigOpt = None) -> None:
     import fcntl
     import json
+    import time
     from datetime import UTC, datetime
+
+    import httpx
 
     from cfbr.data import Dataset
     from cfbr.ingest import fetch
@@ -326,24 +329,40 @@ def _weekly_run(config: ConfigOpt = None) -> None:
 
     season = fetch.current_season()
     now = datetime.now(UTC)
-    client = CFBDClient(cfg)
     quota_hit = False
-    try:
-        cal = client.get("/calendar", {"year": season}, season, "season")
-        started = [int(w["week"]) for w in cal if w["seasonType"] == "regular"
-                   and datetime.fromisoformat(w["startDate"].replace("Z", "+00:00")) <= now]
-        cal_week = max(started) if started else 1
-        fetch.weekly(client, season, cal_week)
-    except QuotaExceeded as e:
-        # Keep going on whatever the cache holds (rankings for the last ingested week are
-        # still worth publishing), but exit 3 at the end so the quota alert fires.
-        log.error("%s; continuing on cached data", e)
-        quota_hit = True
-        cal_week = None
-    finally:
-        client.close()
+    calls = 0
+    retries = cfg.ingest.outage_retries
+    for attempt in range(retries + 1):
+        client = CFBDClient(cfg)
+        try:
+            cal = client.get("/calendar", {"year": season}, season, "season")
+            started = [int(w["week"]) for w in cal if w["seasonType"] == "regular"
+                       and datetime.fromisoformat(w["startDate"].replace("Z", "+00:00")) <= now]
+            cal_week = max(started) if started else 1
+            fetch.weekly(client, season, cal_week)
+            break
+        except QuotaExceeded as e:
+            # Keep going on whatever the cache holds (rankings for the last ingested week are
+            # still worth publishing), but exit 3 at the end so the quota alert fires.
+            log.error("%s; continuing on cached data", e)
+            quota_hit = True
+            cal_week = None
+            break
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            # A CFBD outage (5xx, 429, timeout) outlasts the client's few-second retries. Wait it
+            # out rather than publishing from a half-fetched cache; what was fetched stays cached,
+            # so a retry only repeats the calls that failed (plus the always-live lines).
+            transient = not isinstance(e, httpx.HTTPStatusError) or e.response.status_code in (429, 500, 502, 503, 504)
+            if not transient or attempt == retries:
+                raise
+            log.warning("CFBD unavailable (%s); retrying ingest in %g min (retry %d of %d)",
+                        e, cfg.ingest.outage_wait_minutes, attempt + 1, retries)
+            time.sleep(cfg.ingest.outage_wait_minutes * 60)
+        finally:
+            calls += client.calls
+            client.close()
     games = fetch.latest_cached(client, "/games", season) or []
-    log.info("ingest API calls: %d; this month: %d of %d", client.calls, client.calls_this_month(),
+    log.info("ingest API calls: %d; this month: %d of %d", calls, client.calls_this_month(),
              cfg.ingest.monthly_quota)
     # Odds API snapshot for the paper bets, taken right after the CFBD line snapshot. A
     # failure (no key, quota, network) only means bets are priced from CFBD lines alone.
