@@ -447,10 +447,12 @@ def _weekly_run(config: ConfigOpt = None) -> None:
 @app.command("real-bet")
 def real_bet(
     team: Annotated[str, typer.Option(help="Team bet on, as on the site (e.g. Cincinnati)")],
-    line: Annotated[float, typer.Option(help="Spread from that team's side: 1.5 for +1.5, -4.5 for −4.5")],
     odds: Annotated[int, typer.Option(help="American price, e.g. -110")],
     stake: Annotated[float, typer.Option(help="Dollars risked")],
     placed: Annotated[str, typer.Option(help='When it was placed, Central time: "2026-10-11 23:06:17"')],
+    line: Annotated[Optional[float], typer.Option(help="Spread from that team's side: 1.5 for +1.5, -4.5 for −4.5")] = None,
+    moneyline: Annotated[bool, typer.Option("--moneyline", help="A moneyline bet (no --line)")] = False,
+    live: Annotated[bool, typer.Option("--live", help="Placed in-game, after kickoff")] = False,
     book: Annotated[Optional[str], typer.Option(help="Sportsbook, e.g. DraftKings")] = None,
     season: Annotated[Optional[int], typer.Option(help="Defaults to the current season")] = None,
     game_id: Annotated[Optional[int], typer.Option(help="Only when the team name matches more than one game")] = None,
@@ -469,6 +471,8 @@ def real_bet(
     cfg = _default_config(config)
     season = season or current_season()
     placed_at = datetime.fromisoformat(placed).replace(tzinfo=ZoneInfo("America/Chicago")).astimezone(UTC)
+    if line is None and not moneyline:
+        raise typer.BadParameter("--line is required for a spread bet (or pass --moneyline)")
     games = cached_games_frame(cfg.paths.raw_dir, season)
     if games is None:
         raise typer.BadParameter(f"no cached {season} schedule; run an ingest first")
@@ -479,15 +483,17 @@ def real_bet(
                 raise RealBetError(f"no game {game_id} in {season}")
             game = rows.to_dicts()[0]
         else:
-            game = find_game(games, team, placed_at)
+            game = find_game(games, team, placed_at, live=live)
         week = next((g.get("week") for g in cached_games(cfg.paths.raw_dir, season) or [] if g["id"] == game["game_id"]), None)
-        bet = new_bet(game, team, line, odds, stake, book, placed_at, datetime.now(UTC), season, week)
+        bet = new_bet(game, team, line, odds, stake, book, placed_at, datetime.now(UTC), season, week,
+                      market="moneyline" if moneyline else "spread", live=live)
         path = ledger_path(cfg.paths.out_dir, season)
         update_real(path, lambda df: add_real(df, bet))
     except RealBetError as e:
         raise typer.BadParameter(str(e)) from e
-    sign = f"{line:+g}".replace("-", "−")
-    typer.echo(f"recorded: {bet['team']} {sign} at {odds:+d}, ${stake:g} ({bet['away_team']} @ {bet['home_team']}, "
+    terms = "ML" if moneyline else f"{line:+g}".replace("-", "−")
+    typer.echo(f"recorded: {bet['team']} {terms}{' (live)' if live else ''} at {odds:+d}, ${stake:g} "
+               f"({bet['away_team']} @ {bet['home_team']}, "
                f"kickoff {game['kickoff_ts']:%Y-%m-%d %H:%M} UTC) in {path}")
 
 

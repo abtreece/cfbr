@@ -35,6 +35,8 @@ NO_STORE = {"Cache-Control": "private, no-store"}
 RESUBMIT_WINDOW = timedelta(minutes=10)
 # The entry form lists games this far ahead: the week's slate and a little beyond, not the season.
 FORM_WINDOW = timedelta(days=10)
+# ...and games that kicked off this recently, for a live bet entered during or after the game.
+LIVE_LOOKBACK = timedelta(days=3)
 
 # Prices in the guide's break-even table, from more juice to a plus-money price.
 GUIDE_PRICES = (-120, -115, -110, -105, 100, 105)
@@ -173,9 +175,10 @@ def real_bets_ctx(real: pl.DataFrame | None, s) -> dict:
     for r in real.sort("kickoff_ts", "placed_at").to_dicts():
         flip = 1 if r["side"] == "home" else -1
         spread = spreads.get(r["game_id"])
-        rows.append(r | {"kickoff": _ts(r["kickoff_ts"]), "placed": _ts(r["placed_at"]),
-                         "team_line": r["line"] * flip, "to_win": win_dollars(r["odds"], r["risk_dollars"]),
-                         "line_now": None if spread is None or spread != spread or r["status"] != "open" else spread * flip,
+        ml = r["market"] == "moneyline"
+        rows.append(r | {"kickoff": _ts(r["kickoff_ts"]), "placed": _ts(r["placed_at"]), "moneyline": ml,
+                         "team_line": None if ml else r["line"] * flip, "to_win": win_dollars(r["odds"], r["risk_dollars"]),
+                         "line_now": None if ml or spread is None or spread != spread or r["status"] != "open" else spread * flip,
                          "close_team": None if r["closing_line"] is None else r["closing_line"] * flip})
     return {"rows": rows, "summary": summarize_real(real)}
 
@@ -184,14 +187,16 @@ def real_bets_ctx(real: pl.DataFrame | None, s) -> dict:
 
 def upcoming_sides(s, now: datetime, keep: int | None = None) -> list[dict]:
     """One choice per side of every game kicking off in the next ``FORM_WINDOW`` (the games with
-    lines up), plus game ``keep`` (a prefill link's game) whenever it is: the team, its opponent,
-    the consensus line from its side (a hint; the owner types the number they got), kickoff and
-    week. Kickoff order, home side first."""
+    lines up) or in the last ``LIVE_LOOKBACK`` (for a live bet; ``started`` marks these), plus
+    game ``keep`` (a prefill link's game) whenever it is: the team, its opponent, the consensus
+    line from its side (a hint; the owner types the number they got), kickoff and week. Kickoff
+    order, home side first."""
     if s is None:
         return []
     ts = s.games.schema["kickoff_ts"]  # the parquet's zone name varies (UTC vs Etc/UTC)
     soon = (pl.col("kickoff_ts") > pl.lit(now).cast(ts)) & (pl.col("kickoff_ts") <= pl.lit(now + FORM_WINDOW).cast(ts))
-    choose = ~pl.col("completed") & soon
+    recent = (pl.col("kickoff_ts") <= pl.lit(now).cast(ts)) & (pl.col("kickoff_ts") > pl.lit(now - LIVE_LOOKBACK).cast(ts))
+    choose = (~pl.col("completed") & soon) | recent
     if keep is not None:  # a prefill link's game, even if final: a backdated bet still needs a pre-kickoff placed time
         choose = choose | (pl.col("game_id") == keep)
     g = s.games.filter(choose).sort("kickoff_ts", "game_id")
@@ -203,6 +208,7 @@ def upcoming_sides(s, now: datetime, keep: int | None = None) -> list[dict]:
             out.append({"value": f"{r['game_id']}:{side}", "game_id": r["game_id"], "side": side,
                         "team": r[f"{side}_team"], "opponent": r["away_team" if side == "home" else "home_team"],
                         "vs": "vs" if side == "home" else "at", "kickoff": r["kickoff_ts"],
+                        "started": r["kickoff_ts"] <= now,
                         "line": None if spread is None or spread != spread else spread * flip,
                         "week": r.get("week"), "season_type": r.get("season_type")})
     return out
@@ -219,7 +225,7 @@ def real_form_defaults(params, cfg: Config) -> dict:
             return None
     side = params.get("side") if params.get("side") in ("home", "away") else None
     game = num("game", int)
-    return {"pick": f"{game}:{side}" if game is not None and side else "",
+    return {"pick": f"{game}:{side}" if game is not None and side else "", "market": "spread", "live": False,
             "line": num("line", float), "odds": num("odds", int) or cfg.bets.odds,
             "stake": num("stake", float) or cfg.bets.unit_value, "book": (params.get("book") or "")[:40]}
 
@@ -389,7 +395,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         """Record one real bet from the owner's form, through the same ledger code as
         ``cfbr real-bet`` (locked, append-only, duplicates refused). Nobody but the owner can
         reach it; for everyone else the route doesn't exist. Nothing here touches the paper ledger."""
-        from cfbr.bets.real import RealBetError, add_real, ledger_path, new_bet, update_real
+        from cfbr.bets.real import MARKETS, RealBetError, add_real, ledger_path, new_bet, same_terms, update_real
 
         if not owner:
             raise HTTPException(404, "Not found.")
@@ -404,7 +410,11 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             raise HTTPException(404, f"No data for {season}.")
         try:
             game_id, side = parse_pick(form.get("pick", ""))
-            line = parse_number(form.get("line"), "line", float)
+            market = form.get("market") or "spread"
+            if market not in MARKETS:
+                raise RealBetError("pick a bet type")
+            live = form.get("live") == "on"
+            line = parse_number(form.get("line"), "line", float) if market == "spread" else None
             odds = parse_number(form.get("odds"), "price", int)
             stake = parse_number(form.get("stake"), "stake", float)
             book = form.get("book") or None
@@ -415,19 +425,17 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                 raise RealBetError(f"no game {game_id} in {season}")
             game = rows[0]
             team = game[f"{side}_team"]
-            bet = new_bet(game, team, line, odds, stake, book, placed_at, now, season, game.get("week"))
+            bet = new_bet(game, team, line, odds, stake, book, placed_at, now, season, game.get("week"),
+                          market=market, live=live)
 
             def add(df: pl.DataFrame) -> pl.DataFrame:
                 # The ledger only refuses an exact repeat, placed time included. With the placed
                 # time defaulted to "now", a double-submit would slip past that, so a same-terms
                 # bet recorded in the last few minutes is refused unless a placed time was typed.
                 if not form.get("placed"):
-                    recent = df.filter(
-                        (pl.col("game_id") == bet["game_id"]) & (pl.col("side") == bet["side"])
-                        & (pl.col("line") == bet["line"]) & (pl.col("odds") == bet["odds"])
-                        & (pl.col("risk_dollars") == bet["risk_dollars"])
-                        & (pl.col("book").is_null() if bet["book"] is None else pl.col("book") == bet["book"])
-                        & (pl.col("recorded_at").str.to_datetime(time_zone="UTC") > now - RESUBMIT_WINDOW))
+                    terms = ["game_id", "side", "line", "odds", "risk_dollars", "book", "market", "live"]
+                    recent = df.filter(same_terms(bet, terms)
+                                       & (pl.col("recorded_at").str.to_datetime(time_zone="UTC") > now - RESUBMIT_WINDOW))
                     if recent.height:
                         raise RealBetError("the same bet was recorded a moment ago; set the placed time if this is a second wager")
                 return add_real(df, bet)
@@ -439,7 +447,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             # Back to the page with the problem and what was typed; nothing was written.
             ctx = bets_ctx(request, season, owner=True)
             ctx["real"] = real_ctx(season, request.query_params, error=str(e),
-                                   form={"pick": form.get("pick", ""), "line": form.get("line"), "odds": form.get("odds"),
+                                   form={"pick": form.get("pick", ""), "market": form.get("market") or "spread",
+                                         "live": form.get("live") == "on", "line": form.get("line"), "odds": form.get("odds"),
                                          "stake": form.get("stake"), "book": form.get("book", ""),
                                          "placed": form.get("placed", "")})
             resp = render(request, "bets.html", **ctx)
