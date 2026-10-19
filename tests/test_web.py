@@ -2236,6 +2236,17 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     # The same terms at another book is a separate wager, not a double-submit.
     r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=3.5&odds=-105&stake=25&book=DraftKings", headers=hdr)
     assert r.status_code == 303 and read_real(path).height == 3
+    # Malformed numbers are errors, never reinterpreted ("3+5" is not 35, "10+0" is not $100).
+    for body in (f"season={SEASON}&pick=3:home&line=3%2B5&odds=-110&stake=10",
+                 f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=10%2B0"):
+        assert c.post("/bets/real", content=body, headers=hdr).status_code == 422, body
+    assert read_real(path).height == 3
+    # A Record link for a game already final still opens the form on that game (a backdated
+    # bet with a pre-kickoff placed time); without a placed time it is refused at kickoff.
+    pre = c.get(f"/bets?season={SEASON}&game=1&side=home&line=-3&odds=-105&book=TestBook").text
+    assert 'value="1:home" selected' in pre
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=1:home&line=-3&odds=-105&stake=10", headers=hdr)
+    assert r.status_code == 422 and "after kickoff" in r.text
     # A typed placed time survives a validation error, so fixing another field doesn't turn it into "now".
     r = c.post("/bets/real", content=f"season={SEASON}&pick=3:home&line=abc&odds=-110&stake=10&placed={local}", headers=hdr)
     assert r.status_code == 422 and f'name="placed" value="{local}"' in r.text

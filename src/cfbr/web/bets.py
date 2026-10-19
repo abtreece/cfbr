@@ -15,6 +15,7 @@ from urllib.parse import parse_qs
 import polars as pl
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import (HOLDOUT_TIER_COVER, book_key, break_even, by_tier, risk, summarize, tier_expr,
@@ -190,9 +191,10 @@ def upcoming_sides(s, now: datetime, keep: int | None = None) -> list[dict]:
         return []
     ts = s.games.schema["kickoff_ts"]  # the parquet's zone name varies (UTC vs Etc/UTC)
     soon = (pl.col("kickoff_ts") > pl.lit(now).cast(ts)) & (pl.col("kickoff_ts") <= pl.lit(now + FORM_WINDOW).cast(ts))
-    if keep is not None:
-        soon = soon | (pl.col("game_id") == keep)
-    g = s.games.filter(~pl.col("completed") & soon).sort("kickoff_ts", "game_id")
+    choose = ~pl.col("completed") & soon
+    if keep is not None:  # a prefill link's game, even if final: a backdated bet still needs a pre-kickoff placed time
+        choose = choose | (pl.col("game_id") == keep)
+    g = s.games.filter(choose).sort("kickoff_ts", "game_id")
     out = []
     for r in g.to_dicts():
         spread = r.get("spread")
@@ -281,7 +283,9 @@ def parse_number(s: str | None, what: str, cast):
     from cfbr.bets.real import RealBetError
 
     try:
-        return cast((s or "").replace("\u2212", "-").replace("+", ""))
+        # Only the Unicode minus is normalized; int/float already accept a leading "+" and
+        # reject one anywhere else, so "3+5" is an error rather than 35.
+        return cast((s or "").replace("\u2212", "-"))
     except ValueError as e:
         raise RealBetError(f"{what} must be a number") from e
 
@@ -428,7 +432,9 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                         raise RealBetError("the same bet was recorded a moment ago; set the placed time if this is a second wager")
                 return add_real(df, bet)
 
-            update_real(ledger_path(store.out_dir, season), add)
+            # The locked read-modify-write (a blocking flock plus CSV I/O) runs off the event loop
+            # so a held ledger lock can't stall the worker's other requests.
+            await run_in_threadpool(update_real, ledger_path(store.out_dir, season), add)
         except RealBetError as e:
             # Back to the page with the problem and what was typed; nothing was written.
             ctx = bets_ctx(request, season, owner=True)
