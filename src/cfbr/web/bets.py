@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs
 
 import polars as pl
@@ -29,6 +29,11 @@ from cfbr.web.store import Store
 
 # Betting data is per-viewer once the section is gated; never let a shared cache keep it.
 NO_STORE = {"Cache-Control": "private, no-store"}
+
+# A same-terms real bet submitted again this soon (placed time blank) is a double-submit, not a second wager.
+RESUBMIT_WINDOW = timedelta(minutes=10)
+# The entry form lists games this far ahead: the week's slate and a little beyond, not the season.
+FORM_WINDOW = timedelta(days=10)
 
 # Prices in the guide's break-even table, from more juice to a plus-money price.
 GUIDE_PRICES = (-120, -115, -110, -105, 100, 105)
@@ -154,13 +159,14 @@ def line_move(r: dict, books: pl.DataFrame | None, threshold: float) -> dict:
             "move_keys": keys_crossed(was, now), "move_edge": edge_now, "move_below": edge_now < threshold}
 
 
-def real_bets_ctx(real: pl.DataFrame | None, s) -> dict | None:
-    """The owner's real bets for /bets: rows from the bettor's side plus a summary. Never
-    mixed into the paper ledger's numbers, and never in /api/bets."""
-    if real is None or real.height == 0:
-        return None
-    from cfbr.bets.real import summarize_real, win_dollars
+def real_bets_ctx(real: pl.DataFrame | None, s) -> dict:
+    """The owner's real bets for /bets: rows from the bettor's side plus a summary (empty when
+    none are recorded yet, so the owner still gets the entry form). Never mixed into the paper
+    ledger's numbers, and never in /api/bets."""
+    from cfbr.bets.real import REAL_SCHEMA, summarize_real, win_dollars
 
+    if real is None:
+        real = pl.DataFrame(schema=REAL_SCHEMA)
     spreads = {} if s is None else {k: v for k, v in s.games.select("game_id", "spread").iter_rows()}
     rows = []
     for r in real.sort("kickoff_ts", "placed_at").to_dicts():
@@ -171,6 +177,64 @@ def real_bets_ctx(real: pl.DataFrame | None, s) -> dict | None:
                          "line_now": None if spread is None or spread != spread or r["status"] != "open" else spread * flip,
                          "close_team": None if r["closing_line"] is None else r["closing_line"] * flip})
     return {"rows": rows, "summary": summarize_real(real)}
+
+
+# -- the owner's entry form for a real bet (DECISIONS "Real-bet entry form") -------------------
+
+def upcoming_sides(s, now: datetime, keep: int | None = None) -> list[dict]:
+    """One choice per side of every game kicking off in the next ``FORM_WINDOW`` (the games with
+    lines up), plus game ``keep`` (a prefill link's game) whenever it is: the team, its opponent,
+    the consensus line from its side (a hint; the owner types the number they got), kickoff and
+    week. Kickoff order, home side first."""
+    if s is None:
+        return []
+    ts = s.games.schema["kickoff_ts"]  # the parquet's zone name varies (UTC vs Etc/UTC)
+    soon = (pl.col("kickoff_ts") > pl.lit(now).cast(ts)) & (pl.col("kickoff_ts") <= pl.lit(now + FORM_WINDOW).cast(ts))
+    if keep is not None:
+        soon = soon | (pl.col("game_id") == keep)
+    g = s.games.filter(~pl.col("completed") & soon).sort("kickoff_ts", "game_id")
+    out = []
+    for r in g.to_dicts():
+        spread = r.get("spread")
+        for side in ("home", "away"):
+            flip = 1 if side == "home" else -1
+            out.append({"value": f"{r['game_id']}:{side}", "game_id": r["game_id"], "side": side,
+                        "team": r[f"{side}_team"], "opponent": r["away_team" if side == "home" else "home_team"],
+                        "vs": "vs" if side == "home" else "at", "kickoff": r["kickoff_ts"],
+                        "line": None if spread is None or spread != spread else spread * flip,
+                        "week": r.get("week"), "season_type": r.get("season_type")})
+    return out
+
+
+def real_form_defaults(params, cfg: Config) -> dict:
+    """Prefill for the entry form from query parameters (the "Record" links on the paper bets
+    and shortlist put the pick's game, side, line, price and book there). Anything missing or
+    unparsable is just left blank: the form validates on submit."""
+    def num(key, cast):
+        try:
+            return cast(params.get(key, ""))
+        except (TypeError, ValueError):
+            return None
+    side = params.get("side") if params.get("side") in ("home", "away") else None
+    game = num("game", int)
+    return {"pick": f"{game}:{side}" if game is not None and side else "",
+            "line": num("line", float), "odds": num("odds", int) or cfg.bets.odds,
+            "stake": num("stake", float) or cfg.bets.unit_value, "book": (params.get("book") or "")[:40]}
+
+
+def record_link(season: int, game_id: int, side: str, team_line: float | None, odds: int | None,
+                book: str | None) -> str:
+    """The owner's one-click prefill of the entry form for a paper pick."""
+    from urllib.parse import urlencode
+
+    q = {"season": season, "game": game_id, "side": side}
+    if team_line is not None and team_line == team_line:
+        q["line"] = f"{team_line:g}"
+    if odds is not None and odds == odds:
+        q["odds"] = int(odds)
+    if book:
+        q["book"] = book
+    return f"/bets?{urlencode(q)}#record"
 
 
 def breakdown(ledger: pl.DataFrame, cfg: Config) -> list[dict]:
@@ -203,6 +267,42 @@ def clean_summary(m: dict) -> dict:
     return {k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in m.items()}
 
 
+def parse_pick(s: str) -> tuple[int, str]:
+    """"<game_id>:<home|away>" from the form's side select."""
+    from cfbr.bets.real import RealBetError
+
+    game, _, side = s.partition(":")
+    if side not in ("home", "away") or not game.isdigit():
+        raise RealBetError("pick a team")
+    return int(game), side
+
+
+def parse_number(s: str | None, what: str, cast):
+    from cfbr.bets.real import RealBetError
+
+    try:
+        return cast((s or "").replace("\u2212", "-").replace("+", ""))
+    except ValueError as e:
+        raise RealBetError(f"{what} must be a number") from e
+
+
+def parse_placed(s: str | None, now: datetime) -> datetime:
+    """When the bet was placed: the form's datetime-local value (Central), else now."""
+    from cfbr.bets.real import RealBetError
+    from cfbr.web.app import DISPLAY_TZ
+
+    if not s:
+        return now
+    try:
+        t = datetime.fromisoformat(s)
+    except ValueError as e:
+        raise RealBetError("placed time must be a date and time") from e
+    t = t.replace(tzinfo=DISPLAY_TZ) if t.tzinfo is None else t
+    if t > now:
+        raise RealBetError("placed time is in the future")
+    return t.astimezone(UTC)
+
+
 def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) -> APIRouter:
     router = APIRouter(dependencies=[Depends(bets_access)])
 
@@ -217,8 +317,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         has_paper = season is not None and season in store.bet_seasons()
         return season, (store.bets(season) if has_paper else None)
 
-    @router.get("/bets", response_class=HTMLResponse, include_in_schema=False)
-    def bets_page(request: Request, season: int | None = None, owner: bool = Depends(owner_viewer)):
+    def bets_ctx(request: Request, season: int | None, owner: bool) -> dict:
+        """Everything /bets renders except the owner's section (``real``)."""
         # The owner also reaches seasons that have only real bets; everyone else (and the API)
         # sees paper-ledger seasons only.
         seasons = sorted(set(store.bet_seasons()) | set(store.real_seasons())) if owner else store.bet_seasons()
@@ -250,12 +350,94 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                     "settled": [r for r in reversed(rows) if r["status"] != "open"],
                     "chart": money_chart(weeks, cfg.bets.bankroll), "fbs_teams": fbs,
                     "lines_as_of": s.meta.get("lines_as_of") if s is not None else None}
+            if owner:  # one-click prefill of the entry form, per open paper bet
+                for r in open_bets:
+                    r["record_link"] = record_link(season, r["game_id"], r["side"], r["best"] if r["best"] is not None else r["team_line"],
+                                                   r.get("best_odds"), r.get("best_provider"))
+        ctx["has_retro"] = season in store.retro_seasons()
+        return ctx
+
+    @router.get("/bets", response_class=HTMLResponse, include_in_schema=False)
+    def bets_page(request: Request, season: int | None = None, owner: bool = Depends(owner_viewer)):
+        ctx = bets_ctx(request, season, owner)
+        season = ctx["season"]
         # The owner's real bets: only for the owner (owner_viewer), never for other viewers,
         # premium or not, and never in /api/bets.
-        ctx["real"] = (real_bets_ctx(store.real_bets(season), store.season(season))
-                       if owner and season is not None else None)
-        ctx["has_retro"] = season in store.retro_seasons()
+        ctx["real"] = real_ctx(season, request.query_params) if owner and season is not None else None
         resp = render(request, "bets.html", **ctx)
+        resp.headers.update(NO_STORE)
+        return resp
+
+    def real_ctx(season: int, params, error: str | None = None, form: dict | None = None) -> dict:
+        """The owner's section: recorded bets plus the entry form (upcoming sides, prefill)."""
+        s = store.season(season)
+        ctx = real_bets_ctx(store.real_bets(season), s)
+        form = form or real_form_defaults(params, cfg)
+        keep = int(form["pick"].partition(":")[0]) if form.get("pick", "").partition(":")[0].isdigit() else None
+        ctx |= {"sides": upcoming_sides(s, datetime.now(UTC), keep), "form": form,
+                "error": error, "saved": params.get("saved") == "1",
+                "record_links": {r["game_id"]: f"{r['game_id']}:{r['side']}" for r in ctx["rows"] if r["status"] == "open"}}
+        return ctx
+
+    @router.post("/bets/real", response_class=HTMLResponse, include_in_schema=False)
+    async def record_real_bet(request: Request, owner: bool = Depends(owner_viewer)):
+        """Record one real bet from the owner's form, through the same ledger code as
+        ``cfbr real-bet`` (locked, append-only, duplicates refused). Nobody but the owner can
+        reach it; for everyone else the route doesn't exist. Nothing here touches the paper ledger."""
+        from cfbr.bets.real import RealBetError, add_real, ledger_path, new_bet, update_real
+
+        if not owner:
+            raise HTTPException(404, "Not found.")
+        body = (await request.body())[:4096].decode("utf-8", "replace")
+        form = {k: v[0].strip() for k, v in parse_qs(body).items()}
+        try:
+            season = int(form.get("season", ""))
+        except ValueError as e:
+            raise HTTPException(400, "Bad season.") from e
+        s = store.season(season)
+        if s is None:
+            raise HTTPException(404, f"No data for {season}.")
+        try:
+            game_id, side = parse_pick(form.get("pick", ""))
+            line = parse_number(form.get("line"), "line", float)
+            odds = parse_number(form.get("odds"), "price", int)
+            stake = parse_number(form.get("stake"), "stake", float)
+            book = form.get("book") or None
+            now = datetime.now(UTC)
+            placed_at = parse_placed(form.get("placed"), now)
+            rows = s.games.filter(pl.col("game_id") == game_id).to_dicts()
+            if not rows:
+                raise RealBetError(f"no game {game_id} in {season}")
+            game = rows[0]
+            team = game[f"{side}_team"]
+            bet = new_bet(game, team, line, odds, stake, book, placed_at, now, season, game.get("week"))
+
+            def add(df: pl.DataFrame) -> pl.DataFrame:
+                # The ledger only refuses an exact repeat, placed time included. With the placed
+                # time defaulted to "now", a double-submit would slip past that, so a same-terms
+                # bet recorded in the last few minutes is refused unless a placed time was typed.
+                if not form.get("placed"):
+                    recent = df.filter(
+                        (pl.col("game_id") == bet["game_id"]) & (pl.col("side") == bet["side"])
+                        & (pl.col("line") == bet["line"]) & (pl.col("odds") == bet["odds"])
+                        & (pl.col("risk_dollars") == bet["risk_dollars"])
+                        & (pl.col("recorded_at").str.to_datetime(time_zone="UTC") > now - RESUBMIT_WINDOW))
+                    if recent.height:
+                        raise RealBetError("the same bet was recorded a moment ago; set the placed time if this is a second wager")
+                return add_real(df, bet)
+
+            update_real(ledger_path(store.out_dir, season), add)
+        except RealBetError as e:
+            # Back to the page with the problem and what was typed; nothing was written.
+            ctx = bets_ctx(request, season, owner=True)
+            ctx["real"] = real_ctx(season, request.query_params, error=str(e),
+                                   form={"pick": form.get("pick", ""), "line": form.get("line"), "odds": form.get("odds"),
+                                         "stake": form.get("stake"), "book": form.get("book", "")})
+            resp = render(request, "bets.html", **ctx)
+            resp.status_code = 422
+            resp.headers.update(NO_STORE)
+            return resp
+        resp = RedirectResponse(f"/bets?season={season}&saved=1#mine", status_code=303)
         resp.headers.update(NO_STORE)
         return resp
 
@@ -299,7 +481,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         return table if table is not None and (not table.seasons or max(table.seasons) < season) else None
 
     @router.get("/bets/shortlist", response_class=HTMLResponse, include_in_schema=False)
-    def shortlist_page(request: Request, season: int | None = None):
+    def shortlist_page(request: Request, season: int | None = None, owner: bool = Depends(owner_viewer)):
         season, ledger = pick(season)
         books = viewer_books(request, cfg.bets)
         ctx = {"bet_seasons": store.bet_seasons(), "season": season, "rules": cfg.bets, "books": books,
@@ -309,6 +491,11 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             s = store.season(season)
             sl = shortlist(ledger, books, cfg.bets, season_pricing_table(season))
             open_picks, settled = shortlist_rows(sl, s)
+            if owner:  # one-click prefill of the real-bet form with the pick at its book
+                for r in open_picks:
+                    at = r["move_now"] if r.get("move_source") == "book" else r["bet_at"]
+                    price = r["move_price"] if r.get("move_source") == "book" else r.get("bet_at_odds")
+                    r["record_link"] = record_link(season, r["game_id"], r["side"], at, price, r["bet_at_book"])
             fbs = set() if s is None else set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
             ctx |= {"open_picks": open_picks, "settled": settled, "summary": summarize(sl, cfg.bets),
                     "n_paper": ledger.height, "fbs_teams": fbs,

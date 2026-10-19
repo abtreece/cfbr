@@ -181,7 +181,7 @@ Outputs: `out/{season}/bets.csv` (the ledger) and `out/{season}/bets.md` (record
 
 ### Real bets
 
-Bets you actually place are tracked in their own ledger, `out/{season}/bets_real.csv`, never mixed into the paper record, its hash chain or the 500-bet test. Record one on the server:
+Bets you actually place are tracked in their own ledger, `out/{season}/bets_real.csv`, never mixed into the paper record, its hash chain or the 500-bet test. The easy way to record one is on the site: as the owner (see below), `/bets` has a "Record a bet" form under "My real bets" listing every side kicking off in the next 10 days with its consensus line, and each open paper bet and shortlist pick has a **Record** link that opens the form with that game, side, best line, price and book filled in; you adjust to the number you actually got and submit. A blank "Placed" means now. The same-terms bet submitted again within 10 minutes is refused as a double-submit (set the placed time if it really is a second wager). The command-line route still works on the server:
 
 ```bash
 uv run cfbr real-bet --team Cincinnati --line 1.5 --odds -110 --stake 10 --placed "2026-10-11 23:06:17" --book DraftKings

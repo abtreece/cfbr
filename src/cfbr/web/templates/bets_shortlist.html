@@ -59,7 +59,7 @@
     <tr>
       <td class="opt">{{ b.kickoff|kickoff }}</td>
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams) }} @ {{ team_link(b.home_team, season, fbs_teams) }}</td>
-      <td class="strong wrap">{{ b.team }} {{ b.bet_at|spread }} or better at {{ b.bet_at_book }}{% if b.bet_at_odds is not none %} ({{ b.bet_at_odds|price }}){% endif %}
+      <td class="strong wrap">{{ b.team }} {{ b.bet_at|spread }} or better at {{ b.bet_at_book }}{% if b.bet_at_odds is not none %} ({{ b.bet_at_odds|price }}){% endif %}{% if b.record_link %} <a class="record-link" href="{{ b.record_link }}" title="Record a real bet on this">Record</a>{% endif %}
         {% if b.move_source %}{% set pts = "%g"|format(b.move|abs) %}{% set unit = "pt" if pts == "1" else "pts" %}
         <br><span class="{{ 'up' if b.move > 0 else 'down' if b.move < 0 else 'muted' }}">{% if b.move_source == "book" %}{{ b.bet_at_book }} now {{ b.move_now|spread }}{% if b.move_price is not none %} ({{ b.move_price|price }}){% endif %}{% else %}Consensus now {{ b.move_now|spread }} ({{ b.bet_at_book }} not in the newest odds){% endif %}:
           {% if b.move > 0 %}{{ pts }} {{ unit }} better{% elif b.move < 0 %}{{ pts }} {{ unit }} worse{% else %}unchanged{% endif %}{% if b.move_keys %}, crossed {{ b.move_keys|join(", ") }}{% endif %}</span>

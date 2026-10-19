@@ -118,6 +118,25 @@ h2 { font-size: 19px; margin: 32px 0 8px; font-weight: 620; }
 }
 .filters .back { align-self: center; font-size: 14px; }
 
+/* Owner's real-bet entry form (/bets#record). */
+details.record { margin: 0 0 16px; font-size: 14px; color: var(--text-2); }
+details.record > summary { cursor: pointer; width: fit-content; }
+details.record > summary .change { color: var(--accent); margin-left: 4px; }
+details.record[open] > summary .change { display: none; }
+.record-bet { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: end; margin-top: 10px; }
+.record-bet label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.record-bet label.wide { flex: 1 1 100%; }
+.record-bet input, .record-bet select, .record-bet button {
+  font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; min-height: 32px;
+}
+.record-bet input { width: 7em; }
+.record-bet input[name="book"] { width: 10em; }
+.record-bet input[type="datetime-local"] { width: auto; }
+.record-bet select { max-width: 100%; }
+.record-link { font-size: 12px; font-weight: 400; margin-left: 6px; }
+.callout.error { border-color: var(--down, #c33); }
+
 /* Shortlist book choice: a one-line summary that opens to checkbox pills. */
 details.books { margin: -6px 0 22px; font-size: 14px; color: var(--text-2); }
 details.books > summary { cursor: pointer; width: fit-content; }

@@ -4,6 +4,7 @@ import json
 import math
 import os
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
@@ -2165,3 +2166,73 @@ def test_line_now_stars_a_line_older_than_the_page(shortlist_client, web_cfg):
     (d / "meta.json").write_text(json.dumps(meta | {"lines_as_of": new, "rebuilt": 1}))
     html = " ".join(shortlist_client.get("/bets/shortlist").text.split())
     assert "Older line" not in html and "Lines marked * are older" not in html
+
+
+def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
+    from cfbr.bets.real import read_real
+    from cfbr.web.access import OWNER_COOKIE, owner_token
+
+    monkeypatch.setenv("OWNER_KEY", "s3cret-key")
+    now = datetime.now(UTC)
+    _write_season(web_dir(web_cfg), now, polls=True)
+    _write_ledger(web_cfg)
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    before = c.get("/api/bets").json()
+    hdr = {"content-type": "application/x-www-form-urlencoded"}
+    path = web_cfg.paths.out_dir / str(SEASON) / "bets_real.csv"
+
+    # Not the owner: no form, no "Record" links, and the route doesn't exist.
+    html = c.get("/bets").text
+    assert 'id="record"' not in html and "record-link" not in html
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=3&odds=-110&stake=10", headers=hdr)
+    assert r.status_code == 404 and not path.exists()
+
+    c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
+    # The owner gets the form even with no real bets yet: upcoming sides only (game 3 kicks
+    # off in two days; games 1 and 2 are final), the consensus from each side as a hint.
+    html = " ".join(c.get("/bets").text.split())
+    assert 'id="record"' in html and 'action="/bets/real"' in html and "No real bets recorded yet" in html
+    assert 'value="3:home">Ohio State vs Texas A&amp;M' in html and "· −3" in html
+    assert 'value="3:away">Texas A&amp;M at Ohio State' in html and "· +3" in html
+    assert 'value="1:home"' not in html
+    # An open paper bet links to the form with its side, best line, price and book filled in.
+    assert 'href="/bets?season=2026&amp;game=1&amp;side=home&amp;line=-3&amp;odds=-105&amp;book=TestBook#record"' in html
+    pre = " ".join(c.get("/bets?season=2026&game=3&side=away&line=3.5&odds=-105&book=FanDuel#record").text.split())
+    assert 'value="3:away" selected' in pre and 'name="line" inputmode="decimal" required placeholder="+3.5" value="3.5"' in pre
+    assert 'name="odds" inputmode="numeric" required placeholder="-110" value="-105"' in pre and 'value="FanDuel"' in pre
+
+    # Recording: through the ledger (home-perspective line, dollars risked), then back to the section.
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=%2B3.5&odds=-105&stake=25&book=FanDuel", headers=hdr)
+    assert r.status_code == 303 and r.headers["location"] == f"/bets?season={SEASON}&saved=1#mine"
+    led = read_real(path)
+    assert led.height == 1
+    row = led.to_dicts()[0]
+    assert row["game_id"] == 3 and row["side"] == "away" and row["team"] == "Texas A&M" and row["line"] == -3.5
+    assert row["odds"] == -105 and row["risk_dollars"] == 25.0 and row["book"] == "FanDuel" and row["status"] == "open"
+    assert row["week"] == 2 and abs(datetime.fromisoformat(row["placed_at"]) - now) < timedelta(minutes=5)
+    html = " ".join(c.get(f"/bets?season={SEASON}&saved=1").text.split())
+    assert "Recorded." in html and "Texas A&amp;M +3.5" in html and "$25 / $23" in html
+
+    # Refusals come back on the page with what was typed, and write nothing.
+    for body, msg in [(f"season={SEASON}&pick=3:away&line=3.5&odds=-105&stake=25&book=FanDuel", "recorded a moment ago"),
+                      (f"season={SEASON}&pick=&line=3&odds=-110&stake=10", "pick a team"),
+                      (f"season={SEASON}&pick=3:home&line=abc&odds=-110&stake=10", "line must be a number"),
+                      (f"season={SEASON}&pick=3:home&line=-3&odds=-50&stake=10", "not an American price"),
+                      (f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=0", "stake must be a positive"),
+                      (f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=10&placed=2099-01-01T00:00", "in the future"),
+                      (f"season={SEASON}&pick=999:home&line=-3&odds=-110&stake=10", "no game 999")]:
+        r = c.post("/bets/real", content=body, headers=hdr)
+        assert r.status_code == 422 and msg in r.text, body
+        pick = body.split("pick=")[1].split("&")[0]
+        assert "Not recorded:" in r.text and (not pick.startswith("3:") or f'value="{pick}" selected' in r.text), body
+    assert read_real(path).height == 1
+    # A placed time is read as Central and must be before kickoff.
+    local = (now - timedelta(hours=1)).astimezone(ZoneInfo("America/Chicago")).strftime("%Y-%m-%dT%H:%M")
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:home&line=-3&odds=-110&stake=10&placed={local}", headers=hdr)
+    assert r.status_code == 303
+    rows = read_real(path).sort("placed_at").to_dicts()
+    assert len(rows) == 2 and abs(datetime.fromisoformat(rows[0]["placed_at"]) - (now - timedelta(hours=1))) < timedelta(minutes=2)
+
+    # The paper record and API are untouched.
+    assert c.get("/api/bets").json()["summary"] == before["summary"]
+    assert '"risk_dollars"' not in c.get("/api/bets").text
