@@ -1,7 +1,8 @@
 """Real bets the owner placed, tracked apart from the paper ledger.
 
 ``out/{season}/bets_real.csv`` is append-only like ``bets.csv`` (rows are only ever added, and
-an open row only ever gains its result), but it is a separate record: it never enters the paper
+an open row only ever gains its result, or is voided: a mistaken entry is kept, marked ``void``,
+and counts for nothing), but it is a separate record: it never enters the paper
 ledger, its hash chain, or the pre-registered 500-bet test. Each bet is graded at its own number
 and price, and its CLV is measured against the same close the paper bets use
 (``bets.run.closing_lines``).
@@ -32,9 +33,9 @@ REAL_SCHEMA: dict[str, pl.DataType] = {
     # (empty for a moneyline).
     "side": pl.Utf8, "team": pl.Utf8, "line": pl.Float64, "odds": pl.Int32, "risk_dollars": pl.Float64,
     "book": pl.Utf8, "market": pl.Utf8, "live": pl.Boolean, "placed_at": pl.Utf8, "recorded_at": pl.Utf8,
-    # Result: filled once, when the game is final.
+    # Result: filled once, when the game is final (or the bet is voided while still open).
     "status": pl.Utf8, "home_points": pl.Int32, "away_points": pl.Int32, "dollars": pl.Float64,
-    "closing_line": pl.Float64, "closing_source": pl.Utf8, "clv": pl.Float64,
+    "closing_line": pl.Float64, "closing_source": pl.Utf8, "clv": pl.Float64, "voided_at": pl.Utf8,
 }
 
 MARKETS = ("spread", "moneyline")
@@ -165,11 +166,26 @@ def same_terms(bet: dict, terms: list[str] = TERMS) -> pl.Expr:
 
 def add_real(ledger: pl.DataFrame, bet: dict) -> pl.DataFrame:
     """Append ``bet``; refuse only an exact repeat (every term the same), so two separate
-    wagers placed at the same moment (different book, price, line or stake) both record."""
-    dup = ledger.filter(same_terms(bet))
+    wagers placed at the same moment (different book, price, line or stake) both record. A
+    voided row doesn't block re-entering the same terms."""
+    dup = ledger.filter(same_terms(bet) & (pl.col("status") != "void"))
     if dup.height:
         raise RealBetError("this bet is already recorded")
     return pl.concat([ledger, pl.DataFrame([bet], schema=REAL_SCHEMA)])
+
+
+def void_real(ledger: pl.DataFrame, game_id: int, recorded_at: str, now: datetime) -> pl.DataFrame:
+    """Mark one open bet (``game_id`` + ``recorded_at`` identify it) void: kept in the file, out
+    of the record, never graded. A settled bet can't be voided; its result stands."""
+    hit = (pl.col("game_id") == game_id) & (pl.col("recorded_at") == recorded_at)
+    rows = ledger.filter(hit)
+    if rows.height != 1:
+        raise RealBetError("no such bet")
+    if rows["status"][0] != "open":
+        raise RealBetError(f"only an open bet can be voided; this one is {rows['status'][0]}")
+    return ledger.with_columns(
+        status=pl.when(hit).then(pl.lit("void")).otherwise(pl.col("status")),
+        voided_at=pl.when(hit).then(pl.lit(now.isoformat())).otherwise(pl.col("voided_at")))
 
 
 def grade_real(bet: dict, home_points: int, away_points: int) -> str:
@@ -209,7 +225,7 @@ def summarize_real(ledger: pl.DataFrame) -> dict:
     dollars = float(settled["dollars"].sum()) if settled.height else 0.0
     with_clv = settled.filter(pl.col("clv").is_not_null())
     open_ = ledger.filter(pl.col("status") == "open")
-    return {"bets": ledger.height, "open": open_.height, "open_risk": float(open_["risk_dollars"].sum()) if open_.height else 0.0,
+    return {"bets": ledger.filter(pl.col("status") != "void").height, "open": open_.height, "open_risk": float(open_["risk_dollars"].sum()) if open_.height else 0.0,
             "settled": settled.height, **n, "dollars": dollars, "risked": risked,
             "roi": dollars / risked if risked else None,
             "avg_clv": float(with_clv["clv"].mean()) if with_clv.height else None, "n_clv": with_clv.height}

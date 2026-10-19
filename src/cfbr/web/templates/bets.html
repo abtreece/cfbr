@@ -225,20 +225,29 @@
 {% if real %}{% set rs = real.summary %}
 <h2 id="mine">My real bets <span class="muted">· only you see this section</span></h2>
 <p class="note">Unlike the paper bets above, these are real wagers I placed, graded at their own number and price. <a href="/owner/logout">Hide (log out)</a></p>
-{% if real.saved %}<p class="callout" id="saved"><strong>Recorded.</strong> It settles the night its game ends.</p>{% endif %}
-<details class="record"{% if real.error or real.form.pick %} open{% endif %} id="record">
+{% if real.saved %}<p class="callout" id="saved"><strong>Recorded: {{ real.saved }}.</strong> It settles the night its game ends. Wrong bet? Void it below and record it again.</p>{% endif %}
+{% if real.voided %}<p class="callout" id="saved"><strong>Voided.</strong> It stays in the ledger, marked void, and counts for nothing.</p>{% endif %}
+<details class="record"{% if real.error or real.form.game %} open{% endif %} id="record">
   <summary>Record a bet <span class="change">Open form</span></summary>
   {% if real.error %}<p class="callout error"><strong>Not recorded:</strong> {{ real.error }}.</p>{% endif %}
+  {% set chosen = real.games|selectattr("game_id", "equalto", real.form.game)|first if real.form.game else none %}
   <form class="record-bet" method="post" action="/bets/real" autocomplete="off">
     <input type="hidden" name="season" value="{{ season }}">
-    <label class="wide">Team you bet on <span class="muted">(each game is listed once per team)</span>
-      <select name="pick" required>
-        <option value="">— pick a side —</option>
-        {% for o in real.sides %}
-        <option value="{{ o.value }}"{% if o.value == real.form.pick %} selected{% endif %}>{{ o.team }} {{ o.vs }} {{ o.opponent }} · {{ o.kickoff|kickoff }}{% if o.started %} · started{% endif %}{% if o.line is not none %} · {{ o.line|spread }}{% endif %}</option>
+    <label class="wide">Game <span class="muted">(away @ home)</span>
+      <select name="game" required data-sides="bet-side">
+        <option value="">— pick a game —</option>
+        {% for g in real.games %}
+        <option value="{{ g.game_id }}" data-away="{{ g.away_team }}" data-home="{{ g.home_team }}"{% if g.game_id == real.form.game %} selected{% endif %}>{{ g.away_team }} {{ "vs" if g.neutral else "@" }} {{ g.home_team }} · {{ g.kickoff|kickoff }}{% if g.started %} · started{% endif %}{% if g.spread is not none %} · {{ g.home_team }} {{ g.spread|spread }}{% endif %}</option>
         {% endfor %}
       </select>
     </label>
+    <fieldset class="sides wide" id="bet-side">
+      <legend>Team you bet on</legend>
+      {% for side in ("away", "home") %}
+      <label class="check"><input type="radio" name="side" value="{{ side }}" required{% if real.form.side == side %} checked{% endif %}>
+        <span data-side="{{ side }}">{{ chosen[side ~ "_team"] if chosen else side|capitalize ~ " team" }}</span></label>
+      {% endfor %}
+    </fieldset>
     <label>Bet
       <select name="market">
         <option value="spread"{% if real.form.market != "moneyline" %} selected{% endif %}>Spread</option>
@@ -264,7 +273,7 @@
     <label class="check"><input type="checkbox" name="live"{% if real.form.live %} checked{% endif %}> Live (in-game)</label>
     <button type="submit">Record</button>
   </form>
-  <p class="note">The line is from your team's side (+3.5 for a 3.5-point dog). For a moneyline, pick the team, choose Moneyline, leave Line blank and enter its odds as the price (+158). A live bet is placed after kickoff; live bets and moneylines get no CLV. Written to the real-bet ledger the same way as <code>cfbr real-bet</code>; the paper record is untouched.</p>
+  <p class="note">The line is from your team's side (+3.5 for a 3.5-point dog). For a moneyline, choose Moneyline, leave Line blank and enter its odds as the price (+158). A live bet is placed after kickoff; live bets and moneylines get no CLV. Written to the real-bet ledger the same way as <code>cfbr real-bet</code>; the paper record is untouched.</p>
 </details>
 {% if real.rows %}
 <div class="tiles">
@@ -275,20 +284,24 @@
 <div class="table-wrap">
 <table class="data">
   <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num">Price</th><th class="num">Stake / to win</th>
-    <th class="num opt">Line now</th><th>Result</th><th class="num opt">Close</th><th class="num opt">CLV</th><th class="opt">Book · placed</th></tr></thead>
+    <th class="num opt">Line now</th><th>Result</th><th class="num opt">Close</th><th class="num opt">CLV</th><th class="opt">Book · placed</th><th></th></tr></thead>
   <tbody>
   {% for b in real.rows %}
-    <tr>
+    <tr{% if b.status == "void" %} class="voided"{% endif %}>
       <td class="opt">{{ b.kickoff|kickoff }}</td>
       <td class="wrap">{{ team_link(b.away_team, season, fbs_teams or []) }} @ {{ team_link(b.home_team, season, fbs_teams or []) }}<span class="m-only muted"><br>{{ b.kickoff|kickoff }} {{ tz_label }}</span></td>
       <td class="strong wrap">{{ b.team }} {{ "ML" if b.moneyline else b.team_line|spread }}{% if b.live %} <span class="badge">live</span>{% endif %}</td>
       <td class="num">{{ b.odds|price }}</td>
       <td class="num">{{ b.risk_dollars|money(false) }} / {{ b.to_win|money(false) }}</td>
       <td class="num opt">{{ b.line_now|spread }}</td>
-      <td>{% if b.status == "open" %}<span class="muted">open</span>{% else %}<span class="{{ {'won': 'up', 'lost': 'down'}.get(b.status, 'muted') }}">{{ b.status }} {{ b.dollars|money }}</span> <span class="muted">{{ b.away_points }}–{{ b.home_points }}</span>{% endif %}</td>
+      <td>{% if b.status == "open" %}<span class="muted">open</span>{% elif b.status == "void" %}<span class="muted">void</span>{% else %}<span class="{{ {'won': 'up', 'lost': 'down'}.get(b.status, 'muted') }}">{{ b.status }} {{ b.dollars|money }}</span> <span class="muted">{{ b.away_points }}–{{ b.home_points }}</span>{% endif %}</td>
       <td class="num opt">{{ b.close_team|spread }}</td>
       <td class="num opt">{{ b.clv|signed(1) if b.clv is not none else "—" }}</td>
       <td class="opt">{{ b.book or "—" }} <span class="muted">· {{ b.placed|short_ts }}</span></td>
+      <td>{% if b.status == "open" %}<form class="void" method="post" action="/bets/real/void">
+        <input type="hidden" name="season" value="{{ season }}"><input type="hidden" name="game_id" value="{{ b.game_id }}">
+        <input type="hidden" name="recorded_at" value="{{ b.recorded_at }}">
+        <button type="submit" class="link" title="Void {{ b.team }}: kept in the ledger, counts for nothing">Void</button></form>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

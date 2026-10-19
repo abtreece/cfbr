@@ -277,3 +277,18 @@ function lineChart(fig) {
 }
 
 document.querySelectorAll("figure.chart").forEach(lineChart);
+
+// -- real-bet form: <select data-sides="fieldsetId"> names the team buttons after the chosen game's
+//    teams, and clears the choice when the game changes so a side is never carried to another game --
+document.querySelectorAll("select[data-sides]").forEach((sel) => {
+  const box = document.getElementById(sel.dataset.sides);
+  if (!box) return;
+  sel.addEventListener("change", () => {
+    const opt = sel.selectedOptions[0];
+    box.querySelectorAll("[data-side]").forEach((span) => {
+      const side = span.dataset.side;
+      span.textContent = (opt && opt.dataset[side]) || `${side[0].toUpperCase()}${side.slice(1)} team`;
+    });
+    box.querySelectorAll('input[name="side"]').forEach((r) => { r.checked = false; });
+  });
+});

@@ -185,12 +185,12 @@ def real_bets_ctx(real: pl.DataFrame | None, s) -> dict:
 
 # -- the owner's entry form for a real bet (DECISIONS "Real-bet entry form") -------------------
 
-def upcoming_sides(s, now: datetime, keep: int | None = None) -> list[dict]:
-    """One choice per side of every game kicking off in the next ``FORM_WINDOW`` (the games with
-    lines up) or in the last ``LIVE_LOOKBACK`` (for a live bet; ``started`` marks these), plus
-    game ``keep`` (a prefill link's game) whenever it is: the team, its opponent, the consensus
-    line from its side (a hint; the owner types the number they got), kickoff and week. Kickoff
-    order, home side first."""
+def upcoming_games(s, now: datetime, keep: int | None = None) -> list[dict]:
+    """One choice per game kicking off in the next ``FORM_WINDOW`` (the games with lines up) or
+    in the last ``LIVE_LOOKBACK`` (for a live bet; ``started`` marks these), plus game ``keep``
+    (a prefill link's game) whenever it is: away and home teams, neutral site, kickoff and the
+    consensus home spread (a hint; the owner types the number they got). Kickoff order. The side
+    is chosen separately, by team name, so the two teams of a game never sit in one list."""
     if s is None:
         return []
     ts = s.games.schema["kickoff_ts"]  # the parquet's zone name varies (UTC vs Etc/UTC)
@@ -200,18 +200,10 @@ def upcoming_sides(s, now: datetime, keep: int | None = None) -> list[dict]:
     if keep is not None:  # a prefill link's game, even if final: a backdated bet still needs a pre-kickoff placed time
         choose = choose | (pl.col("game_id") == keep)
     g = s.games.filter(choose).sort("kickoff_ts", "game_id")
-    out = []
-    for r in g.to_dicts():
-        spread = r.get("spread")
-        for side in ("home", "away"):
-            flip = 1 if side == "home" else -1
-            out.append({"value": f"{r['game_id']}:{side}", "game_id": r["game_id"], "side": side,
-                        "team": r[f"{side}_team"], "opponent": r["away_team" if side == "home" else "home_team"],
-                        "vs": "vs" if side == "home" else "at", "kickoff": r["kickoff_ts"],
-                        "started": r["kickoff_ts"] <= now,
-                        "line": None if spread is None or spread != spread else spread * flip,
-                        "week": r.get("week"), "season_type": r.get("season_type")})
-    return out
+    return [{"game_id": r["game_id"], "away_team": r["away_team"], "home_team": r["home_team"],
+             "neutral": bool(r.get("neutral_site")), "kickoff": r["kickoff_ts"], "started": r["kickoff_ts"] <= now,
+             "spread": None if r.get("spread") is None or r["spread"] != r["spread"] else r["spread"]}
+            for r in g.to_dicts()]
 
 
 def real_form_defaults(params, cfg: Config) -> dict:
@@ -223,9 +215,8 @@ def real_form_defaults(params, cfg: Config) -> dict:
             return cast(params.get(key, ""))
         except (TypeError, ValueError):
             return None
-    side = params.get("side") if params.get("side") in ("home", "away") else None
-    game = num("game", int)
-    return {"pick": f"{game}:{side}" if game is not None and side else "", "market": "spread", "live": False,
+    return {"game": num("game", int), "side": params.get("side") if params.get("side") in ("home", "away") else None,
+            "market": "spread", "live": False,
             "line": num("line", float), "odds": num("odds", int) or cfg.bets.odds,
             "stake": num("stake", float) or cfg.bets.unit_value, "book": (params.get("book") or "")[:40]}
 
@@ -275,14 +266,21 @@ def clean_summary(m: dict) -> dict:
     return {k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in m.items()}
 
 
-def parse_pick(s: str) -> tuple[int, str]:
-    """"<game_id>:<home|away>" from the form's side select."""
+def parse_pick(game: str | None, side: str | None) -> tuple[int, str]:
+    """The form's game select and team choice."""
     from cfbr.bets.real import RealBetError
 
-    game, _, side = s.partition(":")
-    if side not in ("home", "away") or not game.isdigit():
-        raise RealBetError("pick a team")
+    if not (game or "").isdigit():
+        raise RealBetError("pick a game")
+    if side not in ("home", "away"):
+        raise RealBetError("pick the team you bet on")
     return int(game), side
+
+
+def describe_bet(r: dict) -> str:
+    """"BYU ML +158 (live)", "Texas A&M +3.5 −105": the bet as the owner would say it."""
+    terms = "ML" if r["market"] == "moneyline" else spread_str(r["line"] if r["side"] == "home" else -r["line"])
+    return f"{r['team']} {terms} {price_str(r['odds'])}" + (" (live)" if r["live"] else "")
 
 
 def parse_number(s: str | None, what: str, cast):
@@ -380,14 +378,16 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         return resp
 
     def real_ctx(season: int, params, error: str | None = None, form: dict | None = None) -> dict:
-        """The owner's section: recorded bets plus the entry form (upcoming sides, prefill)."""
+        """The owner's section: recorded bets plus the entry form (upcoming games, prefill)."""
         s = store.season(season)
         ctx = real_bets_ctx(store.real_bets(season), s)
         form = form or real_form_defaults(params, cfg)
-        keep = int(form["pick"].partition(":")[0]) if form.get("pick", "").partition(":")[0].isdigit() else None
-        ctx |= {"sides": upcoming_sides(s, datetime.now(UTC), keep), "form": form,
-                "error": error, "saved": params.get("saved") == "1",
-                "record_links": {r["game_id"]: f"{r['game_id']}:{r['side']}" for r in ctx["rows"] if r["status"] == "open"}}
+        keep = form["game"] if isinstance(form.get("game"), int) else None
+        # After a save, name the bet just recorded (the newest row), so a wrong team is caught now.
+        newest = max(ctx["rows"], key=lambda r: r["recorded_at"] or "", default=None)
+        ctx |= {"games": upcoming_games(s, datetime.now(UTC), keep), "form": form, "error": error,
+                "saved": describe_bet(newest) if params.get("saved") == "1" and newest else None,
+                "voided": params.get("voided") == "1"}
         return ctx
 
     @router.post("/bets/real", response_class=HTMLResponse, include_in_schema=False)
@@ -409,7 +409,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         if s is None:
             raise HTTPException(404, f"No data for {season}.")
         try:
-            game_id, side = parse_pick(form.get("pick", ""))
+            game_id, side = parse_pick(form.get("game"), form.get("side"))
             market = form.get("market") or "spread"
             if market not in MARKETS:
                 raise RealBetError("pick a bet type")
@@ -434,7 +434,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                 # bet recorded in the last few minutes is refused unless a placed time was typed.
                 if not form.get("placed"):
                     terms = ["game_id", "side", "line", "odds", "risk_dollars", "book", "market", "live"]
-                    recent = df.filter(same_terms(bet, terms)
+                    recent = df.filter(same_terms(bet, terms) & (pl.col("status") != "void")
                                        & (pl.col("recorded_at").str.to_datetime(time_zone="UTC") > now - RESUBMIT_WINDOW))
                     if recent.height:
                         raise RealBetError("the same bet was recorded a moment ago; set the placed time if this is a second wager")
@@ -447,7 +447,9 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             # Back to the page with the problem and what was typed; nothing was written.
             ctx = bets_ctx(request, season, owner=True)
             ctx["real"] = real_ctx(season, request.query_params, error=str(e),
-                                   form={"pick": form.get("pick", ""), "market": form.get("market") or "spread",
+                                   form={"game": int(form["game"]) if form.get("game", "").isdigit() else None,
+                                         "side": form.get("side") if form.get("side") in ("home", "away") else None,
+                                         "market": form.get("market") or "spread",
                                          "live": form.get("live") == "on", "line": form.get("line"), "odds": form.get("odds"),
                                          "stake": form.get("stake"), "book": form.get("book", ""),
                                          "placed": form.get("placed", "")})
@@ -456,6 +458,30 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             resp.headers.update(NO_STORE)
             return resp
         resp = RedirectResponse(f"/bets?season={season}&saved=1#mine", status_code=303)
+        resp.headers.update(NO_STORE)
+        return resp
+
+    @router.post("/bets/real/void", include_in_schema=False)
+    async def void_real_bet(request: Request, owner: bool = Depends(owner_viewer)):
+        """Void one open real bet (a mistaken entry): the row stays in the ledger, marked void,
+        and counts for nothing. Owner-only like recording; a settled bet can't be voided."""
+        from cfbr.bets.real import RealBetError, ledger_path, update_real, void_real
+
+        if not owner:
+            raise HTTPException(404, "Not found.")
+        body = (await request.body())[:1024].decode("utf-8", "replace")
+        form = {k: v[0].strip() for k, v in parse_qs(body).items()}
+        try:
+            season, game_id = int(form.get("season", "")), int(form.get("game_id", ""))
+        except ValueError as e:
+            raise HTTPException(400, "Bad bet.") from e
+        recorded_at, now = form.get("recorded_at", ""), datetime.now(UTC)
+        try:
+            await run_in_threadpool(update_real, ledger_path(store.out_dir, season),
+                                    lambda df: void_real(df, game_id, recorded_at, now))
+        except RealBetError as e:
+            raise HTTPException(409, f"Not voided: {e}.") from e
+        resp = RedirectResponse(f"/bets?season={season}&voided=1#mine", status_code=303)
         resp.headers.update(NO_STORE)
         return resp
 
