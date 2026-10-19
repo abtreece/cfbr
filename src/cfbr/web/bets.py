@@ -319,9 +319,10 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
 
     def bets_ctx(request: Request, season: int | None, owner: bool) -> dict:
         """Everything /bets renders except the owner's section (``real``)."""
-        # The owner also reaches seasons that have only real bets; everyone else (and the API)
-        # sees paper-ledger seasons only.
-        seasons = sorted(set(store.bet_seasons()) | set(store.real_seasons())) if owner else store.bet_seasons()
+        # The owner also reaches seasons with only real bets, or with web data but no bets yet
+        # (to record the first one); everyone else (and the API) sees paper-ledger seasons only.
+        seasons = (sorted(set(store.bet_seasons()) | set(store.real_seasons()) | set(store.seasons()))
+                   if owner else store.bet_seasons())
         season, ledger = pick(season, seasons)
         risked, to_win = risk(cfg.bets.odds, cfg.bets.stake)
         ctx = {"bet_seasons": seasons, "season": season, "rules": cfg.bets,
@@ -421,6 +422,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                         (pl.col("game_id") == bet["game_id"]) & (pl.col("side") == bet["side"])
                         & (pl.col("line") == bet["line"]) & (pl.col("odds") == bet["odds"])
                         & (pl.col("risk_dollars") == bet["risk_dollars"])
+                        & (pl.col("book").is_null() if bet["book"] is None else pl.col("book") == bet["book"])
                         & (pl.col("recorded_at").str.to_datetime(time_zone="UTC") > now - RESUBMIT_WINDOW))
                     if recent.height:
                         raise RealBetError("the same bet was recorded a moment ago; set the placed time if this is a second wager")
@@ -432,7 +434,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             ctx = bets_ctx(request, season, owner=True)
             ctx["real"] = real_ctx(season, request.query_params, error=str(e),
                                    form={"pick": form.get("pick", ""), "line": form.get("line"), "odds": form.get("odds"),
-                                         "stake": form.get("stake"), "book": form.get("book", "")})
+                                         "stake": form.get("stake"), "book": form.get("book", ""),
+                                         "placed": form.get("placed", "")})
             resp = render(request, "bets.html", **ctx)
             resp.status_code = 422
             resp.headers.update(NO_STORE)

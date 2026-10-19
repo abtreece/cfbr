@@ -253,7 +253,7 @@
       <datalist id="books">{% for b in rules.selectable_books %}<option value="{{ b }}">{% endfor %}</datalist>
     </label>
     <label>Placed ({{ tz_label }}) <span class="muted">blank = now</span>
-      <input type="datetime-local" name="placed">
+      <input type="datetime-local" name="placed" value="{{ real.form.placed or '' }}">
     </label>
     <button type="submit">Record</button>
   </form>

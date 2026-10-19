@@ -2233,6 +2233,27 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     rows = read_real(path).sort("placed_at").to_dicts()
     assert len(rows) == 2 and abs(datetime.fromisoformat(rows[0]["placed_at"]) - (now - timedelta(hours=1))) < timedelta(minutes=2)
 
+    # The same terms at another book is a separate wager, not a double-submit.
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:away&line=3.5&odds=-105&stake=25&book=DraftKings", headers=hdr)
+    assert r.status_code == 303 and read_real(path).height == 3
+    # A typed placed time survives a validation error, so fixing another field doesn't turn it into "now".
+    r = c.post("/bets/real", content=f"season={SEASON}&pick=3:home&line=abc&odds=-110&stake=10&placed={local}", headers=hdr)
+    assert r.status_code == 422 and f'name="placed" value="{local}"' in r.text
+
     # The paper record and API are untouched.
     assert c.get("/api/bets").json()["summary"] == before["summary"]
     assert '"risk_dollars"' not in c.get("/api/bets").text
+
+
+def test_owner_reaches_a_season_with_no_bets_yet(web_cfg, monkeypatch):
+    from cfbr.web.access import OWNER_COOKIE, owner_token
+
+    monkeypatch.setenv("OWNER_KEY", "s3cret-key")
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)  # no bets.csv, no bets_real.csv
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    assert c.get(f"/bets?season={SEASON}").status_code == 404
+    c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
+    html = c.get("/bets").text
+    assert 'id="record"' in html and 'value="3:home"' in html
+    assert c.get(f"/bets?season={SEASON}").status_code == 200
+    assert c.get("/api/bets").status_code == 404
