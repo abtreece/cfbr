@@ -30,6 +30,11 @@ from cfbr.web.store import Store
 
 # Betting data is per-viewer once the section is gated; never let a shared cache keep it.
 NO_STORE = {"Cache-Control": "private, no-store"}
+# A one-shot notice ("Recorded: ..." / "Voided.") after a save or void. Carried in a short-lived
+# cookie, not the redirect URL, so it shows on the page the action lands on and never again on a
+# reload, a bookmark or the back button. Only the owner's routes set or read it.
+FLASH_COOKIE = "cfbr_flash"
+FLASH_SECONDS = 60
 
 # A same-terms real bet submitted again this soon (placed time blank) is a double-submit, not a second wager.
 RESUBMIT_WINDOW = timedelta(minutes=10)
@@ -372,12 +377,23 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         season = ctx["season"]
         # The owner's real bets: only for the owner (owner_viewer), never for other viewers,
         # premium or not, and never in /api/bets.
-        ctx["real"] = real_ctx(season, request.query_params) if owner and season is not None else None
+        flash = request.cookies.get(FLASH_COOKIE) if owner else None
+        ctx["real"] = real_ctx(season, request.query_params, flash=flash) if owner and season is not None else None
         resp = render(request, "bets.html", **ctx)
+        if flash:  # shown once: this view consumes it
+            resp.delete_cookie(FLASH_COOKIE, path="/bets")
         resp.headers.update(NO_STORE)
         return resp
 
-    def real_ctx(season: int, params, error: str | None = None, form: dict | None = None) -> dict:
+    def flash_redirect(season: int, notice: str) -> RedirectResponse:
+        """Back to the owner's section with a one-shot notice for the next page view."""
+        resp = RedirectResponse(f"/bets?season={season}#mine", status_code=303)
+        resp.set_cookie(FLASH_COOKIE, notice, max_age=FLASH_SECONDS, httponly=True, samesite="lax", path="/bets")
+        resp.headers.update(NO_STORE)
+        return resp
+
+    def real_ctx(season: int, params, error: str | None = None, form: dict | None = None,
+                 flash: str | None = None) -> dict:
         """The owner's section: recorded bets plus the entry form (upcoming games, prefill)."""
         s = store.season(season)
         ctx = real_bets_ctx(store.real_bets(season), s)
@@ -386,8 +402,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
         # After a save, name the bet just recorded (the newest row), so a wrong team is caught now.
         newest = max(ctx["rows"], key=lambda r: r["recorded_at"] or "", default=None)
         ctx |= {"games": upcoming_games(s, datetime.now(UTC), keep), "form": form, "error": error,
-                "saved": describe_bet(newest) if params.get("saved") == "1" and newest else None,
-                "voided": params.get("voided") == "1"}
+                "saved": describe_bet(newest) if flash == "saved" and newest else None,
+                "voided": flash == "voided"}
         return ctx
 
     @router.post("/bets/real", response_class=HTMLResponse, include_in_schema=False)
@@ -457,9 +473,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             resp.status_code = 422
             resp.headers.update(NO_STORE)
             return resp
-        resp = RedirectResponse(f"/bets?season={season}&saved=1#mine", status_code=303)
-        resp.headers.update(NO_STORE)
-        return resp
+        return flash_redirect(season, "saved")
 
     @router.post("/bets/real/void", include_in_schema=False)
     async def void_real_bet(request: Request, owner: bool = Depends(owner_viewer)):
@@ -481,9 +495,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                                     lambda df: void_real(df, game_id, recorded_at, now))
         except RealBetError as e:
             raise HTTPException(409, f"Not voided: {e}.") from e
-        resp = RedirectResponse(f"/bets?season={season}&voided=1#mine", status_code=303)
-        resp.headers.update(NO_STORE)
-        return resp
+        return flash_redirect(season, "voided")
 
     @router.get("/api/bets")
     def api_bets(response: Response, season: int | None = None):

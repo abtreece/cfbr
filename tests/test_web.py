@@ -2264,6 +2264,7 @@ def test_line_now_stars_a_line_older_than_the_page(shortlist_client, web_cfg):
 def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
     from cfbr.bets.real import read_real
     from cfbr.web.access import OWNER_COOKIE, owner_token
+    from cfbr.web.bets import FLASH_COOKIE
 
     monkeypatch.setenv("OWNER_KEY", "s3cret-key")
     now = datetime.now(UTC)
@@ -2301,16 +2302,21 @@ def test_owner_records_a_real_bet_from_the_site(web_cfg, monkeypatch):
 
     # Recording: through the ledger (home-perspective line, dollars risked), then back to the section.
     r = c.post("/bets/real", content=f"season={SEASON}&game=3&side=away&line=%2B3.5&odds=-105&stake=25&book=FanDuel", headers=hdr)
-    assert r.status_code == 303 and r.headers["location"] == f"/bets?season={SEASON}&saved=1#mine"
+    assert r.status_code == 303 and r.headers["location"] == f"/bets?season={SEASON}#mine"
     led = read_real(path)
     assert led.height == 1
     row = led.to_dicts()[0]
     assert row["game_id"] == 3 and row["side"] == "away" and row["team"] == "Texas A&M" and row["line"] == -3.5
     assert row["odds"] == -105 and row["risk_dollars"] == 25.0 and row["book"] == "FanDuel" and row["status"] == "open"
     assert row["week"] == 2 and abs(datetime.fromisoformat(row["placed_at"]) - now) < timedelta(minutes=5)
-    html = " ".join(c.get(f"/bets?season={SEASON}&saved=1").text.split())
-    # The confirmation names the bet, so a wrong team is caught right away.
+    # The confirmation shows once, on the page the save lands on, and names the bet so a wrong
+    # team is caught right away. A reload (or a bookmarked URL) doesn't show it again.
+    assert FLASH_COOKIE in r.cookies
+    html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
     assert "Recorded: Texas A&amp;M +3.5 −105." in html and "$25 / $23" in html
+    assert FLASH_COOKIE not in c.cookies
+    assert "Recorded:" not in c.get(f"/bets?season={SEASON}").text
+    assert "Recorded:" not in c.get(f"/bets?season={SEASON}&saved=1").text
 
     # Refusals come back on the page with what was typed, and write nothing.
     for body, msg in [(f"season={SEASON}&game=3&side=away&line=3.5&odds=-105&stake=25&book=FanDuel", "recorded a moment ago"),
@@ -2394,7 +2400,7 @@ def test_owner_records_a_live_moneyline_on_a_game_that_kicked_off(web_cfg, monke
     assert row["team"] == "Ohio State" and row["odds"] == 158 and row["status"] == "open"
     html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
     assert 'Ohio State ML <span class="badge">live</span>' in html and "$10 / $15.80" in html
-    assert "Recorded: Ohio State ML +158 (live)." in " ".join(c.get(f"/bets?season={SEASON}&saved=1").text.split())
+    assert "Recorded: Ohio State ML +158 (live)." in html
 
     # Refused, and nothing written: a double-submit; a bet after kickoff not marked live; a live
     # bet on a game not yet started; an unknown bet type; a spread with no line.
@@ -2440,13 +2446,15 @@ def test_owner_voids_a_mistaken_real_bet(web_cfg, monkeypatch):
     c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
     assert 'action="/bets/real/void"' in c.get("/bets").text
     r = c.post("/bets/real/void", content=body, headers=hdr)
-    assert r.status_code == 303 and r.headers["location"] == f"/bets?season={SEASON}&voided=1#mine"
+    assert r.status_code == 303 and r.headers["location"] == f"/bets?season={SEASON}#mine"
     led = read_real(path)
     # Kept in the file, marked void and when; out of the record; no button on it any more.
     assert led.height == 1 and led["status"][0] == "void" and led["voided_at"][0] is not None
-    html = " ".join(c.get(f"/bets?season={SEASON}&voided=1").text.split())
+    html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
     assert "Voided." in html and '<tr class="voided">' in html and 'action="/bets/real/void"' not in html
     assert "0–0–0" in html
+    # Once: a reload doesn't say "Voided." again.
+    assert "Voided." not in c.get(f"/bets?season={SEASON}").text
     # Only an open bet can be voided, once; an unknown bet is refused too.
     assert c.post("/bets/real/void", content=body, headers=hdr).status_code == 409
     assert c.post("/bets/real/void", content=f"season={SEASON}&game_id=1&recorded_at=nope",
