@@ -446,10 +446,22 @@ UPSETS = 6        # last week's biggest surprises shown
 SLATE = 12        # upcoming games shown before "all games" link
 
 
-def last_played_slot(s: Season) -> str | None:
-    """The most recent slot with a final score, or None before the season starts."""
-    done = s.games.filter(pl.col("completed"))
-    return done.sort("slot_order")["slot"][-1] if done.height else None
+def pending(g: pl.DataFrame, now: datetime) -> pl.DataFrame:
+    """Games still to be played: not final and not stale (see :data:`STALE_GAME`)."""
+    cutoff = pl.lit(now - STALE_GAME).cast(g.schema["kickoff_ts"])
+    return g.filter(~pl.col("completed") & (pl.col("kickoff_ts") > cutoff))
+
+
+def last_played_slot(s: Season, now: datetime) -> str | None:
+    """The most recent slot that is over: it has a final score and no game left to play. A
+    slot in progress (Tuesday's game final, Saturday's pending) is not it, so midweek the
+    results section keeps showing the previous week. None before the season starts."""
+    done = s.games.filter(pl.col("completed")).select("slot", "slot_order").unique().sort("slot_order", descending=True)
+    open_slots = set(pending(s.games, now)["slot"].to_list())
+    for slot in done["slot"].to_list():
+        if slot not in open_slots:
+            return slot
+    return None
 
 
 def movers(s: Season, week: int) -> dict:
@@ -470,28 +482,26 @@ def this_week(s: Season, now: datetime, threshold: float, locked: bool = False) 
     null for a locked viewer (see :func:`public_view`), so the sections that need them come
     back empty rather than being computed and hidden."""
     live = bool(s.meta.get("live"))
-    last = last_played_slot(s)
+    last = last_played_slot(s, now)
+    # The next slot with games left to play; a slot can hold finals and upcoming games at once.
     nxt = default_slot(s, now) if live else None
-    if nxt == last:  # every game of the next slot is already final (season over, or between slots)
-        nxt = None
+    upcoming = pending(s.games.filter(pl.col("slot") == nxt), now) if nxt is not None else None
+    if upcoming is None or upcoming.height == 0:
+        nxt, upcoming = None, None
     out: dict = {"last_slot": last, "next_slot": nxt, "live": live, "results": None, "upsets": [],
                  "upcoming": [], "n_upcoming": 0, "n_flagged": 0, "movers": None, "std": None, "week": None}
-    if last is not None:
+    if last is not None and not locked:
         done = s.games.filter((pl.col("slot") == last) & pl.col("completed"))
-        if not locked:
-            out["results"] = summarize(done)
-            rows = [game_row(g, now, live, threshold) for g in done.to_dicts()]
-            # Surprises: games the model's favorite lost, the most confident first. A toss-up
-            # that went either way is not a surprise.
-            upsets = [r for r in rows if r["model_pick"] and r["fav_prob"] and not _missing(r["margin"])
-                      and r["margin"] != 0 and (r["pred_margin"] > 0) != (r["margin"] > 0) and r["fav_prob"] > 0.5]
-            upsets.sort(key=lambda r: -r["fav_prob"])
-            out["upsets"] = upsets[:UPSETS]
-    if nxt is not None:
-        g = s.games.filter(pl.col("slot") == nxt)
-        cutoff = pl.lit(now - STALE_GAME).cast(g.schema["kickoff_ts"])
-        g = g.filter(~pl.col("completed") & (pl.col("kickoff_ts") > cutoff))
-        rows = [game_row(r, now, live, threshold) for r in g.to_dicts()]
+        out["results"] = summarize(done)
+        rows = [game_row(g, now, live, threshold) for g in done.to_dicts()]
+        # Surprises: games the model's favorite lost, the most confident first. A toss-up
+        # that went either way is not a surprise.
+        upsets = [r for r in rows if r["model_pick"] and r["fav_prob"] and not _missing(r["margin"])
+                  and r["margin"] != 0 and (r["pred_margin"] > 0) != (r["margin"] > 0) and r["fav_prob"] > 0.5]
+        upsets.sort(key=lambda r: -r["fav_prob"])
+        out["upsets"] = upsets[:UPSETS]
+    if upcoming is not None:
+        rows = [game_row(r, now, live, threshold) for r in upcoming.to_dicts()]
         # Flagged games first, biggest disagreement first; then the rest by kickoff.
         rows.sort(key=lambda r: (0 if r["flag"] else 1, -(r["edge_pts"] or 0) if r["flag"] else 0,
                                  r["kickoff_ts"].timestamp() if r["kickoff_ts"] else 0))

@@ -150,6 +150,7 @@ def test_this_week_page(client):
     assert "through week 1" in html and 'href="/team/2026/Texas%20A%26M"' in html
     assert "No rank changes yet" in html  # the fixture's week 1 table has rank_change 0 everywhere
     assert "Week 1 results" in html and 'Games final</div><div class="tile-value">2<' in html
+    assert "Vegas MAE" in html and "on same games" in html
     assert "No upsets" in html  # both week 1 favorites won
     assert "FCS:Big Sky" not in html
     assert client.get("/week?season=1999").status_code == 404
@@ -178,6 +179,30 @@ def test_this_week_surprises_and_flags():
     # A locked viewer gets the schedule only.
     w = this_week(s, now, 3.0, locked=True)
     assert w["movers"] is None and w["results"] is None and w["upsets"] == [] and w["n_upcoming"] == 2
+
+
+def test_this_week_midweek_keeps_the_slate_and_last_full_week():
+    """Week 2's Tuesday game is final while Saturday's is pending: the slate still shows the
+    pending game and the results section stays on week 1, the last week that is over."""
+    from cfbr.web.app import this_week
+
+    now = datetime.now(UTC)
+    games = _games(now).with_columns(
+        completed=pl.when(pl.col("game_id") == 3).then(True).otherwise(pl.col("completed")),
+        kickoff_ts=pl.when(pl.col("game_id") == 3).then(now - timedelta(days=1)).otherwise(pl.col("kickoff_ts")),
+        home_points=pl.when(pl.col("game_id") == 3).then(20).otherwise(pl.col("home_points")),
+        away_points=pl.when(pl.col("game_id") == 3).then(17).otherwise(pl.col("away_points")),
+        margin=pl.when(pl.col("game_id") == 3).then(3.0).otherwise(pl.col("margin")))
+    s = Season({"season": SEASON, "live": True, "weeks": [0, 1], "labels": {"0": "Preseason", "1": "Week 1"}},
+               _ensure(_ratings(), ("ap_rank", "coaches_rank", "cfp_rank")),
+               _ensure(games, [f"{a}_{c}" for a in ("home", "away") for c in ("ap_rank", "coaches_rank", "cfp_rank")]))
+    w = this_week(s, now, 3.0)
+    assert w["next_slot"] == "r02" and [g["game_id"] for g in w["upcoming"]] == [4]
+    assert w["last_slot"] == "r01" and w["results"]["n_games"] == 2
+    # Once Saturday's game is also final, week 2 is the week that is over.
+    s2 = Season(s.meta, s.ratings, s.games.with_columns(completed=True, kickoff_ts=now - timedelta(days=1)))
+    w = this_week(s2, now, 3.0)
+    assert w["next_slot"] is None and w["last_slot"] == "r02"
 
 
 def test_this_week_after_the_season(web_cfg):

@@ -22,7 +22,9 @@
 <section class="week-section" id="upcoming">
 <h2>{{ next_slot|slot_label }} <span class="muted">{{ n_upcoming }} game{{ "s" if n_upcoming != 1 }}</span></h2>
 {% if not locked %}<p class="note">{% if n_flagged %}{{ n_flagged }} flagged first: {{ MODEL }} picks the underdog, or is {{ threshold|num(0) }}+ points off the Vegas line. {% endif %}A disagreement isn't an edge by itself; see <a href="/accuracy?season={{ season }}">the track record</a>.</p>{% endif %}
-{% if s.meta.lines_as_of and live %}<p class="note lines-as-of">Vegas lines as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.</p>{% endif %}
+{% if s.meta.lines_as_of and live %}<p class="note lines-as-of">Vegas lines as of {{ s.meta.lines_as_of|iso_ts }}; books may have moved since.
+  {%- if s.meta.cfbd_lines_as_of|older_line(s.meta.lines_as_of) and upcoming|selectattr("line_source", "eq", "cfbd")|list %}
+  Lines marked * are older ({{ s.meta.cfbd_lines_as_of|iso_ts }}): the newest odds snapshot had no pre-kickoff line for those games.{% endif %}</p>{% endif %}
 <div class="table-wrap">
 <table class="data" id="slate">
   <thead><tr><th>Kickoff ({{ tz_label }})</th><th>Matchup</th>{% if not locked %}<th>{{ MODEL }}</th>{% endif %}<th>Vegas</th>{% if not locked %}<th>Edge</th>{% endif %}</tr></thead>
@@ -32,7 +34,7 @@
       <td>{{ g.kickoff_ts|kickoff }}</td>
       <td class="wrap">{{ poll_rank(g.away_ap_rank) }}{{ team_link(g.away_team, season, fbs_teams) }} {{ "vs" if g.neutral_site else "@" }} {{ poll_rank(g.home_ap_rank) }}{{ team_link(g.home_team, season, fbs_teams) }}</td>
       {% if not locked %}<td class="strong wrap">{{ g.model_pick or "—" }}{% if g.fav_prob %} <span class="muted">{{ prob(g.fav_prob) }}</span>{% endif %}</td>{% endif %}
-      <td class="wrap">{{ g.vegas_pick or "—" }}</td>
+      <td class="wrap">{{ g.vegas_pick or "—" }}{% if g.line_source == "cfbd" and g.line_as_of|older_line(s.meta.lines_as_of) %}<sup class="muted" title="Older line: as of {{ g.line_as_of|iso_ts }}">*</sup>{% endif %}</td>
       {% if not locked %}<td class="wrap{% if g.flag %} strong{% endif %}">{{ g.edge or "—" }}{% if g.flag == "upset" %} <span class="badge">upset pick</span>{% endif %}</td>{% endif %}
     </tr>
   {% else %}
@@ -82,7 +84,8 @@
 <div class="tiles">
   {{ tile("Games final", results.n_games) }}
   {{ tile("Winners picked", results.su_accuracy|pct(0)) }}
-  {{ tile(MODEL ~ " MAE", results.mae|num ~ " pts", ("Vegas " ~ results.line_mae|num ~ " on same games") if results.n_lined else none) }}
+  {{ tile(MODEL ~ " MAE", results.mae|num ~ " pts") }}
+  {% if results.n_lined %}{{ tile("Vegas MAE", results.line_mae|num ~ " pts", MODEL ~ " " ~ results.model_mae_lined|num ~ " on same games") }}{% endif %}
   {% if results.ats_n %}{{ tile("Against the spread", results.ats_wins ~ "–" ~ (results.ats_n - results.ats_wins)) }}{% endif %}
   {% if std and std.ats_n %}{{ tile("Season ATS", std.ats_win_rate|pct(1), std.ats_n ~ " game" ~ ("s" if std.ats_n != 1) ~ " · break-even 52.4%") }}{% endif %}
 </div>
