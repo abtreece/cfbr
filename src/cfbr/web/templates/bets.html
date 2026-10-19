@@ -231,7 +231,7 @@
   {% if real.error %}<p class="callout error"><strong>Not recorded:</strong> {{ real.error }}.</p>{% endif %}
   <form class="record-bet" method="post" action="/bets/real" autocomplete="off">
     <input type="hidden" name="season" value="{{ season }}">
-    <label class="wide">Team
+    <label class="wide">Team you bet on <span class="muted">(each game is listed once per team)</span>
       <select name="pick" required>
         <option value="">— pick a side —</option>
         {% for o in real.sides %}
@@ -248,8 +248,8 @@
     <label>Line <span class="muted">(your side; blank for moneyline)</span>
       <input type="text" name="line" inputmode="decimal" placeholder="+3.5" value="{{ real.form.line if real.form.line is not none else '' }}">
     </label>
-    <label>Price
-      <input type="text" name="odds" inputmode="numeric" required placeholder="-110" value="{{ real.form.odds if real.form.odds is not none else '' }}">
+    <label>Price <span class="muted">(odds you got)</span>
+      <input type="text" name="odds" inputmode="numeric" required placeholder="-110 or +158" value="{{ real.form.odds if real.form.odds is not none else '' }}">
     </label>
     <label>Stake $
       <input type="text" name="stake" inputmode="decimal" required placeholder="10" value="{{ real.form.stake if real.form.stake is not none else '' }}">
@@ -264,7 +264,7 @@
     <label class="check"><input type="checkbox" name="live"{% if real.form.live %} checked{% endif %}> Live (in-game)</label>
     <button type="submit">Record</button>
   </form>
-  <p class="note">The line is from your team's side (+3.5 for a 3.5-point dog). A live bet is placed after kickoff; live bets and moneylines get no CLV. Written to the real-bet ledger the same way as <code>cfbr real-bet</code>; the paper record is untouched.</p>
+  <p class="note">The line is from your team's side (+3.5 for a 3.5-point dog). For a moneyline, pick the team, choose Moneyline, leave Line blank and enter its odds as the price (+158). A live bet is placed after kickoff; live bets and moneylines get no CLV. Written to the real-bet ledger the same way as <code>cfbr real-bet</code>; the paper record is untouched.</p>
 </details>
 {% if real.rows %}
 <div class="tiles">

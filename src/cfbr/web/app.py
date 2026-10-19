@@ -6,6 +6,7 @@ backtest results under ``results/``, and ``out/{season}/accuracy.csv``.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import math
 import threading
@@ -516,6 +517,13 @@ def this_week(s: Season, now: datetime, threshold: float, locked: bool = False) 
 
 # -- app --------------------------------------------------------------------------
 
+def asset_versions(static: Path) -> dict[str, str]:
+    """A short content hash per static file, appended to its URL (``?v=``). The files are served
+    with no Cache-Control, so without it a browser can keep last deploy's stylesheet against new
+    markup. Read once per process: a deploy restarts the server along with the files."""
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()[:10] for p in static.iterdir() if p.is_file()}
+
+
 def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
     store = store or Store(web_dir(cfg), cfg.paths.results_dir, cfg.paths.out_dir)
     app = FastAPI(title="CFB Ratings", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
@@ -533,7 +541,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                     "spread": spread_str, "price": price_str, "count": count_str,
                     "q": lambda s: quote(str(s), safe="")}
     env.globals |= {"sparkline": sparkline, "FINAL": FINAL, "tz_label": DISPLAY_TZ_LABEL, "prob": prob,
-                    "MODEL": MODEL_NAME}
+                    "MODEL": MODEL_NAME, "asset_v": asset_versions(HERE / "static")}
 
     def get_season(season: int | None) -> Season:
         season = season or store.latest()
