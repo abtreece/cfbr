@@ -282,7 +282,7 @@
   {{ tile("Avg CLV", (rs.avg_clv|signed(2) ~ " pts") if rs.n_clv else "—", ("over " ~ rs.n_clv ~ " bets") if rs.n_clv else "after games close") }}
 </div>
 <div class="table-wrap">
-<table class="data">
+<table class="data" id="real-bets">
   <thead><tr><th class="opt">Kickoff ({{ tz_label }})</th><th>Game</th><th>Bet</th><th class="num">Price</th><th class="num">Stake / to win</th>
     <th class="num opt">Line now</th><th>Result</th><th class="num opt">Close</th><th class="num opt">CLV</th><th class="opt">Book · placed</th><th></th></tr></thead>
   <tbody>
@@ -307,6 +307,8 @@
   </tbody>
 </table>
 </div>
+{% set n_void = real.rows|selectattr("status", "equalto", "void")|list|length %}
+{% if n_void %}<div class="table-tools voided-toggle"><button type="button" class="link" data-toggle-class="show-void" data-target="real-bets" data-label-on="Hide voided entries" data-label-off="Show {{ n_void }} voided {{ "entry" if n_void == 1 else "entries" }}" aria-pressed="false">Show {{ n_void }} voided {{ "entry" if n_void == 1 else "entries" }}</button></div>{% endif %}
 <p class="note">CLV &gt; 0 means the line beat the close used for the paper bets; live bets and moneylines have none. Final scores are away–home.</p>
 {% else %}
 <p class="muted">No real bets recorded yet this season.</p>
