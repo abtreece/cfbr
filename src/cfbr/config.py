@@ -86,6 +86,9 @@ class Bets(BaseModel):
     stake: float = 1.0
     # Minimum settled bets before the summary draws any conclusion.
     min_sample: int = 500
+    # Bets with a snapshot close before the closing-line-value verdict is read (DECISIONS
+    # "Paper-bet verdict by closing-line value").
+    verdict_min_bets: int = 300
     # Offshore books: their lines feed the consensus (market data) but a bet is
     # never priced at one, so they never supply the best-line number.
     offshore_books: list[str] = ["Bovada", "BetOnline", "LowVig", "MyBookie", "BetUS", "Bookmaker", "5Dimes",
