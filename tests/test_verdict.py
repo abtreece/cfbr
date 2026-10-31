@@ -45,3 +45,10 @@ def test_verdict_statuses():
     mixed = _ledger([_row(1, "won", "snapshot", "home", -3.0, -7.0), _row(2, "lost", "snapshot", "home", -3.0, -3.0),
                      _row(3, "won", "snapshot", "home", -3.0, -5.0), _row(4, "lost", "snapshot", "home", -3.0, -3.5)])
     assert verdict(mixed, cfg, FakeTable())["status"] == "undecided"
+
+
+def test_decision_point_and_empty_ledger():
+    cfg = Bets(pricing_books=[], verdict_min_bets=3)
+    assert "after the 2027 regular season" in verdict(_ledger([]), cfg, None)["decision_point"]
+    v = verdict(_ledger([]), cfg, FakeTable())
+    assert v["status"] == "too few" and v["n"] == 0
