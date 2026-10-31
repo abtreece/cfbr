@@ -56,17 +56,28 @@ def predict_margin(cal: Calibration, games: pl.DataFrame) -> np.ndarray:
 # over-dispersed; games against a pooled FCS side are under-predicted. Game predictions
 # only: published ratings keep the base coefficients.
 STAGE2_TERMS = ["pred", "pred_ps", "home_ps", "fcs"]
+# v3 (DECISIONS "Calibration v3"): a fifth term, pred * |fcs|, shown only behind fcs_slope.
+STAGE2_TERMS_V3 = STAGE2_TERMS + ["pred_fcs"]
 
 
-def stage2_design(games: pl.DataFrame, pred: np.ndarray) -> np.ndarray:
-    """``games`` needs neutral_site, prior_share_h/_a and home_fcs/away_fcs."""
+def stage2_terms(fcs_slope: bool = False) -> list[str]:
+    return STAGE2_TERMS_V3 if fcs_slope else STAGE2_TERMS
+
+
+def stage2_design(games: pl.DataFrame, pred: np.ndarray, fcs_slope: bool = False) -> np.ndarray:
+    """``games`` needs neutral_site, prior_share_h/_a and home_fcs/away_fcs. With ``fcs_slope``
+    (v3) a fifth column holds the base prediction on games with exactly one pooled-FCS side
+    and 0 elsewhere, so the fit can shrink the margin there; v2's ``fcs`` term only shifts it."""
     ps = ((games["prior_share_h"].fill_null(1.0) + games["prior_share_a"].fill_null(1.0)) / 2).to_numpy()
     home = (~games["neutral_site"]).cast(pl.Float64).to_numpy()
     fcs = (games["away_fcs"].cast(pl.Float64) - games["home_fcs"].cast(pl.Float64)).fill_null(0.0).to_numpy()
-    return np.column_stack([pred, pred * ps, home * ps, fcs])
+    cols = [pred, pred * ps, home * ps, fcs]
+    if fcs_slope:
+        cols.append(pred * np.abs(fcs))
+    return np.column_stack(cols)
 
 
-def fit_stage2(games: pl.DataFrame, pred: np.ndarray) -> np.ndarray:
+def fit_stage2(games: pl.DataFrame, pred: np.ndarray, fcs_slope: bool = False) -> np.ndarray:
     y = games["margin"].to_numpy() - pred
-    coef, *_ = np.linalg.lstsq(stage2_design(games, pred), y, rcond=None)
+    coef, *_ = np.linalg.lstsq(stage2_design(games, pred, fcs_slope), y, rcond=None)
     return coef

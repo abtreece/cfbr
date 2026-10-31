@@ -108,6 +108,9 @@ METRICS = {"seasons": [2015, 2021], "overall": {
     "n_games": 10, "by_week": [{"bucket": "w01", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
     "by_prior_share": [{"bucket": ">=0.9", "n": 10, "bias": 3.1, "slope": 1.1, "mae": 14.0}],
     "ats_by_edge": [{"bucket": "0-3", "n": 9, "wins": 4, "win_rate": 0.444, "ci95_low": 0.2, "ci95_high": 0.7}],
+    "ats_by_edge_open": [{"bucket": "3-6", "n": 7, "wins": 4, "win_rate": 0.571, "ci95_low": 0.25, "ci95_high": 0.84}],
+    "opener": {"n": 9, "seasons": [2024], "mae_open": 12.2, "mae_close": 12.0, "mae_model": 13.0, "n_bets": 7,
+               "clv_mean": 0.49, "clv_sd": 2.0, "beat_close": 0.54, "push_close": 0.1, "move_slope": 0.077},
     "blend": {"n": 9, "w_line": 0.95, "w_model": 0.05, "mae_line": 12.0, "mae_model": 13.0, "mae_blend": 12.0},
     "reliability": [{"bin": "0.5-0.6", "n": 10, "predicted": 0.55, "observed": 0.5}]}}
 
@@ -2515,6 +2518,22 @@ def test_voided_real_bets_are_hidden_behind_a_toggle(web_cfg, monkeypatch):
     assert "#real-bets:not(.show-void) tr.voided { display: none; }" in css
 
 
+def test_lab_shows_opener_diagnostics(client):
+    html = " ".join(client.get("/lab").text.split())
+    assert "vs opener" in html and "+0.49" in html and "0.077" in html
+
+
+def test_bets_page_and_guide_show_opener_reference(bets_client):
+    from cfbr.bets.ledger import OPENER_TIER_COVER
+
+    small = OPENER_TIER_COVER[(3.0, 6.0)]
+    rate = f"{100 * small[0] / small[1]:.1f}%"
+    html = " ".join(bets_client.get("/bets").text.split())
+    assert "vs opener" in html and rate in html
+    guide = " ".join(bets_client.get("/bets/guide").text.split())
+    assert "opening line" in guide and rate in guide
+    api = bets_client.get("/api/bets").json()
+    assert api["tiers"][0]["opener"]["n"] == small[1]
 def test_bets_page_and_api_carry_the_verdict(bets_client):
     html = " ".join(bets_client.get("/bets").text.split())
     assert "Verdict by closing-line value" in html

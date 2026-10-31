@@ -4,6 +4,9 @@ Both are point-in-time predictions for every game of the season, under
 otherwise identical frozen settings. Only the published config feeds the
 rankings; the roster predictions exist only in these comparison files.
 The decision rule is in DECISIONS.md ("Prior shadow comparison").
+
+A portal-era roster prior shadow (``run_portal_shadow``, ``prior_portal_comparison.*``)
+sits on top of this one; its rule is DECISIONS.md "Roster prior, portal-era variant".
 """
 
 from __future__ import annotations
@@ -192,7 +195,7 @@ def calibration_comparison(eng: Engine, season: int) -> pl.DataFrame:
     from cfbr.model.calibrate import stage2_design
 
     g, base = eng.base_predictions(season)
-    v2 = base + stage2_design(g, base) @ eng.stage2(season)
+    v2 = base + stage2_design(g, base) @ eng.stage2(season, fcs_slope=False)
     return (g.select("game_id", "season", "week", "season_type", "kickoff_ts", "completed", "home_team",
                      "away_team", "margin")
             .with_columns(pred_base=pl.Series(base), pred_v2=pl.Series(v2), in_window=in_window())
@@ -250,5 +253,175 @@ def run_calibration_shadow(eng: Engine, season: int) -> Path:
     tmp.replace(md)
     w = calibration_gain(df.filter(pl.col("in_window")))
     log.info("calibration shadow: %d window games settled, gain %s", w["n"],
+             "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
+    return csv
+
+
+def paired_mae_gain(df: pl.DataFrame, a: str, b: str) -> dict:
+    """Paired MAE gain of column b over column a on settled games (positive favors b)."""
+    d = df.filter(pl.col("completed") & pl.col("margin").is_not_null()
+                  & pl.col(a).is_not_null() & pl.col(b).is_not_null())
+    if d.height == 0:
+        return {"n": 0, "gain": math.nan, "ci95": (math.nan, math.nan), "mae_a": math.nan, "mae_b": math.nan}
+    ea = (d["margin"] - d[a]).abs().to_numpy()
+    eb = (d["margin"] - d[b]).abs().to_numpy()
+    x = ea - eb
+    half = 1.96 * x.std(ddof=1) / np.sqrt(len(x)) if len(x) > 1 else math.nan
+    return {"n": int(len(x)), "gain": float(x.mean()), "ci95": (float(x.mean() - half), float(x.mean() + half)),
+            "mae_a": float(ea.mean()), "mae_b": float(eb.mean())}
+
+
+# -- Portal-era roster prior shadow (rule: DECISIONS.md "Roster prior, portal-era variant") --
+
+PORTAL_MIN_SEASON = 2021       # roster regression trains and applies from this season on
+
+
+def in_window_portal() -> pl.Expr:
+    """Every 2027 game: 2026 week 7+ and its postseason belong to the plain roster shadow's window, nothing earlier is unseen, nothing later is in the rule."""
+    return pl.col("season") == 2027
+
+
+def portal_comparison(cfg: Config, ds: Dataset, season: int, last_completed: int,
+                      published: pl.DataFrame) -> pl.DataFrame:
+    """Published model and plain roster prior (from run_shadow's CSV) plus the portal-era variant."""
+    portal_cfg = cfg.model_copy(deep=True)
+    portal_cfg.prior.features = "roster"
+    portal_cfg.prior.roster_min_season = PORTAL_MIN_SEASON
+    alt = Engine(ds, portal_cfg, last_completed=last_completed).predict(season)
+    return (published.rename({"pred_v1": "pred_published"})
+            .join(alt.select("game_id", pred_portal="pred_margin"), on="game_id", how="left")
+            .with_columns(in_window=in_window_portal())
+            .sort("kickoff_ts", "game_id"))
+
+
+def portal_markdown(df: pl.DataFrame, season: int) -> str:
+    def row(label: str, sub: pl.DataFrame, a: str, b: str) -> str:
+        g = paired_mae_gain(sub, a, b)
+        if g["n"] == 0:
+            return f"| {label} | 0 | – | – | – |"
+        return (f"| {label} | {g['n']} | {g['mae_a']:.2f} | {g['mae_b']:.2f} | "
+                f"{g['gain']:+.3f} [{g['ci95'][0]:+.3f}, {g['ci95'][1]:+.3f}] |")
+
+    win = df.filter(pl.col("in_window"))
+    early = (pl.col("season_type") == "regular") & (pl.col("week") <= 4)
+    w = paired_mae_gain(win, "pred_published", "pred_portal")
+    r = paired_mae_gain(win, "pred_roster", "pred_portal")
+    if w["n"] == 0:
+        status = "No window games completed yet (the window is the 2027 season)."
+    else:
+        passing = (w["gain"] > 0 and w["ci95"][0] > GAIN_CI_FLOOR and r["n"] > 0 and r["gain"] > 0)
+        status = (f"Window so far: gain vs published {w['gain']:+.3f} (95% CI lower bound {w['ci95'][0]:+.3f}), "
+                  f"gain vs plain roster {r['gain']:+.3f}. "
+                  + ("**Currently meets** the adoption rule." if passing else "**Does not currently meet** the adoption rule.")
+                  + " The decision is made once, before 2028 week 1.")
+    lines = [
+        f"# {season} prior comparison: published vs roster vs portal-era roster (shadow)", "",
+        "All columns are point-in-time predictions with every other setting frozen. The portal variant trains and "
+        f"applies the roster regression only from {PORTAL_MIN_SEASON} on. Gain = first error − second error "
+        "(positive favors the second). Rule (DECISIONS.md): adopt portal before 2028 week 1 if its window gain vs "
+        f"the published model is > 0 with 95% CI lower bound > {GAIN_CI_FLOOR:+.2f} and it also beats the plain "
+        "roster prior over the window. Window: the 2027 regular season and postseason. 2026 rows are recorded for "
+        "reference and never enter the status.", "",
+        status, "",
+        "| window games | n | first MAE | second MAE | gain [95% CI] |", "|---|---|---|---|---|",
+        row("**portal vs published (primary)**", win, "pred_published", "pred_portal"),
+        row("portal vs plain roster (must be > 0)", win, "pred_roster", "pred_portal"),
+        row("plain roster vs published (context)", win, "pred_published", "pred_roster"),
+        row("published → portal, weeks 1–4 (reported, not gated)", win.filter(early), "pred_published", "pred_portal"),
+        row("published → portal, week 5+ and bowls (reported, not gated)", win.filter(~early),
+            "pred_published", "pred_portal"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+# Depends on run_shadow's CSV for the published and plain-roster columns, so run_shadow must keep running
+# through 2027 even after the plain roster decision (before 2027 week 1).
+def run_portal_shadow(cfg: Config, ds: Dataset, season: int, last_completed: int) -> Path:
+    out = cfg.paths.out_dir / str(season)
+    src = out / "prior_comparison.csv"
+    if not src.exists():
+        raise RuntimeError(f"{src} missing; run_shadow writes it first")
+    published = pl.read_csv(src, try_parse_dates=True, schema_overrides={
+        "margin": pl.Float64, "pred_v1": pl.Float64, "pred_roster": pl.Float64})
+    df = portal_comparison(cfg, ds, season, last_completed, published)
+    csv, md = out / "prior_portal_comparison.csv", out / "prior_portal_comparison.md"
+    tmp = csv.with_suffix(".csv.tmp")
+    df.write_csv(tmp)
+    tmp.replace(csv)
+    tmp = md.with_suffix(".md.tmp")
+    tmp.write_text(portal_markdown(df, season))
+    tmp.replace(md)
+    w = paired_mae_gain(df.filter(pl.col("in_window")), "pred_published", "pred_portal")
+    log.info("portal prior shadow: %d window games settled, gain %s", w["n"],
+             "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
+    return csv
+
+
+# -- Calibration v3 shadow (rule: DECISIONS.md "calibration v3 (pooled-FCS slope)") -----
+
+V3_WINDOW_FIRST_WEEK = 10      # regular-season week 10 onward, plus the postseason
+
+
+def in_window_v3() -> pl.Expr:
+    return (pl.col("season") == WINDOW_SEASON) & (
+        (pl.col("season_type") == "postseason")
+        | ((pl.col("season_type") == "regular") & (pl.col("week") >= V3_WINDOW_FIRST_WEEK)))
+
+
+def calibration_v3_comparison(eng: Engine, season: int) -> pl.DataFrame:
+    """Calibration v2 vs v3 game predictions, point-in-time. Always v2 with fcs_slope=False and v3 with
+    fcs_slope=True, whatever the config says, so the shadow stays v2-vs-v3."""
+    from cfbr.model.calibrate import stage2_design
+
+    g, base = eng.base_predictions(season)
+    v2 = base + stage2_design(g, base) @ eng.stage2(season, fcs_slope=False)
+    v3 = base + stage2_design(g, base, fcs_slope=True) @ eng.stage2(season, fcs_slope=True)
+    return (g.select("game_id", "season", "week", "season_type", "kickoff_ts", "completed", "home_team",
+                     "away_team", "margin")
+            .with_columns(pred_v2=pl.Series(v2), pred_v3=pl.Series(v3), in_window=in_window_v3())
+            .sort("kickoff_ts", "game_id"))
+
+
+def calibration_v3_markdown(df: pl.DataFrame, season: int) -> str:
+    w = paired_mae_gain(df.filter(pl.col("in_window")), "pred_v2", "pred_v3")
+    if w["n"] == 0:
+        status = "Window so far: no completed games."
+    else:
+        ok = w["gain"] > 0 and w["ci95"][0] > GAIN_CI_FLOOR
+        status = (f"Window so far: gain {w['gain']:+.3f} (95% CI lower bound {w['ci95'][0]:+.3f}). "
+                  + ("**Currently meets** the window criterion (adoption also needs v2 to be adopted)." if ok
+                     else "**Does not currently meet** the window criterion.")
+                  + " The decision is made once, before 2027 week 1.")
+    rows = ["| games | n | v2 MAE | v3 MAE | gain [95% CI] |", "|---|---|---|---|---|"]
+    for label, sub in ((f"**window (weeks {V3_WINDOW_FIRST_WEEK}+ & postseason)**", df.filter(pl.col("in_window"))),
+                       (f"weeks 1–{V3_WINDOW_FIRST_WEEK - 1} (outside the window)", df.filter(~pl.col("in_window")))):
+        g = paired_mae_gain(sub, "pred_v2", "pred_v3")
+        rows.append(f"| {label} | {g['n']} | – | – | – |" if g["n"] == 0 else
+                    f"| {label} | {g['n']} | {g['mae_a']:.2f} | {g['mae_b']:.2f} | "
+                    f"{g['gain']:+.3f} [{g['ci95'][0]:+.3f}, {g['ci95'][1]:+.3f}] |")
+    return "\n".join([
+        f"# {season} calibration v3 shadow: v2 vs v3", "",
+        "v3 adds one stage-2 term to v2: a slope on the base prediction times the pooled-FCS indicator. Ratings "
+        "are unchanged; v3 refits all five stage-2 terms jointly, so every game's prediction moves a little, not only "
+        "FBS-vs-FCS games, and nothing here is published. Gain = v2 error − v3 error "
+        "(positive favors v3). Window: regular-season weeks 10+ and the postseason. "
+        f"Rule (DECISIONS.md): adopt v3 before 2027 week 1 if the window gain is > 0 and its 95% CI lower bound is > "
+        f"{GAIN_CI_FLOOR:+.2f}, and only if v2 is adopted.", "", status, "", *rows, ""])
+
+
+def run_calibration_v3_shadow(eng: Engine, season: int) -> Path:
+    df = calibration_v3_comparison(eng, season)
+    out = eng.cfg.paths.out_dir / str(season)
+    out.mkdir(parents=True, exist_ok=True)
+    csv, md = out / "calibration_v3_comparison.csv", out / "calibration_v3_comparison.md"
+    tmp = csv.with_suffix(".csv.tmp")
+    df.write_csv(tmp)
+    tmp.replace(csv)
+    tmp = md.with_suffix(".md.tmp")
+    tmp.write_text(calibration_v3_markdown(df, season))
+    tmp.replace(md)
+    w = paired_mae_gain(df.filter(pl.col("in_window")), "pred_v2", "pred_v3")
+    log.info("calibration v3 shadow: %d window games settled, gain %s", w["n"],
              "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
     return csv

@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from cfbr.bets.experiments import tracked_tests
-from cfbr.bets.ledger import (HOLDOUT_TIER_COVER, book_key, break_even, by_tier, risk, summarize, tier_expr,
+from cfbr.bets.ledger import (HOLDOUT_TIER_COVER, OPENER_TIER_COVER, book_key, break_even, by_tier, risk, summarize, tier_expr,
                               tier_reference, tiers, week_label, weekly, what_if)
 from cfbr.bets.shortlist import BOOK_RE, shortlist
 from cfbr.bets.verdict import verdict
@@ -576,7 +576,8 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
                       prices=[{"odds": o, "risk": risk(o, 1.0)[0] * 100, "win": risk(o, 1.0)[1] * 100,
                                "break_even": break_even(o)} for o in GUIDE_PRICES],
                       break_even_std=break_even(cfg.bets.odds),
-                      tiers=[t | {"holdout": tier_reference(t, HOLDOUT_TIER_COVER)} for t in tiers(cfg.bets)],
+                      tiers=[t | {"holdout": tier_reference(t, HOLDOUT_TIER_COVER),
+                                    "opener": tier_reference(t, OPENER_TIER_COVER)} for t in tiers(cfg.bets)],
                       unit_risk=risked * cfg.bets.unit_value, unit_win=to_win * cfg.bets.unit_value)
         resp.headers.update(NO_STORE)
         return resp

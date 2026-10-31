@@ -52,6 +52,8 @@ class Model(BaseModel):
     prior_k: float = 0.0
     # Second-stage game calibration (DECISIONS "M2+M3 calibration v2"); shadow only in 2026.
     calibration_v2: bool = False
+    # Calibration v3 = v2 plus a pred x |fcs| slope term (DECISIONS "calibration v3"); off until its gate passes.
+    calibration_v3: bool = False
 
 
 class Baseline(BaseModel):
@@ -64,6 +66,9 @@ class Prior(BaseModel):
     # "v1": prev ratings + CFBD returning production + talent + recruiting.
     # "roster": v1 plus player-level roster features (model/roster.py).
     features: str = "v1"
+    # Roster regression trained on, and used for, target seasons >= this (0 = every season with
+    # roster data). DECISIONS "Roster prior, portal-era variant": shadow only.
+    roster_min_season: int = 0
 
 
 class Seasons(BaseModel):

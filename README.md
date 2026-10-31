@@ -27,6 +27,8 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr backtest --seasons 2015-2021` | Walk-forward backtest; writes `results/{run_id}/` |
 | `cfbr tune` | Optuna search on the tuning seasons; freezes `config/tuned.toml` |
 | `cfbr holdout` | Evaluate the frozen config on the holdout seasons (run once) |
+| `cfbr backtest-lines --run ID` | Add the opening consensus to an existing run and recompute its line diagnostics; keeps the stored close, refuses if a headline metric would change; after a deploy, run it on the server for both frozen runs and restart `cfbr-web` (the server reads each run's metrics.json once); then `uv run pytest tests/test_bets.py -k opener_tier_constants` on the server to confirm the constant matches production's run |
+| `cfbr calibration-gate [--seasons 2015-2021] [--sanity]` | Calibration v3 gate (pooled-FCS slope term vs v2); refuses holdout seasons without `--sanity`; writes `results/{ts}-calib-v3-gate/` or `results/{ts}-calib-v3-sanity/` with `--sanity` |
 | `cfbr rank --season 2026 --week 6` | Write `out/2026/w06/` rankings and next-week predictions |
 | `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line → web data for the season |
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
@@ -196,6 +198,8 @@ uv run cfbr real-bet --team BYU --moneyline --live --odds 158 --stake 10 --place
 ## Prior shadow comparison
 
 The published ratings use the v1 preseason prior. `cfbr weekly` also computes every game's point-in-time prediction with the roster-based prior (player rosters, transfers, defensive returning production) and writes `out/{season}/prior_comparison.csv` and `.md`. The roster predictions are never published. Under a rule fixed in DECISIONS.md, the roster prior becomes the default before 2027 week 1 only if it beats v1 on 2026 games from week 7 onward and the postseason. Run it by hand with `cfbr shadow --season 2026`.
+
+A second shadow, the portal-era variant (`prior.roster_min_season = 2021` with the roster features: the roster regression is trained on and used from 2021, v1 before), is written alongside as `out/{season}/prior_portal_comparison.csv` and `.md` with three columns: the published model, the plain roster prior and the portal variant. Its window is the 2027 regular season and postseason, decided before 2028 week 1 (rule in DECISIONS.md). Rerunning `cfbr shadow --season 2026` after a published-config change would recompute the 2026 'published' column under the new config, so leave the 2026 file alone once the season ends. `prior.roster_min_season` defaults to 0, which is the unchanged behaviour.
 
 The same job runs a second shadow, calibration v2 (`out/{season}/calibration_comparison.*`): a second stage on each game prediction that corrects for how much of the two ratings is still prior and for games against a pooled FCS side. Ratings are unchanged and v2 predictions are never published; it is adopted for 2027 only under its pre-registered rule (DECISIONS.md, "M2+M3 calibration v2"). `cfbr shadow` writes both.
 
