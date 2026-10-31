@@ -222,3 +222,58 @@ def test_backtest_frame_carries_opener_columns(cfg, dataset):
     assert {"spread", "spread_open", "n_providers_open"} <= set(df.columns)
     assert df["spread_open"].is_not_null().sum() > 800        # 2025 has an opener on every lined game
     assert "ats_by_edge_open" in metrics["diagnostics"] and metrics["diagnostics"]["opener"]["seasons"] == [2025]
+
+
+def _mini_run(tmp_path, lines_spread):
+    """A fake results run: two completed games whose stored close came from ``lines_spread``."""
+    import json
+    import polars as pl
+    from cfbr.backtest.metrics import report
+
+    preds = pl.DataFrame({
+        "game_id": [1, 2], "season": [2024, 2024], "week": [5, 5], "season_type": ["regular"] * 2,
+        "slot": ["r05"] * 2, "completed": [True, True], "neutral_site": [False, False],
+        "margin": [10.0, -3.0], "pred_margin": [9.0, -1.0], "win_prob": [0.7, 0.45],
+        "prior_share_h": [0.4] * 2, "prior_share_a": [0.4] * 2,
+        "massey_pred": [8.0, -2.0], "prior_pred": [7.0, -1.5], "slot_order": [5, 5],
+        "spread": lines_spread, "n_providers": [1, 1], "source": ["books"] * 2})
+    run = tmp_path / "20260101T000000Z-mini"
+    run.mkdir()
+    preds.write_parquet(run / "predictions.parquet")
+    m = {"seasons": [2024], **report(preds), "calibration": {"2024": {"b_home": 3.0}}}
+    (run / "metrics.json").write_text(json.dumps(m, default=float))
+    return run
+
+
+def _mini_lines(spread):
+    import polars as pl
+    return pl.DataFrame({"game_id": [1, 2], "season": [2024] * 2, "week": [5] * 2, "season_type": ["regular"] * 2,
+                         "provider": ["Bovada"] * 2, "spread": spread, "spread_open": [-4.0, 3.5],
+                         "over_under": [50.0] * 2})
+
+
+def test_refresh_lines_adds_opener_and_keeps_headline(cfg, tmp_path):
+    import json
+    import polars as pl
+    from cfbr.backtest.harness import refresh_lines
+
+    run = _mini_run(tmp_path, [-7.0, 3.0])
+    before = json.loads((run / "metrics.json").read_text())
+    merged = refresh_lines(cfg, run, _mini_lines([-7.0, 3.0]))
+    after = json.loads((run / "metrics.json").read_text())
+    assert after["overall"] == before["overall"] and after["calibration"] == before["calibration"]
+    assert after["seasons"] == [2024]
+    assert merged["diagnostics"]["opener"]["n_bets"] == 1
+    assert "spread_open" in pl.read_parquet(run / "predictions.parquet").columns
+
+
+def test_refresh_lines_refuses_when_the_close_changed(cfg, tmp_path):
+    import json
+    import pytest
+    from cfbr.backtest.harness import refresh_lines
+
+    run = _mini_run(tmp_path, [-7.0, 3.0])
+    before = (run / "metrics.json").read_text()
+    with pytest.raises(RuntimeError, match="overall would change"):
+        refresh_lines(cfg, run, _mini_lines([-6.0, 3.0]))
+    assert (run / "metrics.json").read_text() == before        # nothing written

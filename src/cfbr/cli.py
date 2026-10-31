@@ -185,6 +185,31 @@ def holdout(config: ConfigOpt = None) -> None:
     typer.echo(f"holdout appended to {tuned.paths.results_dir / 'tuning_report.md'}")
 
 
+@app.command("backtest-lines")
+def backtest_lines(
+    run: Annotated[str, typer.Option(help="results/ run id, e.g. 20261011T145524Z-tuned-holdout")],
+    config: ConfigOpt = None,
+) -> None:
+    """Re-join the lines table (closing and opening consensus) to an existing backtest run and
+    recompute its line-derived diagnostics. The model is not re-run; refuses if a headline metric
+    would change."""
+    from cfbr.backtest.harness import refresh_lines
+    from cfbr.data import Dataset
+
+    cfg = _default_config(config)
+    run_dir = cfg.paths.results_dir / run
+    if not (run_dir / "predictions.parquet").exists():
+        raise typer.BadParameter(f"no predictions.parquet under {run_dir}")
+    metrics = refresh_lines(cfg, run_dir, Dataset.load(cfg).lines)
+    op = metrics["diagnostics"].get("opener")
+    if op:
+        typer.echo(f"{run}: {op['n']} games with an opener ({op['seasons'][0]}–{op['seasons'][-1]}); "
+                   f"{op['n_bets']} would-be bets, avg CLV {op['clv_mean']:+.2f} pts, "
+                   f"beat close {100 * op['beat_close']:.1f}%, move slope {op['move_slope']:.3f}")
+    else:
+        typer.echo(f"{run}: no games with an opening line")
+
+
 def _default_config(config: Optional[Path]):
     """Explicit --config, else config/tuned.toml once frozen, else default."""
     from cfbr.config import REPO_ROOT
