@@ -299,8 +299,9 @@ def calibration_v3_markdown(df: pl.DataFrame, season: int) -> str:
     else:
         ok = w["gain"] > 0 and w["ci95"][0] > GAIN_CI_FLOOR
         status = (f"Window so far: gain {w['gain']:+.3f} (95% CI lower bound {w['ci95'][0]:+.3f}). "
-                  + ("**Currently meets**" if ok else "**Does not currently meet**")
-                  + " the adoption rule. The decision is made once, before 2027 week 1.")
+                  + ("**Currently meets** the window criterion (adoption also needs v2 to be adopted)." if ok
+                     else "**Does not currently meet** the window criterion.")
+                  + " The decision is made once, before 2027 week 1.")
     rows = ["| games | n | v2 MAE | v3 MAE | gain [95% CI] |", "|---|---|---|---|---|"]
     for label, sub in ((f"**window (weeks {V3_WINDOW_FIRST_WEEK}+ & postseason)**", df.filter(pl.col("in_window"))),
                        (f"weeks 1–{V3_WINDOW_FIRST_WEEK - 1} (outside the window)", df.filter(~pl.col("in_window")))):
@@ -311,7 +312,8 @@ def calibration_v3_markdown(df: pl.DataFrame, season: int) -> str:
     return "\n".join([
         f"# {season} calibration v3 shadow: v2 vs v3", "",
         "v3 adds one stage-2 term to v2: a slope on the base prediction times the pooled-FCS indicator. Ratings "
-        "are unchanged; only game predictions differ, and nothing here is published. Gain = v2 error − v3 error "
+        "are unchanged; v3 refits all five stage-2 terms jointly, so every game's prediction moves a little, not only "
+        "FBS-vs-FCS games, and nothing here is published. Gain = v2 error − v3 error "
         "(positive favors v3). Window: regular-season weeks 10+ and the postseason. "
         f"Rule (DECISIONS.md): adopt v3 before 2027 week 1 if the window gain is > 0 and its 95% CI lower bound is > "
         f"{GAIN_CI_FLOOR:+.2f}, and only if v2 is adopted.", "", status, "", *rows, ""])

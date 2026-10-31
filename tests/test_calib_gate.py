@@ -26,7 +26,7 @@ def test_gate_markdown_states_pass_or_fail():
 
 def test_gate_markdown_sanity_rendering():
     rep = {"seasons": [2022, 2025], "n_games": 100, "n_fcs_games": 10,
-           "primary": {"n": 100, "gain": 0.02, "ci95": (-0.02, 0.06), "threshold": GATE_MIN_GAIN, "passes": False},
+           "primary": {"n": 100, "gain": 0.02, "ci95": (-0.02, 0.06), "threshold": GATE_MIN_GAIN, "sanity_ok": True, "passes": None},
            "base_vs_v2": {"n": 100, "gain": 0.04, "ci95": (0.0, 0.08)},
            "base_vs_v3": {"n": 100, "gain": 0.09, "ci95": (0.03, 0.15)},
            "mae": {"base": 13.4, "v2": 13.36, "v3": 13.31},

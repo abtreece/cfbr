@@ -50,7 +50,7 @@ def _slope(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.cov(x, y, ddof=0)[0, 1] / np.var(x)) if x.size >= 3 and np.var(x) > 0 else math.nan
 
 
-def gate_report(df: pl.DataFrame, eng: Engine, seasons: list[int]) -> dict:
+def gate_report(df: pl.DataFrame, eng: Engine, seasons: list[int], sanity: bool = False) -> dict:
     y = df["margin"].to_numpy()
     err = {k: np.abs(y - df[f"pred_{k}"].to_numpy()) for k in ("base", "v2", "v3")}
     primary = paired_gain(err["v2"], err["v3"])
@@ -60,7 +60,8 @@ def gate_report(df: pl.DataFrame, eng: Engine, seasons: list[int]) -> dict:
     coefs = {str(s): dict(zip(stage2_terms(True), (float(c) for c in eng.stage2(s, fcs_slope=True)))) for s in seasons}
     return {"seasons": seasons, "n_games": int(df.height), "n_fcs_games": int(fcs.sum()),
             "primary": {**primary, "threshold": GATE_MIN_GAIN,
-                        "passes": bool(primary["gain"] >= GATE_MIN_GAIN and primary["ci95"][0] > 0)},
+                        **({"sanity_ok": bool(primary["gain"] >= 0), "passes": None} if sanity else
+                           {"passes": bool(primary["gain"] >= GATE_MIN_GAIN and primary["ci95"][0] > 0)})},
             "base_vs_v2": paired_gain(err["base"], err["v2"]), "base_vs_v3": paired_gain(err["base"], err["v3"]),
             "mae": {k: float(v.mean()) for k, v in err.items()}, "fcs_games": fcs_games,
             "pred_fcs_by_season": {s: c["pred_fcs"] for s, c in coefs.items()}}
@@ -75,7 +76,7 @@ def gate_markdown(r: dict, sanity: bool = False) -> str:
     title = "Calibration v3 sanity" if sanity else "Calibration v3 gate"
     if sanity:
         verdict = (f"Paired MAE gain v2 → v3 over {r['n_games']:,} games: **{g(p)}**. Sanity criterion "
-                   f"(reported, not gated): gain ≥ 0 → **{'OK' if p['gain'] >= 0 else 'NOT OK'}**")
+                   f"(reported, not gated): gain ≥ 0 → **{'OK' if p['sanity_ok'] else 'NOT OK'}**")
     else:
         verdict = (f"Paired MAE gain v2 → v3 over {r['n_games']:,} games: **{g(p)}**. Rule: gain ≥ +{p['threshold']:.2f} "
                    f"and 95% CI lower bound > 0 → **{'passes' if p['passes'] else 'fails'}**.")
@@ -93,7 +94,7 @@ def run_gate(cfg: Config, ds: Dataset, seasons: list[int], tag: str = "calib-v3-
              sanity: bool = False) -> Path:
     eng = Engine(ds, cfg, last_completed=current_season() - 1)
     df = gate_frame(eng, seasons)
-    rep = gate_report(df, eng, seasons)
+    rep = gate_report(df, eng, seasons, sanity=sanity)
     out = cfg.paths.results_dir / (datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + f"-{tag}")
     out.mkdir(parents=True, exist_ok=True)
     df.write_parquet(out / "frame.parquet")

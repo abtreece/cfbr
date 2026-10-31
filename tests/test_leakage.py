@@ -140,9 +140,8 @@ def test_canary_future_game_does_not_change_earlier_ratings(cfg, dataset):
         md.filter(pl.col("game_id").is_in(late)).sort("game_id"))
 
 
-@pytest.mark.parametrize("fcs_slope", [False, True])
 @pytest.mark.parametrize("target", [2018, 2023, 2026])
-def test_calibration_v2_trains_on_the_same_seasons_as_the_base_calibration(cfg, target, fcs_slope, monkeypatch):
+def test_calibration_v2_trains_on_the_same_seasons_as_the_base_calibration(cfg, target, monkeypatch):
     """The second stage fits on training_seasons(target) only, with each game's own-season prediction."""
     import numpy as np
 
@@ -158,7 +157,7 @@ def test_calibration_v2_trains_on_the_same_seasons_as_the_base_calibration(cfg, 
         return g, np.array([1.0, -2.0, 6.0])
 
     monkeypatch.setattr(eng, "base_predictions", fake)
-    eng.stage2(target, fcs_slope=fcs_slope)
+    eng.stage2(target)
     assert seen == training_seasons(target, cfg, eng.prior_available())
     assert target not in seen
 
