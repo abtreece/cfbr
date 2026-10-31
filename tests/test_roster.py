@@ -238,7 +238,6 @@ def test_build_draft_and_portal_tables(tmp_path):
     assert build_draft_picks(tmp_path / "empty").height == 0 and build_portal(tmp_path / "empty").height == 0
 
 
-
 def test_roster_regression_trains_only_on_seasons_at_or_after_the_cutoff():
     import numpy as np
     import polars as pl

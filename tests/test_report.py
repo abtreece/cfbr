@@ -203,3 +203,22 @@ def test_portal_shadow_window_and_markdown():
     assert "portal" in md and "published" in md and "before 2028 week 1" in md
     assert "| published → portal, weeks 1–4 (reported, not gated) | 1 |" in md
     assert "| published → portal, week 5+ and bowls (reported, not gated) | 1 |" in md
+
+
+def test_portal_markdown_pools_the_two_season_window():
+    from datetime import UTC, datetime
+
+    from cfbr.report.shadow import in_window_portal, portal_markdown
+
+    def frame(season, season_type):
+        return pl.DataFrame({
+            "game_id": [season], "season": [season], "week": [1], "season_type": [season_type],
+            "kickoff_ts": [datetime(season, 3, 1, tzinfo=UTC)], "completed": [True],
+            "home_team": ["A"], "away_team": ["B"], "margin": [10.0],
+            "pred_published": [6.0], "pred_roster": [7.0], "pred_portal": [8.0],
+        }).with_columns(in_window=in_window_portal())
+
+    both = pl.concat([frame(2026, "postseason"), frame(2027, "regular")], how="diagonal_relaxed")
+    assert both["in_window"].to_list() == [True, True]
+    assert "| **portal vs published (primary)** | 2 |" in portal_markdown(both, 2027)
+    assert frame(2028, "regular")["in_window"].to_list() == [False]

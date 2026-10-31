@@ -83,6 +83,8 @@ def fit_prior_models(train: pl.DataFrame, mode: str = "v1", roster_min_season: i
     Returns, per component, models in priority order. In roster mode the first
     model adds the roster features (fit on rows that have them) and the v1 model
     is the fallback for rows that don't (e.g. no defensive player stats before 2016).
+    In roster mode the roster model is fit on rows from season ``roster_min_season`` on
+    (0 = every season with roster data).
     """
     rows = train.filter(~pl.col("new_program"))
     models: PriorModels = {}

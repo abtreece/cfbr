@@ -44,8 +44,12 @@ def test_portal_variant_is_v1_before_the_cutoff(cfg, dataset):
     portal = cfg.model_copy(deep=True)
     portal.prior.features = "roster"
     portal.prior.roster_min_season = 2021
-    a = Engine(dataset, cfg, last_completed=2025).priors(2019).sort("team")
-    b = Engine(dataset, portal, last_completed=2025).priors(2019).sort("team")
+    v1 = Engine(dataset, cfg, last_completed=2025)
+    pv = Engine(dataset, portal, last_completed=2025)
+    a = v1.priors(2019).sort("team")
+    b = pv.priors(2019).sort("team")
     assert a.equals(b)
-    c = Engine(dataset, portal, last_completed=2025).priors(2025).sort("team")
+    assert v1.priors(2021).sort("team").equals(pv.priors(2021).sort("team"))  # 2021 falls back through the row-count guard
+    c = pv.priors(2025).sort("team")
     assert not a.select("team").join(c, on="team").is_empty()  # it still produces priors after the cutoff
+    assert not v1.priors(2025).sort("team").equals(c)

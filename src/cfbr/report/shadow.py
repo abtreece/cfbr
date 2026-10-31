@@ -4,6 +4,9 @@ Both are point-in-time predictions for every game of the season, under
 otherwise identical frozen settings. Only the published config feeds the
 rankings; the roster predictions exist only in these comparison files.
 The decision rule is in DECISIONS.md ("Prior shadow comparison").
+
+A portal-era roster prior shadow (``run_portal_shadow``, ``prior_portal_comparison.*``)
+sits on top of this one; its rule is DECISIONS.md "Roster prior, portal-era variant".
 """
 
 from __future__ import annotations
@@ -274,8 +277,8 @@ PORTAL_MIN_SEASON = 2021       # roster regression trains and applies from this 
 
 
 def in_window_portal() -> pl.Expr:
-    """2026 postseason and every game from 2027 on: nothing earlier is unseen."""
-    return ((pl.col("season") == 2026) & (pl.col("season_type") == "postseason")) | (pl.col("season") >= 2027)
+    """2026 postseason and every 2027 game: nothing earlier is unseen, nothing later is in the rule."""
+    return ((pl.col("season") == 2026) & (pl.col("season_type") == "postseason")) | (pl.col("season") == 2027)
 
 
 def portal_comparison(cfg: Config, ds: Dataset, season: int, last_completed: int,
@@ -317,7 +320,8 @@ def portal_markdown(df: pl.DataFrame, season: int) -> str:
         f"applies the roster regression only from {PORTAL_MIN_SEASON} on. Gain = first error − second error "
         "(positive favors the second). Rule (DECISIONS.md): adopt portal before 2028 week 1 if its window gain vs "
         f"the published model is > 0 with 95% CI lower bound > {GAIN_CI_FLOOR:+.2f} and it also beats the plain "
-        "roster prior over the window.", "",
+        "roster prior over the window. The window pools the 2026 postseason with 2027; this file's table and status use "
+        "every window game recorded so far, and its CSV holds this season's rows.", "",
         status, "",
         "| window games | n | first MAE | second MAE | gain [95% CI] |", "|---|---|---|---|---|",
         row("**portal vs published (primary)**", win, "pred_published", "pred_portal"),
@@ -331,6 +335,8 @@ def portal_markdown(df: pl.DataFrame, season: int) -> str:
     return "\n".join(lines)
 
 
+# Depends on run_shadow's CSV for the published and plain-roster columns, so run_shadow must keep running
+# through 2027 even after the plain roster decision (before 2027 week 1).
 def run_portal_shadow(cfg: Config, ds: Dataset, season: int, last_completed: int) -> Path:
     out = cfg.paths.out_dir / str(season)
     src = out / "prior_comparison.csv"
@@ -342,10 +348,15 @@ def run_portal_shadow(cfg: Config, ds: Dataset, season: int, last_completed: int
     tmp = csv.with_suffix(".csv.tmp")
     df.write_csv(tmp)
     tmp.replace(csv)
+    pooled = df
+    prev_csv = cfg.paths.out_dir / "2026" / "prior_portal_comparison.csv"
+    if season > 2026 and prev_csv.exists():
+        prev = pl.read_csv(prev_csv, try_parse_dates=True).filter(pl.col("in_window"))
+        pooled = pl.concat([prev, df], how="diagonal_relaxed")
     tmp = md.with_suffix(".md.tmp")
-    tmp.write_text(portal_markdown(df, season))
+    tmp.write_text(portal_markdown(pooled, season))
     tmp.replace(md)
-    w = paired_mae_gain(df.filter(pl.col("in_window")), "pred_published", "pred_portal")
+    w = paired_mae_gain(pooled.filter(pl.col("in_window")), "pred_published", "pred_portal")
     log.info("portal prior shadow: %d window games settled, gain %s", w["n"],
              "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
     return csv
