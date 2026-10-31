@@ -10,7 +10,7 @@ from pathlib import Path
 
 import polars as pl
 
-from cfbr.backtest.metrics import consensus_spread, report
+from cfbr.backtest.metrics import consensus_spread, opening_spread, report
 from cfbr.config import Config
 from cfbr.data import Dataset
 from cfbr.ingest.fetch import current_season
@@ -38,6 +38,7 @@ def run_backtest(cfg: Config, seasons: list[int], ds: Dataset | None = None) -> 
         log.info("season %d predicted: %d games (%.1fs elapsed)", s, p.height, time.perf_counter() - t0)
     df = pl.concat(preds)
     df = df.join(consensus_spread(ds.lines, cfg.backtest.spread_consensus), on="game_id", how="left")
+    df = df.join(opening_spread(ds.lines, cfg.backtest.spread_consensus), on="game_id", how="left")
     metrics = report(df.filter(pl.col("completed")))
     metrics["calibration"] = {str(s): vars(eng.calibration(s)) for s in seasons}
     return df, metrics

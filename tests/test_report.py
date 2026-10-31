@@ -213,3 +213,12 @@ def test_opener_diagnostics_from_synthetic_frame():
     assert abs(o["move_slope"] - (15 + 1.25) / 31.25) < 1e-9
     buckets = {r["bucket"]: r for r in d["ats_by_edge_open"]}
     assert buckets["3-6"]["n"] == 1 and buckets["3-6"]["wins"] == 1
+
+
+def test_backtest_frame_carries_opener_columns(cfg, dataset):
+    from cfbr.backtest.harness import run_backtest
+
+    df, metrics = run_backtest(cfg, [2025], dataset)
+    assert {"spread", "spread_open", "n_providers_open"} <= set(df.columns)
+    assert df["spread_open"].is_not_null().sum() > 800        # 2025 has an opener on every lined game
+    assert "ats_by_edge_open" in metrics["diagnostics"] and metrics["diagnostics"]["opener"]["seasons"] == [2025]
