@@ -302,7 +302,7 @@ def portal_markdown(df: pl.DataFrame, season: int) -> str:
     win = df.filter(pl.col("in_window"))
     early = (pl.col("season_type") == "regular") & (pl.col("week") <= 4)
     w = paired_mae_gain(win, "pred_published", "pred_portal")
-    r =paired_mae_gain(win, "pred_roster", "pred_portal")
+    r = paired_mae_gain(win, "pred_roster", "pred_portal")
     if w["n"] == 0:
         status = "No window games completed yet (the window opens with the 2026 postseason)."
     else:

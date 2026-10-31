@@ -195,6 +195,8 @@ uv run cfbr real-bet --team BYU --moneyline --live --odds 158 --stake 10 --place
 
 The published ratings use the v1 preseason prior. `cfbr weekly` also computes every game's point-in-time prediction with the roster-based prior (player rosters, transfers, defensive returning production) and writes `out/{season}/prior_comparison.csv` and `.md`. The roster predictions are never published. Under a rule fixed in DECISIONS.md, the roster prior becomes the default before 2027 week 1 only if it beats v1 on 2026 games from week 7 onward and the postseason. Run it by hand with `cfbr shadow --season 2026`.
 
+A second shadow, the portal-era variant (`prior.roster_min_season = 2021` with the roster features: the roster regression is trained on and used from 2021, v1 before), is written alongside as `out/{season}/prior_portal_comparison.csv` and `.md` with three columns: the published model, the plain roster prior and the portal variant. Its window is the 2026 postseason plus all of 2027, decided before 2028 week 1 (rule in DECISIONS.md). `prior.roster_min_season` defaults to 0, which is the unchanged behaviour.
+
 The same job runs a second shadow, calibration v2 (`out/{season}/calibration_comparison.*`): a second stage on each game prediction that corrects for how much of the two ratings is still prior and for games against a pooled FCS side. Ratings are unchanged and v2 predictions are never published; it is adopted for 2027 only under its pre-registered rule (DECISIONS.md, "M2+M3 calibration v2"). `cfbr shadow` writes both.
 
 ## Point-in-time guarantee
