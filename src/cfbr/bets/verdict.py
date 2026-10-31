@@ -3,7 +3,7 @@
 Closing-implied ROI of a settled bet = units won per unit risked at the recorded number and price if
 the pre-kickoff consensus close were the true line (``PricingTable.expected_value``, key numbers
 included). The mean bettor taking the close itself earns about the vig, -4.5% at -110.
-The status is recomputed every run. The status is provisional until the decision point.
+The status is recomputed every run and is provisional until the decision point.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from cfbr.bets.ledger import SETTLED
 from cfbr.bets.pricing import PricingTable
 from cfbr.config import Bets
 
-DECISION_POINT = ("the first weekly run after the 2027 regular season at which at least 300 settled bets have a "
+DECISION_POINT = ("the first weekly run after the 2027 regular season at which at least {n} settled bets have a "
                   "pre-kickoff snapshot close (else it carries to 2028)")
 _Z = 1.96
 
@@ -41,7 +41,7 @@ def _at_close(ledger: pl.DataFrame, table: PricingTable) -> float:
 
 def verdict(ledger: pl.DataFrame, cfg: Bets, table: PricingTable | None) -> dict:
     out = {"status": "unavailable", "n": 0, "min_bets": cfg.verdict_min_bets, "mean": math.nan, "sd": math.nan,
-           "ci_low": math.nan, "ci_high": math.nan, "at_close": math.nan, "decision_point": DECISION_POINT}
+           "ci_low": math.nan, "ci_high": math.nan, "at_close": math.nan, "decision_point": DECISION_POINT.format(n=cfg.verdict_min_bets)}
     if table is None:
         return out
     roi = closing_implied_roi(ledger, table).drop_nulls()
@@ -51,7 +51,7 @@ def verdict(ledger: pl.DataFrame, cfg: Bets, table: PricingTable | None) -> dict
         out["status"] = "too few"
         return out
     out["mean"] = float(roi.mean())
-    out["sd"] = float(roi.std()) if n > 1 else 0.0
+    out["sd"] = float(roi.std()) if n > 1 else math.nan
     half = _Z * out["sd"] / math.sqrt(n)
     out["ci_low"], out["ci_high"] = out["mean"] - half, out["mean"] + half
     out["at_close"] = _at_close(ledger, table)

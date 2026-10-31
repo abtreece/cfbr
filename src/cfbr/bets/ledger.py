@@ -583,7 +583,7 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
         "Pre-registered 2026-10-30 (DECISIONS.md) after 57 bets had settled, none excluded. Closing-implied ROI = "
         "units won per unit risked at the recorded number and price if the snapshot close were the true line; "
         f"taking the close itself earns about the vig ({_fmt(v['at_close'], pct=True)} here). "
-        f"At >= {v['min_bets']} bets with a snapshot close: **edge over the market** if the 95% CI lower bound is "
+        f"At ≥ {v['min_bets']} bets with a snapshot close: **edge over the market** if the 95% CI lower bound is "
         "above 0, **no edge** if the upper bound is below 0, otherwise undecided. "
         f"Decision: {v['decision_point']}.", ""]
     if v["status"] == "unavailable":

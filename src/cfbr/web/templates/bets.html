@@ -116,7 +116,7 @@
 </div>
 
 <h2>Verdict by closing-line value</h2>
-<p class="note">Pre-registered Oct 30, 2026. Closing-implied ROI is the return on each bet if the pre-kickoff close were the true line; taking the close itself returns about {{ verdict.at_close|pct if verdict.at_close == verdict.at_close else "-4.5%" }}, the vig. At {{ verdict.min_bets }} bets with a snapshot close: <strong>edge</strong> if the 95% interval is above 0, <strong>no edge</strong> if below, otherwise undecided. Decision: {{ verdict.decision_point }}.</p>
+<p class="note">Pre-registered Oct 30, 2026. Closing-implied ROI is the return on each bet if the pre-kickoff close were the true line; taking the close itself returns about {{ verdict.at_close|pct if verdict.at_close == verdict.at_close else "−4.5%" }}, the vig. At {{ verdict.min_bets }} bets with a snapshot close: <strong>edge</strong> if the 95% interval is above 0, <strong>no edge</strong> if below, otherwise undecided. Decision: {{ verdict.decision_point }}.</p>
 {% if verdict.status == "unavailable" %}
 <p class="muted">Pricing table not available, so no verdict can be computed.</p>
 {% else %}

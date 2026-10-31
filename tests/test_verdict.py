@@ -47,8 +47,27 @@ def test_verdict_statuses():
     assert verdict(mixed, cfg, FakeTable())["status"] == "undecided"
 
 
+def test_closing_implied_roi_sign_with_real_pricing_table():
+    import numpy as np
+
+    from cfbr.bets.pricing import PricingTable
+    rng = np.random.default_rng(1)
+    n = 2000
+    spread = rng.choice([-3.0, -3.5, -7.0, -10.0, -14.0, 3.0, 6.5], n)
+    margin = (-spread + rng.normal(0, 14, n)).round()
+    table = PricingTable.build(pl.DataFrame({"season": [2020] * n, "margin": margin, "spread": spread}), min_games=200)
+    # both bets beat a -7 close by 3 points: home at -4, away at -10 (home perspective)
+    for side, line, close in [("home", -4.0, -7.0), ("away", -10.0, -7.0)]:
+        led = _ledger([_row(1, "won", "snapshot", side, line, close)])
+        roi = closing_implied_roi(led, table).to_list()[0]
+        assert roi > table.expected_value(side, close, -110, close)
+
+
 def test_decision_point_and_empty_ledger():
     cfg = Bets(pricing_books=[], verdict_min_bets=3)
-    assert "after the 2027 regular season" in verdict(_ledger([]), cfg, None)["decision_point"]
+    dp = verdict(_ledger([]), cfg, None)["decision_point"]
+    assert "after the 2027 regular season" in dp and "at least 3 settled" in dp and "(else it carries to 2028)" in dp
     v = verdict(_ledger([]), cfg, FakeTable())
     assert v["status"] == "too few" and v["n"] == 0
+    one = verdict(_ledger([_row(1, "won", "snapshot", "home", -3.0, -5.0)]), Bets(pricing_books=[], verdict_min_bets=1), FakeTable())
+    assert one["status"] == "undecided" and math.isnan(one["sd"]) and math.isnan(one["ci_low"])
