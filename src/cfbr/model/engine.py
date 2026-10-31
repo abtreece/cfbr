@@ -79,7 +79,7 @@ class Engine:
         self._priors: dict[int, pl.DataFrame] = {}
         self._snaps: dict[int, dict[str, pl.DataFrame]] = {}
         self._cal: dict[int, Calibration] = {}
-        self._stage2: dict[int, np.ndarray] = {}
+        self._stage2: dict[tuple[int, bool], np.ndarray] = {}
         self._season_plays: dict[int, pl.DataFrame] = {}
         self._arrays: dict[int, SeasonArrays] = {}
         self._games_snap: dict[int, pl.DataFrame] = {}
@@ -251,25 +251,31 @@ class Engine:
         g = self.season_games_with_snapshots(season)
         return g, predict_margin(self.calibration(season), g)
 
-    def stage2(self, season: int) -> np.ndarray:
-        """Calibration v2 coefficients for ``season``: OLS of margin − pred on the stage-2 terms over the
-        same training seasons as the base calibration, each game's pred from its own slot snapshot and
-        its own season's calibration (out of sample for the base fit)."""
-        if season not in self._stage2:
+    def stage2(self, season: int, fcs_slope: bool | None = None) -> np.ndarray:
+        """Stage-2 coefficients for ``season`` (``fcs_slope`` None = the config's calibration_v3): OLS
+        of margin − pred on the stage-2 terms over the same training seasons as the base calibration,
+        each game's pred from its own slot snapshot and its own season's calibration (out of sample
+        for the base fit)."""
+        if fcs_slope is None:
+            fcs_slope = self.cfg.model.calibration_v3
+        key = (season, fcs_slope)
+        if key not in self._stage2:
             rows, preds = [], []
             for s in training_seasons(season, self.cfg, self.prior_available()):
                 g, p = self.base_predictions(s)
                 keep = (g["completed"] & g["margin"].is_not_null()).fill_null(False).to_numpy()
                 rows.append(g.filter(pl.Series(keep)))
                 preds.append(p[keep])
-            self._stage2[season] = fit_stage2(pl.concat(rows, how="diagonal_relaxed"), np.concatenate(preds))
-        return self._stage2[season]
+            self._stage2[key] = fit_stage2(pl.concat(rows, how="diagonal_relaxed"), np.concatenate(preds),
+                                           fcs_slope)
+        return self._stage2[key]
 
     def game_margin(self, season: int, g: pl.DataFrame) -> np.ndarray:
         """Predicted home margin for rows of ``g`` (with snapshot ratings and prior shares attached)."""
         pred = predict_margin(self.calibration(season), g)
-        if self.cfg.model.calibration_v2:
-            pred = pred + stage2_design(g, pred) @ self.stage2(season)
+        if self.cfg.model.calibration_v2 or self.cfg.model.calibration_v3:
+            v3 = self.cfg.model.calibration_v3
+            pred = pred + stage2_design(g, pred, v3) @ self.stage2(season, v3)
         return pred
 
     # -- predictions ------------------------------------------------------------

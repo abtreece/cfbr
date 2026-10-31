@@ -28,6 +28,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr tune` | Optuna search on the tuning seasons; freezes `config/tuned.toml` |
 | `cfbr holdout` | Evaluate the frozen config on the holdout seasons (run once) |
 | `cfbr backtest-lines --run ID` | Add the opening consensus to an existing run and recompute its line diagnostics; keeps the stored close, refuses if a headline metric would change; after a deploy, run it on the server for both frozen runs and restart `cfbr-web` (the server reads each run's metrics.json once); then `uv run pytest tests/test_bets.py -k opener_tier_constants` on the server to confirm the constant matches production's run |
+| `cfbr calibration-gate [--seasons 2015-2021] [--sanity]` | Calibration v3 gate (pooled-FCS slope term vs v2); refuses holdout seasons without `--sanity`; writes `results/{ts}-calib-v3-gate/` or `results/{ts}-calib-v3-sanity/` with `--sanity` |
 | `cfbr rank --season 2026 --week 6` | Write `out/2026/w06/` rankings and next-week predictions |
 | `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line → web data for the season |
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |

@@ -192,7 +192,7 @@ def calibration_comparison(eng: Engine, season: int) -> pl.DataFrame:
     from cfbr.model.calibrate import stage2_design
 
     g, base = eng.base_predictions(season)
-    v2 = base + stage2_design(g, base) @ eng.stage2(season)
+    v2 = base + stage2_design(g, base) @ eng.stage2(season, fcs_slope=False)
     return (g.select("game_id", "season", "week", "season_type", "kickoff_ts", "completed", "home_team",
                      "away_team", "margin")
             .with_columns(pred_base=pl.Series(base), pred_v2=pl.Series(v2), in_window=in_window())
@@ -250,5 +250,87 @@ def run_calibration_shadow(eng: Engine, season: int) -> Path:
     tmp.replace(md)
     w = calibration_gain(df.filter(pl.col("in_window")))
     log.info("calibration shadow: %d window games settled, gain %s", w["n"],
+             "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
+    return csv
+
+
+# -- Calibration v3 shadow (rule: DECISIONS.md "calibration v3 (pooled-FCS slope)") -----
+
+V3_WINDOW_FIRST_WEEK = 10      # regular-season week 10 onward, plus the postseason
+
+
+def in_window_v3() -> pl.Expr:
+    return (pl.col("season") == WINDOW_SEASON) & (
+        (pl.col("season_type") == "postseason")
+        | ((pl.col("season_type") == "regular") & (pl.col("week") >= V3_WINDOW_FIRST_WEEK)))
+
+
+def paired_mae_gain(df: pl.DataFrame, a: str, b: str) -> dict:
+    """Paired MAE gain of column ``b`` over column ``a`` (positive favors ``b``)."""
+    d = df.filter(pl.col("completed") & pl.col("margin").is_not_null())
+    if d.height == 0:
+        return {"n": 0, "gain": math.nan, "ci95": (math.nan, math.nan), "mae_a": math.nan, "mae_b": math.nan}
+    ea = (d["margin"] - d[a]).abs().to_numpy()
+    eb = (d["margin"] - d[b]).abs().to_numpy()
+    x = ea - eb
+    half = 1.96 * x.std(ddof=1) / np.sqrt(len(x)) if len(x) > 1 else math.nan
+    return {"n": int(len(x)), "gain": float(x.mean()), "ci95": (float(x.mean() - half), float(x.mean() + half)),
+            "mae_a": float(ea.mean()), "mae_b": float(eb.mean())}
+
+
+def calibration_v3_comparison(eng: Engine, season: int) -> pl.DataFrame:
+    """Calibration v2 vs v3 game predictions, point-in-time. Always v2 with fcs_slope=False and v3 with
+    fcs_slope=True, whatever the config says, so the shadow stays v2-vs-v3."""
+    from cfbr.model.calibrate import stage2_design
+
+    g, base = eng.base_predictions(season)
+    v2 = base + stage2_design(g, base) @ eng.stage2(season, fcs_slope=False)
+    v3 = base + stage2_design(g, base, fcs_slope=True) @ eng.stage2(season, fcs_slope=True)
+    return (g.select("game_id", "season", "week", "season_type", "kickoff_ts", "completed", "home_team",
+                     "away_team", "margin")
+            .with_columns(pred_v2=pl.Series(v2), pred_v3=pl.Series(v3), in_window=in_window_v3())
+            .sort("kickoff_ts", "game_id"))
+
+
+def calibration_v3_markdown(df: pl.DataFrame, season: int) -> str:
+    w = paired_mae_gain(df.filter(pl.col("in_window")), "pred_v2", "pred_v3")
+    if w["n"] == 0:
+        status = "Window so far: no completed games."
+    else:
+        ok = w["gain"] > 0 and w["ci95"][0] > GAIN_CI_FLOOR
+        status = (f"Window so far: gain {w['gain']:+.3f} (95% CI lower bound {w['ci95'][0]:+.3f}). "
+                  + ("**Currently meets** the window criterion (adoption also needs v2 to be adopted)." if ok
+                     else "**Does not currently meet** the window criterion.")
+                  + " The decision is made once, before 2027 week 1.")
+    rows = ["| games | n | v2 MAE | v3 MAE | gain [95% CI] |", "|---|---|---|---|---|"]
+    for label, sub in ((f"**window (weeks {V3_WINDOW_FIRST_WEEK}+ & postseason)**", df.filter(pl.col("in_window"))),
+                       (f"weeks 1–{V3_WINDOW_FIRST_WEEK - 1} (outside the window)", df.filter(~pl.col("in_window")))):
+        g = paired_mae_gain(sub, "pred_v2", "pred_v3")
+        rows.append(f"| {label} | {g['n']} | – | – | – |" if g["n"] == 0 else
+                    f"| {label} | {g['n']} | {g['mae_a']:.2f} | {g['mae_b']:.2f} | "
+                    f"{g['gain']:+.3f} [{g['ci95'][0]:+.3f}, {g['ci95'][1]:+.3f}] |")
+    return "\n".join([
+        f"# {season} calibration v3 shadow: v2 vs v3", "",
+        "v3 adds one stage-2 term to v2: a slope on the base prediction times the pooled-FCS indicator. Ratings "
+        "are unchanged; v3 refits all five stage-2 terms jointly, so every game's prediction moves a little, not only "
+        "FBS-vs-FCS games, and nothing here is published. Gain = v2 error − v3 error "
+        "(positive favors v3). Window: regular-season weeks 10+ and the postseason. "
+        f"Rule (DECISIONS.md): adopt v3 before 2027 week 1 if the window gain is > 0 and its 95% CI lower bound is > "
+        f"{GAIN_CI_FLOOR:+.2f}, and only if v2 is adopted.", "", status, "", *rows, ""])
+
+
+def run_calibration_v3_shadow(eng: Engine, season: int) -> Path:
+    df = calibration_v3_comparison(eng, season)
+    out = eng.cfg.paths.out_dir / str(season)
+    out.mkdir(parents=True, exist_ok=True)
+    csv, md = out / "calibration_v3_comparison.csv", out / "calibration_v3_comparison.md"
+    tmp = csv.with_suffix(".csv.tmp")
+    df.write_csv(tmp)
+    tmp.replace(csv)
+    tmp = md.with_suffix(".md.tmp")
+    tmp.write_text(calibration_v3_markdown(df, season))
+    tmp.replace(md)
+    w = paired_mae_gain(df.filter(pl.col("in_window")), "pred_v2", "pred_v3")
+    log.info("calibration v3 shadow: %d window games settled, gain %s", w["n"],
              "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
     return csv
