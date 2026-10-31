@@ -50,6 +50,8 @@ alpha = 10.0
 fit_scheme = "hybrid"
 # "v1" (default) or "roster" (adds player-level roster/transfer features; see DECISIONS.md).
 features = "v1"
+# Roster regression trained on / applied to target seasons >= this; v1 before. 0 = all seasons.
+roster_min_season = 0
 
 [seasons]
 tuning = [2015, 2021]

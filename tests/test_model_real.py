@@ -1,6 +1,7 @@
 import time
 
 import polars as pl
+import pytest
 
 from cfbr.model.engine import Engine
 
@@ -69,3 +70,18 @@ def test_v3_engine_matches_the_shadow_column(cfg, dataset):
     assert joined.height == want.height > 0
     assert (joined["pred_margin"] - joined["pred_v3"]).abs().max() < 1e-9
     assert len(stage2_terms(True)) == eng.stage2(2026).shape[0]
+def test_portal_variant_is_v1_before_the_cutoff(cfg, dataset):
+    if dataset.roster is None or dataset.player_ppa is None or dataset.player_defense is None:
+        pytest.skip("roster tables not in the local store")
+    portal = cfg.model_copy(deep=True)
+    portal.prior.features = "roster"
+    portal.prior.roster_min_season = 2021
+    v1 = Engine(dataset, cfg, last_completed=2025)
+    pv = Engine(dataset, portal, last_completed=2025)
+    a = v1.priors(2019).sort("team")
+    b = pv.priors(2019).sort("team")
+    assert a.equals(b)
+    assert v1.priors(2021).sort("team").equals(pv.priors(2021).sort("team"))  # 2021 falls back through the row-count guard
+    c = pv.priors(2025).sort("team")
+    assert not a.select("team").join(c, on="team").is_empty()  # it still produces priors after the cutoff
+    assert not v1.priors(2025).sort("team").equals(c)

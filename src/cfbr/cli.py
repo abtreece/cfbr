@@ -460,13 +460,24 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     bets_failed = _bets_step(cfg, ds, season, week)
     # Shadow prior comparison: also isolated, never affects published output.
     shadow_failed = False
+    plain_shadow_failed = False
     try:
-        from cfbr.report.shadow import run_shadow
+        from cfbr.report.shadow import run_portal_shadow, run_shadow
 
         run_shadow(cfg, ds, season, last_completed=season - 1)
     except Exception:
         log.exception("prior shadow comparison failed; continuing")
         shadow_failed = True
+        plain_shadow_failed = True
+    if plain_shadow_failed:
+        log.error("portal prior shadow skipped: plain shadow failed")
+        shadow_failed = True
+    else:
+        try:
+            run_portal_shadow(cfg, ds, season, last_completed=season - 1)
+        except Exception:
+            log.exception("portal prior shadow comparison failed; continuing")
+            shadow_failed = True
     try:
         from cfbr.report.shadow import run_totals_shadow
 
@@ -757,17 +768,23 @@ def shadow(
     season: Annotated[int, typer.Option()],
     config: ConfigOpt = None,
 ) -> None:
-    """Write out/{season}/prior_comparison.{csv,md} (v1 vs roster prior) and
-    calibration_comparison.{csv,md} (base vs calibration v2), point-in-time."""
+    """Write out/{season}/prior_comparison.{csv,md} (v1 vs roster prior),
+    prior_portal_comparison.{csv,md} (portal-era roster prior) and
+    calibration_comparison.{csv,md} (base vs calibration v2), point-in-time.
+
+    The portal shadow depends on run_shadow's CSV for the published and plain-roster
+    columns, so run_shadow must keep running through 2027 even after the plain roster
+    decision (before 2027 week 1)."""
     from cfbr.data import Dataset
     from cfbr.ingest.fetch import current_season
     from cfbr.model.engine import Engine
-    from cfbr.report.shadow import run_calibration_shadow, run_calibration_v3_shadow, run_shadow
+    from cfbr.report.shadow import run_calibration_shadow, run_calibration_v3_shadow, run_portal_shadow, run_shadow
 
     cfg = _default_config(config)
     ds = Dataset.load(cfg)
     last = min(current_season(), season) - 1
     path = run_shadow(cfg, ds, season, last_completed=last)
+    run_portal_shadow(cfg, ds, season, last_completed=last)
     eng = Engine(ds, cfg, last_completed=last)
     cal = run_calibration_shadow(eng, season)
     cal3 = run_calibration_v3_shadow(eng, season)

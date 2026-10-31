@@ -236,3 +236,32 @@ def test_build_draft_and_portal_tables(tmp_path):
     po = build_portal(tmp_path).row(0, named=True)
     assert po["name"] == "Tray Taylor" and po["destination"] is None and po["transfer_date"].day == 17
     assert build_draft_picks(tmp_path / "empty").height == 0 and build_portal(tmp_path / "empty").height == 0
+
+
+def test_roster_regression_trains_only_on_seasons_at_or_after_the_cutoff():
+    import numpy as np
+    import polars as pl
+    from sklearn.linear_model import LinearRegression
+    from cfbr.model.prior import COMPONENTS, OFFENSE_RETURNING, fit_prior_models
+    from cfbr.model.roster import DEF_FEATURES, OFF_FEATURES
+
+    rng = np.random.default_rng(0)
+    n = 400
+    seasons = np.repeat([2017, 2019, 2021, 2023], n // 4)
+    cols = {"season": seasons, "team": [f"T{i}" for i in range(n)], "new_program": [False] * n,
+            "talent": rng.normal(size=n), "recruit4": rng.normal(size=n)}
+    for c in COMPONENTS:
+        cols[f"prev_{c}"] = rng.normal(size=n)
+    for f in OFFENSE_RETURNING + OFF_FEATURES + DEF_FEATURES:
+        cols[f] = rng.normal(size=n)
+    # the target depends on an offense roster feature only in the portal era, so the two fits differ
+    cols["o_ppa"] = cols["prev_o_ppa"] + np.where(seasons >= 2021, 2.0, 0.0) * cols[OFF_FEATURES[0]]
+    for c in ("d_ppa", "o_sr", "d_sr"):
+        cols[c] = cols[f"prev_{c}"]
+    train = pl.DataFrame(cols)
+    all_rows = fit_prior_models(train, "roster")["o_ppa"][0][1]
+    feats, portal = fit_prior_models(train, "roster", roster_min_season=2021)["o_ppa"][0]
+    sub = train.filter(pl.col("season") >= 2021)
+    manual = LinearRegression().fit(sub.select(feats).to_numpy(), sub["o_ppa"].to_numpy())
+    assert np.allclose(portal.coef_, manual.coef_)
+    assert not np.allclose(portal.coef_, all_rows.coef_)
