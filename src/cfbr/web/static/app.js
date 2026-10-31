@@ -17,16 +17,18 @@ document.querySelectorAll("select[data-row-filter]").forEach((sel) => {
   });
 });
 
-// -- "More columns": <button data-toggle-class="more" data-target="tableId"> toggles a class,
-//    remembered per table in this browser --------------------------------------------
+// -- Class toggles: <button data-toggle-class="more" data-target="tableId"> toggles a class,
+//    remembered per table in this browser. Labels default to "More/Fewer columns"; a button
+//    may name its own with data-label-on / data-label-off ("Show 2 voided entries"). -------
 document.querySelectorAll("button[data-toggle-class]").forEach((btn) => {
   const target = document.getElementById(btn.dataset.target);
   if (!target) return;
   const cls = btn.dataset.toggleClass, key = `cfbr-${btn.dataset.target}-${cls}`;
+  const labelOn = btn.dataset.labelOn || "Fewer columns", labelOff = btn.dataset.labelOff || "More columns";
   const set = (on) => {
     target.classList.toggle(cls, on);
     btn.setAttribute("aria-pressed", String(on));
-    btn.textContent = on ? "Fewer columns" : "More columns";
+    btn.textContent = on ? labelOn : labelOff;
   };
   try { set(localStorage.getItem(key) === "1"); } catch (e) { /* storage unavailable */ }
   btn.addEventListener("click", () => {

@@ -143,6 +143,10 @@ form.void { margin: 0; }
 form.void button.link { font-size: 12px; padding: 0; }
 tr.voided td { color: var(--muted); }
 tr.voided td.strong { text-decoration: line-through; font-weight: 400; }
+/* Voided entries (a wrong team recorded again a moment later) hide until "Show N voided entries". */
+#real-bets:not(.show-void) tr.voided { display: none; }
+.voided-toggle { justify-content: flex-start; margin-top: 2px; }
+@media (max-width: 640px) { .table-tools.voided-toggle { display: flex; } }
 .record-link { font-size: 12px; font-weight: 400; margin-left: 6px; }
 .callout.error { border-color: var(--down, #c33); }
 

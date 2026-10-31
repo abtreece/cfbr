@@ -2474,3 +2474,42 @@ def test_owner_reaches_a_season_with_no_bets_yet(web_cfg, monkeypatch):
     assert 'id="record"' in html and '<option value="3"' in html
     assert c.get(f"/bets?season={SEASON}").status_code == 200
     assert c.get("/api/bets").status_code == 404
+
+
+def test_voided_real_bets_are_hidden_behind_a_toggle(web_cfg, monkeypatch):
+    """A voided row is a wrong-team entry recorded again a moment later, not a wager: it stays
+    in the ledger and the markup, but the table hides it until "Show N voided entries"."""
+    from cfbr.bets.real import REAL_SCHEMA, read_real, write_real
+    from cfbr.web.access import OWNER_COOKIE, owner_token
+
+    monkeypatch.setenv("OWNER_KEY", "s3cret-key")
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _write_real(web_cfg)
+    path = web_cfg.paths.out_dir / str(SEASON) / "bets_real.csv"
+    c = TestClient(create_app(web_cfg), follow_redirects=False)
+    c.cookies.set(OWNER_COOKIE, owner_token("s3cret-key"))
+
+    # No voids: no toggle.
+    html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
+    assert '<table class="data" id="real-bets">' in html and "voided entr" not in html
+
+    def void(team, recorded_at):
+        mistake = read_real(path).to_dicts()[0] | {"team": team, "side": "home", "recorded_at": recorded_at,
+                                                    "status": "void", "voided_at": "2026-09-01T14:01:00+00:00"}
+        write_real(pl.concat([read_real(path), pl.DataFrame([mistake], schema=REAL_SCHEMA)]), path)
+
+    void("Texas A&M", "2026-09-01T13:59:00+00:00")
+    html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
+    assert '<tr class="voided">' in html  # still in the markup, for the toggle to reveal
+    assert ('<button type="button" class="link" data-toggle-class="show-void" data-target="real-bets" '
+            'data-label-on="Hide voided entries" data-label-off="Show 1 voided entry" aria-pressed="false">'
+            'Show 1 voided entry</button>') in html
+    void("Texas A&M", "2026-09-01T13:58:00+00:00")
+    html = " ".join(c.get(f"/bets?season={SEASON}").text.split())
+    assert html.count('<tr class="voided">') == 2 and 'data-label-off="Show 2 voided entries"' in html
+    # The stylesheet does the hiding; the button only flips the class.
+    import cfbr.web
+    from pathlib import Path
+
+    css = (Path(cfbr.web.__file__).parent / "static" / "style.css").read_text()
+    assert "#real-bets:not(.show-void) tr.voided { display: none; }" in css
