@@ -183,3 +183,33 @@ def test_market_ratings_summary_and_markdown():
     md = markdown(2025, s)
     assert "## By conference (after r06)" in md and "Pooled FCS" in md and "2.80" in md
     assert markdown(2025, {}).endswith("No lined games yet.\n")
+
+
+def test_opener_diagnostics_from_synthetic_frame():
+    import polars as pl
+    from cfbr.backtest.metrics import diagnostics, opening_spread
+
+    lines = pl.DataFrame({
+        "game_id": [1, 1, 2, 3], "season": [2024] * 4, "week": [5] * 4, "season_type": ["regular"] * 4,
+        "provider": ["Bovada", "consensus", "DraftKings", "Bovada"],
+        "spread": [-7.0, -7.5, 3.0, -1.0], "spread_open": [-4.0, None, 3.5, None], "over_under": [50.0] * 4})
+    op = opening_spread(lines)
+    assert op.columns == ["game_id", "spread_open", "n_providers_open"]
+    assert op.sort("game_id")["spread_open"].to_list() == [-4.0, 3.5]      # game 3 has no opener
+
+    preds = pl.DataFrame({
+        "game_id": [1, 2, 3], "season": [2024] * 3, "week": [5] * 3, "season_type": ["regular"] * 3,
+        "margin": [10.0, -3.0, 2.0], "pred_margin": [9.0, -1.0, 0.0], "win_prob": [0.7, 0.45, 0.5],
+        "prior_share_h": [0.4] * 3, "prior_share_a": [0.4] * 3,
+        "spread": [-7.0, 3.0, -1.0], "spread_open": [-4.0, 3.5, None]})
+    d = diagnostics(preds)
+    assert "ats_by_edge_open" in d and "opener" in d
+    o = d["opener"]
+    assert o["n"] == 2 and o["seasons"] == [2024]
+    # game 1: edge vs opener = 9 - 4 = +5 -> a bet; close moved from +4 to +7 toward the model: CLV +3
+    # game 2: edge vs opener = -1 - (-3.5) = +2.5 -> no bet
+    assert o["n_bets"] == 1 and o["clv_mean"] == 3.0 and o["beat_close"] == 1.0
+    # move_slope = sum(edge*move)/sum(edge^2) over both games: (5*3 + 2.5*0.5) / (25 + 6.25)
+    assert abs(o["move_slope"] - (15 + 1.25) / 31.25) < 1e-9
+    buckets = {r["bucket"]: r for r in d["ats_by_edge_open"]}
+    assert buckets["3-6"]["n"] == 1 and buckets["3-6"]["wins"] == 1
