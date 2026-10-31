@@ -45,7 +45,7 @@
 
 <h2 id="matchup">Matchup tool</h2>
 <p>Expected margin = rating difference + home-field advantage (0 on a neutral field); win probability = Φ(margin / σ), using the same points calibration as the game predictions.
-  {% if cfg.model.calibration_v2 %}Calibration v2 then adjusts the margin by the prior-share and home terms fitted on past seasons, as the game predictions do.{% endif %}
+  {% if cfg.model.calibration_v2 or cfg.model.calibration_v3 %}Calibration v2 then adjusts the margin by the prior-share and home terms fitted on past seasons, as the game predictions do.{% endif %}
   It runs in your browser on the published ratings; nothing is fitted there.</p>
 
 <h2 id="rosters">Rosters</h2>

@@ -83,16 +83,18 @@
 <p>The edge decides <em>whether</em> to bet. It isn't a measure of how sure the model is. Bigger edges haven't covered more often:</p>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th>Tier</th><th class="num">Holdout cover rate, 2022–2025</th></tr></thead>
+  <thead><tr><th>Tier</th><th class="num">Holdout cover rate, 2022–2025</th><th class="num">Cover vs opening line, 2022–2025</th></tr></thead>
   <tbody>
   {% for tier in tiers %}
     <tr><td>{{ tier.label }}</td><td class="num">{% if tier.holdout %}{{ tier.holdout.rate|pct }}<span class="ci"> [{{ tier.holdout.ci95[0]|pct }}, {{ tier.holdout.ci95[1]|pct }}]</span>
-      <span class="muted">of {{ tier.holdout.n }}</span>{% else %}—{% endif %}</td></tr>
+      <span class="muted">of {{ tier.holdout.n }}</span>{% else %}—{% endif %}</td>
+      <td class="num">{% if tier.opener %}{{ tier.opener.rate|pct }}<span class="ci"> [{{ tier.opener.ci95[0]|pct }}, {{ tier.opener.ci95[1]|pct }}]</span>
+      <span class="muted">of {{ tier.opener.n }}</span>{% else %}—{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-<p class="note">Model side against the closing line, pushes excluded, in seasons never used for tuning. Break-even at {{ rules.odds|price }} is {{ break_even_std|pct }}.</p>
+<p class="note">Model side, pushes excluded, in seasons never used for tuning; the first reference column is against the closing line, the second against the opening line (CFBD openers, 2021 on; Bovada only in 2021–22). Break-even at {{ rules.odds|price }} is {{ break_even_std|pct }}.</p>
 <p>The edge is the model's error minus the market's error. The market's error is usually small, because it already prices in everything public.
   So a large edge more often means the model is missing something, like a starting quarterback's injury, than that the market is badly wrong.
   {{ MODEL }} rates teams from play-by-play efficiency and doesn't see injury reports.</p>

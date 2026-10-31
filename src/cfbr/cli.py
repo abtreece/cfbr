@@ -185,6 +185,65 @@ def holdout(config: ConfigOpt = None) -> None:
     typer.echo(f"holdout appended to {tuned.paths.results_dir / 'tuning_report.md'}")
 
 
+@app.command("backtest-lines")
+def backtest_lines(
+    run: Annotated[str, typer.Option(help="results/ run id, e.g. 20261011T145524Z-tuned-holdout")],
+    config: ConfigOpt = None,
+) -> None:
+    """Add the opening consensus (CFBD spreadOpen) to an existing backtest run and recompute its
+    line-derived diagnostics. The stored closing line is kept; the model is not re-run; refuses if a
+    headline metric would change."""
+    from cfbr.backtest.harness import refresh_lines
+    from cfbr.data import Dataset
+
+    cfg = _default_config(config)
+    run_dir = cfg.paths.results_dir / run
+    if not (run_dir / "predictions.parquet").exists():
+        raise typer.BadParameter(f"no predictions.parquet under {run_dir}")
+    if not (run_dir / "metrics.json").exists():
+        raise typer.BadParameter(f"no metrics.json under {run_dir}")
+    try:
+        metrics = refresh_lines(cfg, run_dir, Dataset.load(cfg).lines)
+    except RuntimeError as e:
+        typer.echo(f"refused: {e}", err=True)
+        raise typer.Exit(1)
+    op = metrics["diagnostics"].get("opener")
+    if op:
+        typer.echo(f"{run}: {op['n']} games with an opener ({op['seasons'][0]}–{op['seasons'][-1]}); "
+                   f"{op['n_bets']} would-be bets, avg CLV {op['clv_mean']:+.2f} pts, "
+                   f"beat close {100 * op['beat_close']:.1f}%, move slope {op['move_slope']:.3f}")
+    else:
+        typer.echo(f"{run}: no games with an opening line")
+@app.command("calibration-gate")
+def calibration_gate(
+    seasons: Annotated[str, typer.Option(help="e.g. 2015-2021 (tuning seasons unless --sanity)")] = "2015-2021",
+    sanity: Annotated[bool, typer.Option("--sanity", help="Allow holdout seasons (only after the primary passed)")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Calibration v3 gate (DECISIONS "Calibration v3"): paired MAE gain of the pooled-FCS slope term
+    over calibration v2 under the training scheme. Writes results/<ts>-calib-v3-gate/ (or -sanity)."""
+    import json
+
+    from cfbr.backtest.calib_gate import run_gate
+    from cfbr.backtest.harness import parse_seasons
+    from cfbr.data import Dataset
+
+    cfg = _default_config(config)
+    season_list = parse_seasons(seasons)
+    t0, t1 = cfg.seasons.tuning
+    if not sanity and any(s < t0 or s > t1 for s in season_list):
+        raise typer.BadParameter(f"the gate runs on tuning seasons {t0}–{t1}; pass --sanity for the holdout check")
+    if sanity and any(t0 <= s <= t1 for s in season_list):
+        raise typer.BadParameter("--sanity requires every season to be outside the tuning window")
+    out = run_gate(cfg, Dataset.load(cfg), season_list, "calib-v3-sanity" if sanity else "calib-v3-gate", sanity=sanity)
+    p = json.loads((out / "gate.json").read_text())["primary"]
+    gain = f"v2 → v3 paired MAE gain {p['gain']:+.4f} [{p['ci95'][0]:+.4f}, {p['ci95'][1]:+.4f}] over {p['n']} games"
+    if sanity:  # the sanity step is reported, not gated: its criterion is gain >= 0 (DECISIONS)
+        typer.echo(f"{gain}: sanity {'OK' if p['sanity_ok'] else 'NOT OK'} (criterion: gain ≥ 0, reported not gated). {out}")
+    else:
+        typer.echo(f"{gain}: {'PASSES' if p['passes'] else 'FAILS'} (rule: ≥ +{p['threshold']:.2f}, CI low > 0). {out}")
+
+
 def _default_config(config: Optional[Path]):
     """Explicit --config, else config/tuned.toml once frozen, else default."""
     from cfbr.config import REPO_ROOT
@@ -435,6 +494,16 @@ def _weekly_run(config: ConfigOpt = None) -> None:
             run_calibration_shadow(eng, season)
     except Exception:
         log.exception("calibration shadow comparison failed; continuing")
+        shadow_failed = True
+    try:
+        from cfbr.report.shadow import run_calibration_v3_shadow
+
+        if eng.cfg.model.calibration_v3:
+            log.info("calibration v3 is the published model; no v3 shadow")
+        else:
+            run_calibration_v3_shadow(eng, season)
+    except Exception:
+        log.exception("calibration v3 shadow comparison failed; continuing")
         shadow_failed = True
     # Season simulation: isolated too.
     sim_failed = False
@@ -709,15 +778,17 @@ def shadow(
     from cfbr.data import Dataset
     from cfbr.ingest.fetch import current_season
     from cfbr.model.engine import Engine
-    from cfbr.report.shadow import run_calibration_shadow, run_portal_shadow, run_shadow
+    from cfbr.report.shadow import run_calibration_shadow, run_calibration_v3_shadow, run_portal_shadow, run_shadow
 
     cfg = _default_config(config)
     ds = Dataset.load(cfg)
     last = min(current_season(), season) - 1
     path = run_shadow(cfg, ds, season, last_completed=last)
     run_portal_shadow(cfg, ds, season, last_completed=last)
-    cal = run_calibration_shadow(Engine(ds, cfg, last_completed=last), season)
-    typer.echo(f"wrote {path}, {cal} and their .md summaries")
+    eng = Engine(ds, cfg, last_completed=last)
+    cal = run_calibration_shadow(eng, season)
+    cal3 = run_calibration_v3_shadow(eng, season)
+    typer.echo(f"wrote {path}, {cal}, {cal3} and their .md summaries")
 
 
 @app.command()

@@ -38,6 +38,38 @@ def test_prior_share_uses_recency_weighted_plays(cfg, dataset):
     assert (joined["prior_share"] > joined["raw"]).all()
 
 
+def test_stage2_v3_coefficients_are_cached_per_design(cfg, dataset):
+    from cfbr.backtest.tune import apply_params
+
+    tuned = apply_params(cfg, {"alpha_ppa": 303.298, "alpha_sr": 90.7544, "half_life_weeks": 3.6978,
+                               "fcs_pooling": "conference", "gt_enabled": False, "margin_cap": 42})
+    eng = Engine(dataset, tuned, last_completed=2025)
+    v2 = eng.stage2(2019, fcs_slope=False)
+    v3 = eng.stage2(2019, fcs_slope=True)
+    assert v2.shape == (4,) and v3.shape == (5,)
+    assert eng.stage2(2019) is v2                      # default follows cfg.model.calibration_v3 == False
+    assert eng.stage2(2019, fcs_slope=True) is v3
+    assert v3[4] < 0                                  # FCS games: the model is too extreme, so the slope term shrinks
+
+
+def test_v3_engine_matches_the_shadow_column(cfg, dataset):
+    """Flipping calibration_v3 on makes predict() equal the shadow comparison's v3 column."""
+    from cfbr.backtest.tune import apply_params
+    from cfbr.model.calibrate import stage2_terms
+    from cfbr.report.shadow import calibration_v3_comparison
+
+    params = {"alpha_ppa": 303.298, "alpha_sr": 90.7544, "half_life_weeks": 3.6978,
+              "fcs_pooling": "conference", "gt_enabled": False, "margin_cap": 42}
+    eng_plain = Engine(dataset, apply_params(cfg, params), last_completed=2025)
+    tuned_v3 = apply_params(cfg, params)
+    tuned_v3.model.calibration_v3 = True
+    eng = Engine(dataset, tuned_v3, last_completed=2025)
+    got = eng.predict(2026).select("game_id", "pred_margin")
+    want = calibration_v3_comparison(eng_plain, 2026).select("game_id", "pred_v3")
+    joined = got.join(want, on="game_id")
+    assert joined.height == want.height > 0
+    assert (joined["pred_margin"] - joined["pred_v3"]).abs().max() < 1e-9
+    assert len(stage2_terms(True)) == eng.stage2(2026).shape[0]
 def test_portal_variant_is_v1_before_the_cutoff(cfg, dataset):
     if dataset.roster is None or dataset.player_ppa is None or dataset.player_defense is None:
         pytest.skip("roster tables not in the local store")
