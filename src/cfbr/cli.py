@@ -402,9 +402,10 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     # Shadow prior comparison: also isolated, never affects published output.
     shadow_failed = False
     try:
-        from cfbr.report.shadow import run_shadow
+        from cfbr.report.shadow import run_portal_shadow, run_shadow
 
         run_shadow(cfg, ds, season, last_completed=season - 1)
+        run_portal_shadow(cfg, ds, season, last_completed=season - 1)
     except Exception:
         log.exception("prior shadow comparison failed; continuing")
         shadow_failed = True
@@ -693,12 +694,13 @@ def shadow(
     from cfbr.data import Dataset
     from cfbr.ingest.fetch import current_season
     from cfbr.model.engine import Engine
-    from cfbr.report.shadow import run_calibration_shadow, run_shadow
+    from cfbr.report.shadow import run_calibration_shadow, run_portal_shadow, run_shadow
 
     cfg = _default_config(config)
     ds = Dataset.load(cfg)
     last = min(current_season(), season) - 1
     path = run_shadow(cfg, ds, season, last_completed=last)
+    run_portal_shadow(cfg, ds, season, last_completed=last)
     cal = run_calibration_shadow(Engine(ds, cfg, last_completed=last), season)
     typer.echo(f"wrote {path}, {cal} and their .md summaries")
 

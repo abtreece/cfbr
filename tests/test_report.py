@@ -183,3 +183,21 @@ def test_market_ratings_summary_and_markdown():
     md = markdown(2025, s)
     assert "## By conference (after r06)" in md and "Pooled FCS" in md and "2.80" in md
     assert markdown(2025, {}).endswith("No lined games yet.\n")
+
+
+def test_portal_shadow_window_and_markdown():
+    from datetime import UTC, datetime
+
+    from cfbr.report.shadow import in_window_portal, paired_mae_gain, portal_markdown
+
+    df = pl.DataFrame({
+        "game_id": [1, 2, 3], "season": [2026, 2026, 2027], "week": [9, 1, 1],
+        "season_type": ["regular", "postseason", "regular"],
+        "kickoff_ts": [datetime(2026, 3, 1, tzinfo=UTC)] * 3, "completed": [True] * 3,
+        "home_team": ["A"] * 3, "away_team": ["B"] * 3, "margin": [10.0, 3.0, -7.0],
+        "pred_published": [6.0, 0.0, -1.0], "pred_roster": [7.0, 1.0, -2.0], "pred_portal": [8.0, 2.0, -4.0],
+    }).with_columns(in_window=in_window_portal())
+    assert df["in_window"].to_list() == [False, True, True]
+    assert paired_mae_gain(df.filter(pl.col("in_window")), "pred_published", "pred_portal")["gain"] == 2.5
+    md = portal_markdown(df, 2026)
+    assert "portal" in md and "published" in md and "before 2028 week 1" in md
