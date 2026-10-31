@@ -60,6 +60,16 @@ def consensus_spread(lines: pl.DataFrame, method: str = "median", col: str = "sp
             .drop("tier"))
 
 
+def opening_spread(lines: pl.DataFrame, method: str = "median") -> pl.DataFrame:
+    """Home-perspective opening spread per game: ``consensus_spread`` applied to CFBD's
+    ``spreadOpen``. In practice a books-only median: CFBD's aggregator rows leave spreadOpen null,
+    and the same source-tier fallback as the close applies if that ever changes. Columns: game_id,
+    spread_open, n_providers_open. CFBD carries openers only from Bovada (2021 on), DraftKings
+    (2023 on) and ESPN Bet (2024–25), so 2021 and 2022 openers are Bovada's alone."""
+    return (consensus_spread(lines, method, "spread_open")
+            .select("game_id", "spread_open", n_providers_open="n_providers"))
+
+
 def summarize(df: pl.DataFrame) -> dict:
     """Metrics over completed games in ``df`` (needs margin, pred_margin,
     win_prob, massey_pred, prior_pred, spread)."""
@@ -108,6 +118,9 @@ def summarize(df: pl.DataFrame) -> dict:
 DIAG_WEEK_BUCKETS = ["w01", "w02", "w03-04", "w05-08", "w09-12", "w13+", "post"]
 DIAG_SHARE_BUCKETS = ["<0.3", "0.3-0.5", "0.5-0.7", "0.7-0.9", ">=0.9"]
 DIAG_EDGE_BUCKETS = ["0-3", "3-6", "6-10", "10+"]
+# Would-be bet threshold for the opener block: the paper-bet rule's Small tier (config
+# [bets.tiers]); diagnostics take no config, so it is repeated here.
+OPENER_MIN_EDGE = 3.0
 
 
 def diag_week_bucket() -> pl.Expr:
@@ -147,7 +160,55 @@ def _by(d: pl.DataFrame, col: str, order: list[str]) -> list[dict]:
     return rows
 
 
-def diagnostics(preds: pl.DataFrame) -> dict:
+def _ats_by_edge(y: np.ndarray, line: np.ndarray, pred: np.ndarray) -> list[dict]:
+    """Model-side cover rate against ``line`` by |pred − line| bucket, pushes excluded, Wilson CIs."""
+    edge = pred - line
+    result = np.sign(y - line)
+    pick = np.sign(edge)
+    ok = (result != 0) & (pick != 0)
+    ae = np.abs(edge)
+    rows = []
+    for label, lo, hi in (("0-3", 0, 3), ("3-6", 3, 6), ("6-10", 6, 10), ("10+", 10, np.inf)):
+        m = ok & (ae >= lo) & (ae < hi)
+        n = int(m.sum())
+        wins = int(np.sum(result[m] == pick[m]))
+        ci = wilson_ci(wins, n)
+        rows.append({"bucket": label, "n": n, "wins": wins, "win_rate": wins / n if n else math.nan,
+                     "ci95_low": ci[0], "ci95_high": ci[1]})
+    return rows
+
+
+def _opener(d: pl.DataFrame, close_basis: str = "run's own close") -> dict | None:
+    """The model against the opening line on games with both an opener and a close: each line's
+    MAE, the would-be bets (|pred − opener| ≥ OPENER_MIN_EDGE) with their closing-line value
+    (points the close moved toward the bet side), the share that beat the close, and how far the
+    close moves toward the model per point of disagreement (OLS of close − open on pred − open,
+    no intercept). ``close_basis`` records where the close came from."""
+    o = d.filter(pl.col("spread_open").is_not_null() & pl.col("spread").is_not_null())
+    if o.height < 2:
+        return None
+    y = o["margin"].to_numpy()
+    mo = -o["spread_open"].to_numpy()
+    mc = -o["spread"].to_numpy()
+    pred = o["pred_margin"].to_numpy()
+    edge = pred - mo
+    move = mc - mo
+    bet = np.abs(edge) >= OPENER_MIN_EDGE
+    clv = (move * np.sign(edge))[bet]
+    ss = float((edge * edge).sum())
+    return {"n": int(o.height), "seasons": sorted(int(s) for s in o["season"].unique()),
+            "close_basis": close_basis,
+            "mae_open": float(np.mean(np.abs(y - mo))), "mae_close": float(np.mean(np.abs(y - mc))),
+            "mae_model": float(np.mean(np.abs(y - pred))),
+            "n_bets": int(bet.sum()),
+            "clv_mean": float(clv.mean()) if clv.size else math.nan,
+            "clv_sd": float(clv.std(ddof=1)) if clv.size > 1 else math.nan,
+            "beat_close": float(np.mean(clv > 0)) if clv.size else math.nan,
+            "push_close": float(np.mean(clv == 0)) if clv.size else math.nan,
+            "move_slope": float((edge * move).sum() / ss) if ss > 0 else math.nan}
+
+
+def diagnostics(preds: pl.DataFrame, close_basis: str = "run's own close") -> dict:
     """Bias/slope by week and prior-share bucket, ATS by edge bucket, the line+model blend
     weights and a win-probability reliability table, over completed games."""
     d = preds.filter(pl.col("margin").is_not_null())
@@ -182,20 +243,13 @@ def diagnostics(preds: pl.DataFrame) -> dict:
                         "mae_line": float(np.mean(np.abs(line - y))), "mae_model": float(np.mean(np.abs(pred - y))),
                         "mae_blend": float(np.mean(np.abs(X @ c - y)))}
         # ATS vs the closing line by |edge| bucket; pushes and exact agreement excluded.
-        edge = pred - line
-        result = np.sign(y - line)
-        pick = np.sign(edge)
-        ok = (result != 0) & (pick != 0)
-        ae = np.abs(edge)
-        rows = []
-        for label, lo, hi in (("0-3", 0, 3), ("3-6", 3, 6), ("6-10", 6, 10), ("10+", 10, np.inf)):
-            m = ok & (ae >= lo) & (ae < hi)
-            n = int(m.sum())
-            wins = int(np.sum(result[m] == pick[m]))
-            ci = wilson_ci(wins, n)
-            rows.append({"bucket": label, "n": n, "wins": wins, "win_rate": wins / n if n else math.nan,
-                         "ci95_low": ci[0], "ci95_high": ci[1]})
-        res["ats_by_edge"] = rows
+        res["ats_by_edge"] = _ats_by_edge(y, line, pred)
+    if "spread_open" in d.columns:
+        op = d.filter(pl.col("spread_open").is_not_null())
+        if op.height >= 2:
+            res["ats_by_edge_open"] = _ats_by_edge(op["margin"].to_numpy(), -op["spread_open"].to_numpy(),
+                                                   op["pred_margin"].to_numpy())
+        res["opener"] = _opener(d, close_basis)
     return res
 
 

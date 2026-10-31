@@ -517,3 +517,30 @@ def test_moneyline_book_with_no_usable_rows_reports_nan():
     p = primary(s)
     assert p["n_sides"] == 0 and math.isnan(p["real"]) and not p["adopt"]
     assert all(b["n"] == 0 and math.isnan(b["real"]) for b in bands(s))
+
+
+def test_opener_tier_reference_and_markdown():
+    from cfbr.bets.ledger import OPENER_TIER_COVER, _cover_range
+
+    t = {x["name"]: x for x in by_tier(read_ledger(Path("/nonexistent")), CFG)}
+    assert all(x["opener"] is not None and 0.49 < x["opener"]["rate"] < 0.56 for x in t.values())
+    md = summary_markdown(read_ledger(Path("/nonexistent")), CFG, 2026)
+    assert "holdout 2022–25 vs close [95% CI]" in md and "holdout 2022–25 vs opener [95% CI]" in md
+    assert "against the opening line" in md and "48.5–50.5%" not in md
+    assert "period.\n\n| tier" in md
+    assert _cover_range(OPENER_TIER_COVER).endswith("%")
+
+
+def test_opener_tier_constants_match_the_holdout_run():
+    import json
+
+    from cfbr.bets.ledger import OPENER_TIER_COVER
+
+    path = Path(__file__).parent.parent / "results" / "20261011T145524Z-tuned-holdout" / "metrics.json"
+    if not path.exists():
+        pytest.skip("no local holdout run")
+    rows = {r["bucket"]: r for r in json.loads(path.read_text())["diagnostics"].get("ats_by_edge_open", [])}
+    if not rows:
+        pytest.skip("holdout run has no opener diagnostics")
+    for key, bucket in {(3.0, 6.0): "3-6", (6.0, 10.0): "6-10", (10.0, None): "10+"}.items():
+        assert OPENER_TIER_COVER[key] == (rows[bucket]["wins"], rows[bucket]["n"])
