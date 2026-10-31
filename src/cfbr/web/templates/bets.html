@@ -87,7 +87,7 @@
     <li><strong>CLV</strong> is how many points the recorded line beat the <strong>Close</strong>: the consensus in the last snapshot before kickoff (at most {{ close_max_age|num(0) }} hours earlier), or CFBD's post-game consensus when none qualifies. It is the first sign of a real edge; win rate is mostly noise at this sample size.</li>
     {% if show_cents or show_cover %}<li>{% if show_cents %}<strong>Edge ¢</strong> prices the edge in cents of fair odds, assuming {{ MODEL }} is right. {% endif %}{% if show_cover %}<strong>Cover %</strong> is a calibrated estimate that found almost no signal; reporting only.{% endif %}</li>{% endif %}
     <li>A bet is graded the night its game ends, once the final score is posted and the game has a pre-kickoff close; otherwise at the Sunday run.</li>
-    <li><strong>Tiers</strong> group bets by edge size; none cleared break-even with confidence in the 2015–2021 backtest.</li>
+    <li><strong>Tiers</strong> group bets by edge size; none cleared break-even with confidence in the 2022–2025 holdout, against the closing line or the opening line. Bets are recorded early in the week, so the opener is the closer comparator.</li>
   </ul>
 </details>
 
@@ -141,7 +141,7 @@
 <div class="table-wrap">
 <table class="data">
   <thead><tr><th>Tier</th><th class="num">Bets</th><th class="num opt">Open</th><th class="num opt">W–L–P</th><th class="num">Win %</th>
-    <th class="num">$</th><th class="num opt">ROI</th><th class="num">Backtest<span class="ci"> [95% CI]</span></th></tr></thead>
+    <th class="num">$</th><th class="num opt">ROI</th><th class="num opt">Backtest vs close<span class="ci"> [95% CI]</span></th><th class="num">Backtest vs opener<span class="ci"> [95% CI]</span></th></tr></thead>
   <tbody>
   {% for t in tiers %}
     <tr>
@@ -149,7 +149,8 @@
       <td class="num opt">{{ t.won }}–{{ t.lost }}–{{ t.push }}</td>
       <td class="num">{{ t.win_rate|pct if t.won + t.lost else "—" }}</td>
       <td class="num strong">{{ t.dollars|money }}</td><td class="num opt">{{ t.roi|pct }}</td>
-      <td class="num">{% if t.backtest %}{{ t.backtest.rate|pct }}<span class="ci"> [{{ t.backtest.ci95[0]|pct }}, {{ t.backtest.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
+      <td class="num opt">{% if t.holdout %}{{ t.holdout.rate|pct }}<span class="ci"> [{{ t.holdout.ci95[0]|pct }}, {{ t.holdout.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
+      <td class="num">{% if t.opener %}{{ t.opener.rate|pct }}<span class="ci"> [{{ t.opener.ci95[0]|pct }}, {{ t.opener.ci95[1]|pct }}]</span>{% else %}—{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

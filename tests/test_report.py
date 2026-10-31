@@ -203,6 +203,132 @@ def test_market_ratings_summary_and_markdown():
     assert markdown(2025, {}).endswith("No lined games yet.\n")
 
 
+def test_opener_diagnostics_from_synthetic_frame():
+    import polars as pl
+    from cfbr.backtest.metrics import diagnostics, opening_spread
+
+    lines = pl.DataFrame({
+        "game_id": [1, 1, 2, 3], "season": [2024] * 4, "week": [5] * 4, "season_type": ["regular"] * 4,
+        "provider": ["Bovada", "consensus", "DraftKings", "Bovada"],
+        "spread": [-7.0, -7.5, 3.0, -1.0], "spread_open": [-4.0, None, 3.5, None], "over_under": [50.0] * 4})
+    op = opening_spread(lines)
+    assert op.columns == ["game_id", "spread_open", "n_providers_open"]
+    assert op.sort("game_id")["spread_open"].to_list() == [-4.0, 3.5]      # game 3 has no opener
+
+    preds = pl.DataFrame({
+        "game_id": [1, 2, 3], "season": [2024] * 3, "week": [5] * 3, "season_type": ["regular"] * 3,
+        "margin": [10.0, -3.0, 2.0], "pred_margin": [9.0, -1.0, 0.0], "win_prob": [0.7, 0.45, 0.5],
+        "prior_share_h": [0.4] * 3, "prior_share_a": [0.4] * 3,
+        "spread": [-7.0, 3.0, -1.0], "spread_open": [-4.0, 3.5, None]})
+    d = diagnostics(preds)
+    assert "ats_by_edge_open" in d and "opener" in d
+    o = d["opener"]
+    assert o["n"] == 2 and o["seasons"] == [2024]
+    # game 1: edge vs opener = 9 - 4 = +5 -> a bet; close moved from +4 to +7 toward the model: CLV +3
+    # game 2: edge vs opener = -1 - (-3.5) = +2.5 -> no bet
+    assert o["n_bets"] == 1 and o["clv_mean"] == 3.0 and o["beat_close"] == 1.0
+    # move_slope = sum(edge*move)/sum(edge^2) over both games: (5*3 + 2.5*0.5) / (25 + 6.25)
+    assert abs(o["move_slope"] - (15 + 1.25) / 31.25) < 1e-9
+    buckets = {r["bucket"]: r for r in d["ats_by_edge_open"]}
+    assert buckets["3-6"]["n"] == 1 and buckets["3-6"]["wins"] == 1
+
+
+def test_backtest_frame_carries_opener_columns(cfg, dataset):
+    from cfbr.backtest.harness import run_backtest
+
+    df, metrics = run_backtest(cfg, [2025], dataset)
+    assert {"spread", "spread_open", "n_providers_open"} <= set(df.columns)
+    assert df["spread_open"].is_not_null().sum() > 800        # 2025 has an opener on every lined game
+    assert "ats_by_edge_open" in metrics["diagnostics"] and metrics["diagnostics"]["opener"]["seasons"] == [2025]
+
+
+def _mini_run(tmp_path, lines_spread):
+    """A fake results run: two completed games whose stored close came from ``lines_spread``."""
+    import json
+    import polars as pl
+    from cfbr.backtest.metrics import report
+
+    preds = pl.DataFrame({
+        "game_id": [1, 2], "season": [2024, 2024], "week": [5, 5], "season_type": ["regular"] * 2,
+        "slot": ["r05"] * 2, "completed": [True, True], "neutral_site": [False, False],
+        "margin": [10.0, -3.0], "pred_margin": [9.0, -1.0], "win_prob": [0.7, 0.45],
+        "prior_share_h": [0.4] * 2, "prior_share_a": [0.4] * 2,
+        "massey_pred": [8.0, -2.0], "prior_pred": [7.0, -1.5], "slot_order": [5, 5],
+        "spread": lines_spread, "n_providers": [1, 1], "source": ["books"] * 2})
+    run = tmp_path / "20260101T000000Z-mini"
+    run.mkdir()
+    preds.write_parquet(run / "predictions.parquet")
+    m = {"seasons": [2024], **report(preds), "calibration": {"2024": {"b_home": 3.0}}}
+    (run / "metrics.json").write_text(json.dumps(m, default=float))
+    return run
+
+
+def _mini_lines(spread):
+    import polars as pl
+    return pl.DataFrame({"game_id": [1, 2], "season": [2024] * 2, "week": [5] * 2, "season_type": ["regular"] * 2,
+                         "provider": ["Bovada"] * 2, "spread": spread, "spread_open": [-4.0, 3.5],
+                         "over_under": [50.0] * 2})
+
+
+def test_refresh_lines_adds_opener_and_keeps_headline(cfg, tmp_path):
+    import json
+    import polars as pl
+    from cfbr.backtest.harness import refresh_lines
+
+    run = _mini_run(tmp_path, [-7.0, 3.0])
+    before = json.loads((run / "metrics.json").read_text())
+    merged = refresh_lines(cfg, run, _mini_lines([-7.0, 3.0]))
+    after = json.loads((run / "metrics.json").read_text())
+    assert after["overall"] == before["overall"] and after["calibration"] == before["calibration"]
+    assert after["seasons"] == [2024]
+    assert merged["diagnostics"]["opener"]["n_bets"] == 1
+    assert after["diagnostics"]["opener"]["close_basis"] == "books-only consensus from the current lines table"
+    for key in ("ats_by_edge", "blend"):
+        assert json.dumps(after["diagnostics"].get(key), sort_keys=True) == json.dumps(before["diagnostics"].get(key), sort_keys=True)
+    assert after["prior_influence_by_slot"] == before["prior_influence_by_slot"]
+    assert {k for k in after if k != "diagnostics"} == {k for k in before if k != "diagnostics"}
+    assert {k: v for k, v in after["diagnostics"].items() if k not in ("opener", "ats_by_edge_open")} == \
+        {k: v for k, v in before["diagnostics"].items() if k not in ("opener", "ats_by_edge_open")}
+    assert "spread_open" in pl.read_parquet(run / "predictions.parquet").columns
+
+
+def test_refresh_lines_keeps_the_stored_close(cfg, tmp_path):
+    import json
+    import polars as pl
+    from cfbr.backtest.harness import refresh_lines
+
+    run = _mini_run(tmp_path, [-7.0, 3.0])
+    before = json.loads((run / "metrics.json").read_text())
+    refresh_lines(cfg, run, _mini_lines([-6.0, 3.0]))          # the lines table's close differs
+    preds = pl.read_parquet(run / "predictions.parquet")
+    assert preds["spread"].to_list() == [-7.0, 3.0]
+    assert preds["spread_open"].to_list() == [-4.0, 3.5]
+    after = json.loads((run / "metrics.json").read_text())
+    assert after["overall"] == before["overall"]
+    # The opener block uses the lines table's close: the stored close would give a different CLV.
+    opener = after["diagnostics"]["opener"]
+    assert opener["close_basis"].startswith("books-only")
+    # game 1: open home -4 -> margin 4, close -6 -> 6, pred 9: edge 5, move 2 (stored close would give 3).
+    # game 2: edge 2.5 is under the bet threshold.
+    assert opener["n_bets"] == 1
+    assert abs(opener["clv_mean"] - 2.0) < 1e-9
+
+
+def test_refresh_lines_refuses_a_tampered_run(cfg, tmp_path):
+    import json
+    import pytest
+    from cfbr.backtest.harness import refresh_lines
+
+    run = _mini_run(tmp_path, [-7.0, 3.0])
+    m = json.loads((run / "metrics.json").read_text())
+    m["overall"]["mae"] = 999.0
+    (run / "metrics.json").write_text(json.dumps(m))
+    metrics_before = (run / "metrics.json").read_bytes()
+    preds_before = (run / "predictions.parquet").read_bytes()
+    with pytest.raises(RuntimeError, match="overall would change"):
+        refresh_lines(cfg, run, _mini_lines([-7.0, 3.0]))
+    assert (run / "metrics.json").read_bytes() == metrics_before
+    assert (run / "predictions.parquet").read_bytes() == preds_before
 def test_calibration_v3_shadow_window_and_gain():
     from cfbr.report.shadow import calibration_v3_markdown, in_window_v3, paired_mae_gain
 
