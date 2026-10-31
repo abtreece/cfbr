@@ -544,3 +544,8 @@ def test_opener_tier_constants_match_the_holdout_run():
         pytest.skip("holdout run has no opener diagnostics")
     for key, bucket in {(3.0, 6.0): "3-6", (6.0, 10.0): "6-10", (10.0, None): "10+"}.items():
         assert OPENER_TIER_COVER[key] == (rows[bucket]["wins"], rows[bucket]["n"])
+def test_summary_markdown_has_the_verdict_section():
+    md = summary_markdown(read_ledger(Path("/nonexistent")), CFG, 2026)
+    assert "## Verdict by closing-line value" in md
+    assert "provisional until the decision point" in md
+    assert "Pricing table not available" in md

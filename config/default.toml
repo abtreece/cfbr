@@ -71,6 +71,8 @@ odds = -110
 stake = 1.0
 # Settled bets needed before the summary draws conclusions.
 min_sample = 500
+# Settled bets with a snapshot close before the CLV verdict is read.
+verdict_min_bets = 300
 # Offshore books count as market data (consensus line) but are never used to price a bet.
 offshore_books = ["Bovada", "BetOnline", "LowVig", "MyBookie", "BetUS", "Bookmaker", "5Dimes", "SportsBetting", "Heritage"]
 # Books a bet may be priced at (best line). All books still feed the consensus line.

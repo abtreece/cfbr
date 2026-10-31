@@ -2534,3 +2534,71 @@ def test_bets_page_and_guide_show_opener_reference(bets_client):
     assert "opening line" in guide and rate in guide
     api = bets_client.get("/api/bets").json()
     assert api["tiers"][0]["opener"]["n"] == small[1]
+def test_bets_page_and_api_carry_the_verdict(bets_client):
+    html = " ".join(bets_client.get("/bets").text.split())
+    assert "Verdict by closing-line value" in html
+    assert "provisional until the decision point" in html
+    api = bets_client.get("/api/bets").json()
+    assert api["verdict"]["status"] in ("unavailable", "too few")
+    assert api["verdict"]["min_bets"] == 300
+
+
+def _write_pricing_table(cfg, seasons):
+    import numpy as np
+
+    from cfbr.bets.pricing import PricingTable
+
+    rng = np.random.default_rng(1)
+    n = 2000
+    spread = rng.choice([-3.0, -3.5, -7.0, -10.0, -14.0, 3.0, 6.5], n)
+    margin = (-spread + rng.normal(0, 14, n)).round()
+    games = pl.DataFrame({"season": [seasons[i % len(seasons)] for i in range(n)], "margin": margin, "spread": spread})
+    cfg.paths.out_dir.mkdir(parents=True, exist_ok=True)
+    PricingTable.build(games, min_games=200).save(cfg.paths.out_dir / "pricing_table.json")
+
+
+def _verdict_ledger(cfg):
+    from cfbr.bets.ledger import LEDGER_SCHEMA
+
+    rows = []
+    for gid, side, line, status, source, close in [
+            (1, "home", -4.0, "won", "snapshot", -7.0), (2, "away", -10.0, "lost", "snapshot", -7.0),
+            (3, "home", -3.0, "push", "snapshot", -3.0), (4, "home", -3.0, "won", None, -7.0),
+            (5, "home", -3.0, "open", "snapshot", -3.0)]:
+        r = _bet(gid, side, line, status, 30, 10, close)
+        rows.append(r | {"closing_source": source})
+    d = cfg.paths.out_dir / str(SEASON)
+    d.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows, schema=LEDGER_SCHEMA).write_csv(d / "bets.csv")
+    return pl.read_csv(d / "bets.csv", schema=LEDGER_SCHEMA)
+
+
+def test_bets_computed_verdict(web_cfg):
+    from cfbr.bets.pricing import PricingTable
+    from cfbr.bets.verdict import verdict
+
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    ledger = _verdict_ledger(web_cfg)
+    _write_pricing_table(web_cfg, [2020, 2021])
+    client = TestClient(create_app(web_cfg))
+    expected = verdict(ledger, web_cfg.bets, PricingTable.load(web_cfg.paths.out_dir / "pricing_table.json"))
+    # push included, closing_source None and open excluded
+    assert expected["n"] == 3 and expected["status"] == "too few"
+    html = " ".join(client.get("/bets").text.split())
+    assert "Mean closing-implied ROI" in html and 'class="ci"' in html and "too few" in html
+    assert "3 of 300 bets" in html and "Taking the close at the same prices" in html
+    api = client.get("/api/bets").json()["verdict"]
+    assert api["n"] == 3 and math.isclose(api["mean"], expected["mean"])
+
+
+def test_bets_verdict_withheld_for_past_season(web_cfg):
+    _write_season(web_dir(web_cfg), datetime.now(UTC), polls=True)
+    _verdict_ledger(web_cfg)
+    _write_pricing_table(web_cfg, [2020, SEASON])
+    html = " ".join(TestClient(create_app(web_cfg)).get("/bets").text.split())
+    assert "Verdict not recomputed for past seasons" in html and "Pricing table not available" not in html
+
+
+def test_bets_verdict_missing_table(bets_client):
+    html = " ".join(bets_client.get("/bets").text.split())
+    assert "Pricing table not available" in html and "not recomputed" not in html
