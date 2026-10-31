@@ -206,8 +206,11 @@ def calibration_gate(
         raise typer.BadParameter(f"the gate runs on tuning seasons {t0}–{t1}; pass --sanity for the holdout check")
     out = run_gate(cfg, Dataset.load(cfg), season_list, "calib-v3-sanity" if sanity else "calib-v3-gate")
     p = json.loads((out / "gate.json").read_text())["primary"]
-    typer.echo(f"v2 → v3 paired MAE gain {p['gain']:+.4f} [{p['ci95'][0]:+.4f}, {p['ci95'][1]:+.4f}] over {p['n']} games: "
-               f"{'PASSES' if p['passes'] else 'FAILS'} (rule: ≥ +{p['threshold']:.2f}, CI low > 0). {out}")
+    gain = f"v2 → v3 paired MAE gain {p['gain']:+.4f} [{p['ci95'][0]:+.4f}, {p['ci95'][1]:+.4f}] over {p['n']} games"
+    if sanity:  # the sanity step is reported, not gated: its criterion is gain >= 0 (DECISIONS)
+        typer.echo(f"{gain}: sanity {'OK' if p['gain'] >= 0 else 'NOT OK'} (criterion: gain ≥ 0, reported not gated). {out}")
+    else:
+        typer.echo(f"{gain}: {'PASSES' if p['passes'] else 'FAILS'} (rule: ≥ +{p['threshold']:.2f}, CI low > 0). {out}")
 
 
 def _default_config(config: Optional[Path]):

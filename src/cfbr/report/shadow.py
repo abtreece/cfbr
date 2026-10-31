@@ -314,7 +314,7 @@ def calibration_v3_markdown(df: pl.DataFrame, season: int) -> str:
         "are unchanged; only game predictions differ, and nothing here is published. Gain = v2 error − v3 error "
         "(positive favors v3). Window: regular-season weeks 10+ and the postseason. "
         f"Rule (DECISIONS.md): adopt v3 before 2027 week 1 if the window gain is > 0 and its 95% CI lower bound is > "
-        f"{GAIN_CI_FLOOR:+.2f}.", "", status, "", *rows, ""])
+        f"{GAIN_CI_FLOOR:+.2f}, and only if v2 is adopted.", "", status, "", *rows, ""])
 
 
 def run_calibration_v3_shadow(eng: Engine, season: int) -> Path:
