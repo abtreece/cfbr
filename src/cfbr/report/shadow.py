@@ -274,7 +274,8 @@ PORTAL_MIN_SEASON = 2021       # roster regression trains and applies from this 
 
 
 def in_window_portal() -> pl.Expr:
-    return ((pl.col("season") == 2026) & (pl.col("season_type") == "postseason")) | (pl.col("season") == 2027)
+    """2026 postseason and every game from 2027 on: nothing earlier is unseen."""
+    return ((pl.col("season") == 2026) & (pl.col("season_type") == "postseason")) | (pl.col("season") >= 2027)
 
 
 def portal_comparison(cfg: Config, ds: Dataset, season: int, last_completed: int,
@@ -299,8 +300,9 @@ def portal_markdown(df: pl.DataFrame, season: int) -> str:
                 f"{g['gain']:+.3f} [{g['ci95'][0]:+.3f}, {g['ci95'][1]:+.3f}] |")
 
     win = df.filter(pl.col("in_window"))
+    early = (pl.col("season_type") == "regular") & (pl.col("week") <= 4)
     w = paired_mae_gain(win, "pred_published", "pred_portal")
-    r = paired_mae_gain(win, "pred_roster", "pred_portal")
+    r =paired_mae_gain(win, "pred_roster", "pred_portal")
     if w["n"] == 0:
         status = "No window games completed yet (the window opens with the 2026 postseason)."
     else:
@@ -321,6 +323,9 @@ def portal_markdown(df: pl.DataFrame, season: int) -> str:
         row("**portal vs published (primary)**", win, "pred_published", "pred_portal"),
         row("portal vs plain roster (must be > 0)", win, "pred_roster", "pred_portal"),
         row("plain roster vs published (context)", win, "pred_published", "pred_roster"),
+        row("published → portal, weeks 1–4 (reported, not gated)", win.filter(early), "pred_published", "pred_portal"),
+        row("published → portal, week 5+ and bowls (reported, not gated)", win.filter(~early),
+            "pred_published", "pred_portal"),
         "",
     ]
     return "\n".join(lines)

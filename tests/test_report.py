@@ -201,3 +201,5 @@ def test_portal_shadow_window_and_markdown():
     assert paired_mae_gain(df.filter(pl.col("in_window")), "pred_published", "pred_portal")["gain"] == 2.5
     md = portal_markdown(df, 2026)
     assert "portal" in md and "published" in md and "before 2028 week 1" in md
+    assert "| published → portal, weeks 1–4 (reported, not gated) | 1 |" in md
+    assert "| published → portal, week 5+ and bowls (reported, not gated) | 1 |" in md
