@@ -71,3 +71,12 @@ def test_decision_point_and_empty_ledger():
     assert v["status"] == "too few" and v["n"] == 0
     one = verdict(_ledger([_row(1, "won", "snapshot", "home", -3.0, -5.0)]), Bets(pricing_books=[], verdict_min_bets=1), FakeTable())
     assert one["status"] == "undecided" and math.isnan(one["sd"]) and math.isnan(one["ci_low"])
+
+
+def test_threshold_is_pre_registered():
+    # The 300-bet threshold is part of the verdict rule pre-registered in DECISIONS.md (2026-10-30);
+    # changing it breaks that pre-registration.
+    from cfbr.config import load_config
+
+    assert load_config("config/default.toml").bets.verdict_min_bets == 300
+    assert load_config("config/tuned.toml").bets.verdict_min_bets == 300

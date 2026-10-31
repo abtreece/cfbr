@@ -353,6 +353,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             ctx |= {"summary": summarize(ledger, cfg.bets), "best": summarize(ledger, cfg.bets, "best"),
                     "breakdown": breakdown(ledger, cfg), "weeks": weeks, "tiers": by_tier(ledger, cfg.bets),
                     "verdict": verdict(ledger, cfg.bets, season_pricing_table(season)),
+                    "verdict_withheld": store.pricing_table() is not None and season_pricing_table(season) is None,
                     "tests": tracked_tests(ledger, cfg.bets),
                     "what_if": (wi := what_if(ledger, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll),
                     "open_bets": open_bets,

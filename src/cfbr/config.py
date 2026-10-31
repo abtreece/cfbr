@@ -88,6 +88,7 @@ class Bets(BaseModel):
     min_sample: int = 500
     # Bets with a snapshot close before the closing-line-value verdict is read (DECISIONS
     # "Paper-bet verdict by closing-line value").
+    # Pre-registered in DECISIONS.md (2026-10-30): changing this breaks the pre-registration.
     verdict_min_bets: int = 300
     # Offshore books: their lines feed the consensus (market data) but a bet is
     # never priced at one, so they never supply the best-line number.
