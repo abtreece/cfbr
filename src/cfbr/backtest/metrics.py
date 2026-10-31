@@ -62,8 +62,9 @@ def consensus_spread(lines: pl.DataFrame, method: str = "median", col: str = "sp
 
 def opening_spread(lines: pl.DataFrame, method: str = "median") -> pl.DataFrame:
     """Home-perspective opening spread per game: ``consensus_spread`` applied to CFBD's
-    ``spreadOpen``. Only sportsbooks carry an opener (the aggregators' column is null), so this
-    is a books-only median. Columns: game_id, spread_open, n_providers_open."""
+    ``spreadOpen``. In practice a books-only median: CFBD's aggregator rows leave spreadOpen null,
+    and the same source-tier fallback as the close applies if that ever changes. Columns: game_id,
+    spread_open, n_providers_open."""
     return (consensus_spread(lines, method, "spread_open")
             .select("game_id", "spread_open", n_providers_open="n_providers"))
 

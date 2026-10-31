@@ -62,14 +62,13 @@ HEADLINE_KEYS = ("overall", "by_season", "by_bucket", "by_season_bucket")
 
 
 def refresh_lines(cfg: Config, run_dir: Path, lines: pl.DataFrame) -> dict:
-    """Add the opening consensus to an existing run's predictions and recompute the line-derived
-    diagnostics. The stored closing line is kept, so a frozen run's headline metrics cannot change
-    (and the function refuses if they would); openers do not change after the fact, so the opener
-    block's CLV is against the run's own close. The model is not re-run; ``seasons`` and
-    ``calibration`` are kept from the existing file."""
+    """Add the opening consensus (from the current lines table) to an existing run's predictions and
+    recompute ``report()``; every report key except ``seasons`` and ``calibration`` is rewritten. The
+    stored closing line is kept, so a frozen run's headline metrics cannot change, and the function
+    refuses before writing anything if they would. The model is not re-run."""
     preds = pl.read_parquet(run_dir / "predictions.parquet")
     preds = preds.drop([c for c in OPENER_COLUMNS if c in preds.columns])
-    preds = preds.join(opening_spread(lines, cfg.backtest.spread_consensus), on="game_id", how="left")
+    preds = preds.join(opening_spread(lines, cfg.backtest.spread_consensus), on="game_id", how="left", maintain_order="left")
     old = json.loads((run_dir / "metrics.json").read_text())
     new = report(preds.filter(pl.col("completed")))
     for key in HEADLINE_KEYS:

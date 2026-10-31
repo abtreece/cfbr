@@ -200,7 +200,13 @@ def backtest_lines(
     run_dir = cfg.paths.results_dir / run
     if not (run_dir / "predictions.parquet").exists():
         raise typer.BadParameter(f"no predictions.parquet under {run_dir}")
-    metrics = refresh_lines(cfg, run_dir, Dataset.load(cfg).lines)
+    if not (run_dir / "metrics.json").exists():
+        raise typer.BadParameter(f"no metrics.json under {run_dir}")
+    try:
+        metrics = refresh_lines(cfg, run_dir, Dataset.load(cfg).lines)
+    except RuntimeError as e:
+        typer.echo(f"refused: {e}", err=True)
+        raise typer.Exit(1)
     op = metrics["diagnostics"].get("opener")
     if op:
         typer.echo(f"{run}: {op['n']} games with an opener ({op['seasons'][0]}–{op['seasons'][-1]}); "

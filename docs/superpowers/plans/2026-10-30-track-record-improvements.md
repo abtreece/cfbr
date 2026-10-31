@@ -635,7 +635,7 @@ The site reads `results/*/metrics.json` on javelin. After deploying (`deploy/dep
 ssh javelin 'cd ~/cfb-ratings && ~/.local/bin/uv run cfbr backtest-lines --run 20261011T144444Z-tuned-tuning && ~/.local/bin/uv run cfbr backtest-lines --run 20261011T145524Z-tuned-holdout'
 ```
 
-This makes no API calls and writes only under `results/`. `/lab` picks the new keys up on the next request (`store.runs()` rescans on directory mtime); `/bets` needs no data because its reference is the constant. Verify: `curl -s https://<site>/bets | grep -c "vs opener"` returns ≥ 1.
+This makes no API calls and writes only under `results/`. `Store.runs()` reads each metrics.json once per process and `refresh_lines` rewrites files inside the run directory, so restart the service afterwards: `ssh javelin 'systemctl --user restart cfbr-web'` (check the unit name in deploy/deploy.sh). Then verify /lab contains "vs opener". `/bets` needs no data because its reference is the constant. Verify: `curl -s https://<site>/bets | grep -c "vs opener"` returns ≥ 1.
 
 ---
 
