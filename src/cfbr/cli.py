@@ -185,6 +185,31 @@ def holdout(config: ConfigOpt = None) -> None:
     typer.echo(f"holdout appended to {tuned.paths.results_dir / 'tuning_report.md'}")
 
 
+@app.command("calibration-gate")
+def calibration_gate(
+    seasons: Annotated[str, typer.Option(help="e.g. 2015-2021 (tuning seasons unless --sanity)")] = "2015-2021",
+    sanity: Annotated[bool, typer.Option("--sanity", help="Allow holdout seasons (only after the primary passed)")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Calibration v3 gate (DECISIONS "Calibration v3"): paired MAE gain of the pooled-FCS slope term
+    over calibration v2 under the training scheme. Writes results/<ts>-calib-v3-gate/ (or -sanity)."""
+    import json
+
+    from cfbr.backtest.calib_gate import run_gate
+    from cfbr.backtest.harness import parse_seasons
+    from cfbr.data import Dataset
+
+    cfg = _default_config(config)
+    season_list = parse_seasons(seasons)
+    t0, t1 = cfg.seasons.tuning
+    if not sanity and any(s < t0 or s > t1 for s in season_list):
+        raise typer.BadParameter(f"the gate runs on tuning seasons {t0}–{t1}; pass --sanity for the holdout check")
+    out = run_gate(cfg, Dataset.load(cfg), season_list, "calib-v3-sanity" if sanity else "calib-v3-gate")
+    p = json.loads((out / "gate.json").read_text())["primary"]
+    typer.echo(f"v2 → v3 paired MAE gain {p['gain']:+.4f} [{p['ci95'][0]:+.4f}, {p['ci95'][1]:+.4f}] over {p['n']} games: "
+               f"{'PASSES' if p['passes'] else 'FAILS'} (rule: ≥ +{p['threshold']:.2f}, CI low > 0). {out}")
+
+
 def _default_config(config: Optional[Path]):
     """Explicit --config, else config/tuned.toml once frozen, else default."""
     from cfbr.config import REPO_ROOT
