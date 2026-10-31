@@ -527,6 +527,7 @@ def test_opener_tier_reference_and_markdown():
     md = summary_markdown(read_ledger(Path("/nonexistent")), CFG, 2026)
     assert "holdout 2022–25 vs close [95% CI]" in md and "holdout 2022–25 vs opener [95% CI]" in md
     assert "against the opening line" in md and "48.5–50.5%" not in md
+    assert "period.\n\n| tier" in md
     assert _cover_range(OPENER_TIER_COVER).endswith("%")
 
 

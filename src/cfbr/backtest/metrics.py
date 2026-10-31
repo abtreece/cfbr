@@ -64,7 +64,8 @@ def opening_spread(lines: pl.DataFrame, method: str = "median") -> pl.DataFrame:
     """Home-perspective opening spread per game: ``consensus_spread`` applied to CFBD's
     ``spreadOpen``. In practice a books-only median: CFBD's aggregator rows leave spreadOpen null,
     and the same source-tier fallback as the close applies if that ever changes. Columns: game_id,
-    spread_open, n_providers_open."""
+    spread_open, n_providers_open. CFBD carries openers only from Bovada (2021 on), DraftKings
+    (2023 on) and ESPN Bet (2024–25), so 2021 and 2022 openers are Bovada's alone."""
     return (consensus_spread(lines, method, "spread_open")
             .select("game_id", "spread_open", n_providers_open="n_providers"))
 
@@ -177,12 +178,12 @@ def _ats_by_edge(y: np.ndarray, line: np.ndarray, pred: np.ndarray) -> list[dict
     return rows
 
 
-def _opener(d: pl.DataFrame) -> dict | None:
+def _opener(d: pl.DataFrame, close_basis: str = "run's own close") -> dict | None:
     """The model against the opening line on games with both an opener and a close: each line's
     MAE, the would-be bets (|pred − opener| ≥ OPENER_MIN_EDGE) with their closing-line value
     (points the close moved toward the bet side), the share that beat the close, and how far the
     close moves toward the model per point of disagreement (OLS of close − open on pred − open,
-    no intercept)."""
+    no intercept). ``close_basis`` records where the close came from."""
     o = d.filter(pl.col("spread_open").is_not_null() & pl.col("spread").is_not_null())
     if o.height < 2:
         return None
@@ -196,6 +197,7 @@ def _opener(d: pl.DataFrame) -> dict | None:
     clv = (move * np.sign(edge))[bet]
     ss = float((edge * edge).sum())
     return {"n": int(o.height), "seasons": sorted(int(s) for s in o["season"].unique()),
+            "close_basis": close_basis,
             "mae_open": float(np.mean(np.abs(y - mo))), "mae_close": float(np.mean(np.abs(y - mc))),
             "mae_model": float(np.mean(np.abs(y - pred))),
             "n_bets": int(bet.sum()),
@@ -206,7 +208,7 @@ def _opener(d: pl.DataFrame) -> dict | None:
             "move_slope": float((edge * move).sum() / ss) if ss > 0 else math.nan}
 
 
-def diagnostics(preds: pl.DataFrame) -> dict:
+def diagnostics(preds: pl.DataFrame, close_basis: str = "run's own close") -> dict:
     """Bias/slope by week and prior-share bucket, ATS by edge bucket, the line+model blend
     weights and a win-probability reliability table, over completed games."""
     d = preds.filter(pl.col("margin").is_not_null())
@@ -247,7 +249,7 @@ def diagnostics(preds: pl.DataFrame) -> dict:
         if op.height >= 2:
             res["ats_by_edge_open"] = _ats_by_edge(op["margin"].to_numpy(), -op["spread_open"].to_numpy(),
                                                    op["pred_margin"].to_numpy())
-        res["opener"] = _opener(d)
+        res["opener"] = _opener(d, close_basis)
     return res
 
 

@@ -264,6 +264,13 @@ def test_refresh_lines_adds_opener_and_keeps_headline(cfg, tmp_path):
     assert after["overall"] == before["overall"] and after["calibration"] == before["calibration"]
     assert after["seasons"] == [2024]
     assert merged["diagnostics"]["opener"]["n_bets"] == 1
+    assert after["diagnostics"]["opener"]["close_basis"] == "books-only consensus from the current lines table"
+    for key in ("ats_by_edge", "blend"):
+        assert json.dumps(after["diagnostics"].get(key), sort_keys=True) == json.dumps(before["diagnostics"].get(key), sort_keys=True)
+    assert after["prior_influence_by_slot"] == before["prior_influence_by_slot"]
+    assert {k for k in after if k != "diagnostics"} == {k for k in before if k != "diagnostics"}
+    assert {k: v for k, v in after["diagnostics"].items() if k not in ("opener", "ats_by_edge_open")} == \
+        {k: v for k, v in before["diagnostics"].items() if k not in ("opener", "ats_by_edge_open")}
     assert "spread_open" in pl.read_parquet(run / "predictions.parquet").columns
 
 
@@ -278,7 +285,15 @@ def test_refresh_lines_keeps_the_stored_close(cfg, tmp_path):
     preds = pl.read_parquet(run / "predictions.parquet")
     assert preds["spread"].to_list() == [-7.0, 3.0]
     assert preds["spread_open"].to_list() == [-4.0, 3.5]
-    assert json.loads((run / "metrics.json").read_text())["overall"] == before["overall"]
+    after = json.loads((run / "metrics.json").read_text())
+    assert after["overall"] == before["overall"]
+    # The opener block uses the lines table's close: the stored close would give a different CLV.
+    opener = after["diagnostics"]["opener"]
+    assert opener["close_basis"].startswith("books-only")
+    # game 1: open home -4 -> margin 4, close -6 -> 6, pred 9: edge 5, move 2 (stored close would give 3).
+    # game 2: edge 2.5 is under the bet threshold.
+    assert opener["n_bets"] == 1
+    assert abs(opener["clv_mean"] - 2.0) < 1e-9
 
 
 def test_refresh_lines_refuses_a_tampered_run(cfg, tmp_path):

@@ -602,9 +602,9 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
               "Every bet is the same flat stake, so the payout per bet is identical; tiers group bets by how far the "
               "model is from the market. Backtest = how often that tier covered in the walk-forward backtest (pushes "
               "excluded): 2015–2021 are the seasons the model was tuned on, 2022–2025 the holdout it never saw, shown "
-              "against the closing line and against the opening line (CFBD openers, 2021 on). Bets here are recorded "
+              "against the closing line and against the opening line (CFBD openers, 2021 on; Bovada only in 2021–22). Bets here are recorded "
               "early in the week, so the opener is the closer comparator. No tier has cleared break-even with "
-              "confidence against either line, in either period.", ""
+              "confidence against either line, in either period.", "",
               "| tier | bets | open | settled | W-L-P | win % [95% CI] | units | $ | ROI | backtest 2015–21 [95% CI] "
               "| holdout 2022–25 vs close [95% CI] | holdout 2022–25 vs opener [95% CI] |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|"]

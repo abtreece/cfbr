@@ -236,7 +236,7 @@ git commit -m "Backtest: join the opening consensus to every run's predictions"
 **Interfaces:**
 - Produces: `refresh_lines(cfg: Config, run_dir: Path, lines: pl.DataFrame) -> dict` (the merged metrics). Raises `RuntimeError` if any of `overall`, `by_season`, `by_bucket`, `by_season_bucket` would change.
 
-> **Divergence (2026-10-30, user-approved during execution):** the first version re-joined the *closing* consensus too, and both frozen runs refused: the current lines table reproduces a different close on about 8% of their games (holdout line MAE 12.02598 → 12.02701), so the raw cache was refreshed after 2026-10-11. `refresh_lines` now keeps the run's stored `spread`, `n_providers` and `source` and adds only `spread_open` / `n_providers_open` from the current table. Openers do not change after the fact, so the opener block's CLV uses the run's own close. The headline-metric refusal stays as a safety net. The second test became: the stored close survives a lines table whose close differs; plus a tamper test that still exercises the refusal.
+> **Divergence (2026-10-30, user-approved during execution):** the first version re-joined the *closing* consensus too, and both frozen runs refused: the current lines table reproduces a different close on about 8% of their games (holdout line MAE 12.02598 → 12.02701), because the frozen runs predate the 2026-10-11 closing-consensus fix (DECISIONS.md: books-only median, previously all providers); the raw cache did not change. `refresh_lines` keeps the run's stored `spread`, `n_providers` and `source`, adds `spread_open` / `n_providers_open`, and writes only `ats_by_edge_open` and `opener` into metrics.json (all else byte-identical). The opener block's close is the current books-only consensus, so opener and close are like-for-like. The headline-metric refusal stays as a safety net. The second test became: the stored close survives a lines table whose close differs; plus a tamper test that still exercises the refusal.
 - Produces: CLI `cfbr backtest-lines --run <run_id>`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -379,7 +379,7 @@ Run (each loads the dataset, ~30 s):
 uv run cfbr backtest-lines --run 20261011T144444Z-tuned-tuning
 uv run cfbr backtest-lines --run 20261011T145524Z-tuned-holdout
 ```
-Expected: both print a line like `20261011T145524Z-tuned-holdout: 3462 games with an opener (2022–2025); ~1980 would-be bets, avg CLV +0.49 pts, beat close ~53.9%, move slope ~0.077`, and neither raises. If one raises `RuntimeError: overall would change`, stop: the local lines table no longer matches the run (the raw cache changed); report it rather than forcing.
+Expected: both print a line like `20261011T145524Z-tuned-holdout: 3462 games with an opener (2022–2025); ~1980 would-be bets, avg CLV +0.49 pts, beat close ~53.9%, move slope ~0.077`, and neither raises. If one raises `RuntimeError: overall would change`, stop: the local lines table no longer reproduces the run's stored close (the frozen runs predate the consensus-rule fix, so a mismatch on the stored close itself, not just the close joined from the table, means something else changed); report it rather than forcing.
 
 Then read the holdout tier numbers:
 ```bash
@@ -635,7 +635,7 @@ The site reads `results/*/metrics.json` on javelin. After deploying (`deploy/dep
 ssh javelin 'cd ~/cfb-ratings && ~/.local/bin/uv run cfbr backtest-lines --run 20261011T144444Z-tuned-tuning && ~/.local/bin/uv run cfbr backtest-lines --run 20261011T145524Z-tuned-holdout'
 ```
 
-This makes no API calls and writes only under `results/`. `Store.runs()` reads each metrics.json once per process and `refresh_lines` rewrites files inside the run directory, so restart the service afterwards: `ssh javelin 'systemctl --user restart cfbr-web'` (check the unit name in deploy/deploy.sh). Then verify /lab contains "vs opener". `/bets` needs no data because its reference is the constant. Verify: `curl -s https://<site>/bets | grep -c "vs opener"` returns ≥ 1.
+This makes no API calls and writes only under `results/`. `Store.runs()` reads each metrics.json once per process and `refresh_lines` rewrites files inside the run directory, so restart the service afterwards: `ssh javelin 'systemctl --user restart cfbr-web'` (check the unit name in deploy/deploy.sh). After step 2 on the server, run `uv run pytest tests/test_bets.py -k opener_tier_constants` to confirm the constant matches production's run. A manual `systemctl --user restart cfbr-web` over ssh may need `XDG_RUNTIME_DIR` exported as `deploy/deploy.sh` does. Then verify /lab contains "vs opener". `/bets` needs no data because its reference is the constant. Verify: `curl -s https://<site>/bets | grep -c "vs opener"` returns ≥ 1.
 
 ---
 
