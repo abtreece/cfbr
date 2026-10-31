@@ -167,6 +167,24 @@ def test_calibration_v2_stage2_and_shadow_gain():
     assert "calibration shadow" in calibration_markdown(df, 2026)
 
 
+def test_stage2_v3_adds_a_pred_times_fcs_column():
+    import numpy as np
+    import polars as pl
+    from cfbr.model.calibrate import STAGE2_TERMS, STAGE2_TERMS_V3, fit_stage2, stage2_design, stage2_terms
+
+    g = pl.DataFrame({"neutral_site": [False, False, True], "prior_share_h": [0.5, 0.2, 1.0],
+                      "prior_share_a": [0.5, 0.4, 1.0], "home_fcs": [False, False, True], "away_fcs": [False, True, False],
+                      "margin": [10.0, 30.0, -20.0]})
+    pred = np.array([8.0, 20.0, -15.0])
+    X2 = stage2_design(g, pred)
+    X3 = stage2_design(g, pred, fcs_slope=True)
+    assert X2.shape == (3, 4) and X3.shape == (3, 5)
+    assert np.allclose(X3[:, :4], X2)
+    assert X3[:, 4].tolist() == [0.0, 20.0, -15.0]  # pred on the two pooled-FCS games, 0 elsewhere
+    assert stage2_terms() == STAGE2_TERMS and stage2_terms(True) == STAGE2_TERMS_V3 == STAGE2_TERMS + ["pred_fcs"]
+    assert fit_stage2(g, pred, fcs_slope=True).shape == (5,)
+
+
 def test_market_ratings_summary_and_markdown():
     from cfbr.backtest.market import markdown, summary
 
