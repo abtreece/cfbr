@@ -68,6 +68,13 @@
     <tbody>{% for r in d.ats_by_edge %}<tr><td>{{ r.bucket }}</td><td class="num">{{ r.n }}</td>
       <td class="num">{% if r.n %}{{ r.win_rate|pct(1) }} [{{ r.ci95_low|pct(1) }}, {{ r.ci95_high|pct(1) }}]{% else %}—{% endif %}</td></tr>{% endfor %}</tbody>
   </table></div>{% endif %}
+  {% if d.ats_by_edge_open %}<div class="table-wrap"><table class="data">
+    <thead><tr><th>|Edge| vs opener</th><th class="num">Games</th><th class="num">ATS [95% CI]</th></tr></thead>
+    <tbody>{% for r in d.ats_by_edge_open %}<tr><td>{{ r.bucket }}</td><td class="num">{{ r.n }}</td>
+      <td class="num">{% if r.n %}{{ r.win_rate|pct(1) }} [{{ r.ci95_low|pct(1) }}, {{ r.ci95_high|pct(1) }}]{% else %}—{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>{% endif %}
+  {% if d.opener %}<p class="note">Opener ({{ d.opener.seasons[0] }}–{{ d.opener.seasons[-1] }}, {{ d.opener.n }} games): MAE opener {{ d.opener.mae_open|num }}, close {{ d.opener.mae_close|num }}, model {{ d.opener.mae_model|num }}.
+    {{ d.opener.n_bets }} would-be bets at ≥ 3 pts vs the opener: avg CLV {{ "%+.2f"|format(d.opener.clv_mean) }} pts, beat the close {{ d.opener.beat_close|pct(1) }}; the close moves {{ d.opener.move_slope|num(3) }} of the way toward the model per point of disagreement.</p>{% endif %}
   {% if d.reliability %}<div class="table-wrap"><table class="data">
     <thead><tr><th>Home win prob.</th><th class="num">Games</th><th class="num">Predicted</th><th class="num">Observed</th></tr></thead>
     <tbody>{% for r in d.reliability %}<tr><td>{{ r.bin }}</td><td class="num">{{ r.n }}</td><td class="num">{{ r.predicted|pct(1) }}</td><td class="num">{{ r.observed|pct(1) }}</td></tr>{% endfor %}</tbody>

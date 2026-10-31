@@ -83,11 +83,13 @@
 <p>The edge decides <em>whether</em> to bet. It isn't a measure of how sure the model is. Bigger edges haven't covered more often:</p>
 <div class="table-wrap">
 <table class="data">
-  <thead><tr><th>Tier</th><th class="num">Holdout cover rate, 2022–2025</th></tr></thead>
+  <thead><tr><th>Tier</th><th class="num">Holdout cover rate, 2022–2025</th><th class="num">Cover vs opening line, 2022–2025</th></tr></thead>
   <tbody>
   {% for tier in tiers %}
     <tr><td>{{ tier.label }}</td><td class="num">{% if tier.holdout %}{{ tier.holdout.rate|pct }}<span class="ci"> [{{ tier.holdout.ci95[0]|pct }}, {{ tier.holdout.ci95[1]|pct }}]</span>
-      <span class="muted">of {{ tier.holdout.n }}</span>{% else %}—{% endif %}</td></tr>
+      <span class="muted">of {{ tier.holdout.n }}</span>{% else %}—{% endif %}</td>
+      <td class="num">{% if tier.opener %}{{ tier.opener.rate|pct }}<span class="ci"> [{{ tier.opener.ci95[0]|pct }}, {{ tier.opener.ci95[1]|pct }}]</span>
+      <span class="muted">of {{ tier.opener.n }}</span>{% else %}—{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
