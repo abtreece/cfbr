@@ -66,15 +66,20 @@ def gate_report(df: pl.DataFrame, eng: Engine, seasons: list[int]) -> dict:
             "pred_fcs_by_season": {s: c["pred_fcs"] for s, c in coefs.items()}}
 
 
-def gate_markdown(r: dict) -> str:
+def gate_markdown(r: dict, sanity: bool = False) -> str:
     p = r["primary"]
 
     def g(x: dict) -> str:
         return f"{x['gain']:+.4f} [{x['ci95'][0]:+.4f}, {x['ci95'][1]:+.4f}]"
 
-    lines = [f"# Calibration v3 gate: pooled-FCS slope, {r['seasons'][0]}–{r['seasons'][-1]}", "",
-             f"Paired MAE gain v2 → v3 over {r['n_games']:,} games: **{g(p)}**. Rule: gain ≥ +{p['threshold']:.2f} "
-             f"and 95% CI lower bound > 0 → **{'passes' if p['passes'] else 'fails'}**.", "",
+    title = "Calibration v3 sanity" if sanity else "Calibration v3 gate"
+    if sanity:
+        verdict = (f"Paired MAE gain v2 → v3 over {r['n_games']:,} games: **{g(p)}**. Sanity criterion "
+                   f"(reported, not gated): gain ≥ 0 → **{'OK' if p['gain'] >= 0 else 'NOT OK'}**")
+    else:
+        verdict = (f"Paired MAE gain v2 → v3 over {r['n_games']:,} games: **{g(p)}**. Rule: gain ≥ +{p['threshold']:.2f} "
+                   f"and 95% CI lower bound > 0 → **{'passes' if p['passes'] else 'fails'}**.")
+    lines = [f"# {title}: pooled-FCS slope, {r['seasons'][0]}–{r['seasons'][-1]}", "", verdict, "",
              "| model | MAE all | MAE FCS games | slope on FCS games |", "|---|---|---|---|"]
     for k in ("base", "v2", "v3"):
         lines.append(f"| {k} | {r['mae'][k]:.3f} | {r['fcs_games'][k]['mae']:.3f} | {r['fcs_games'][k]['slope']:.3f} |")
@@ -84,7 +89,8 @@ def gate_markdown(r: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_gate(cfg: Config, ds: Dataset, seasons: list[int], tag: str = "calib-v3-gate") -> Path:
+def run_gate(cfg: Config, ds: Dataset, seasons: list[int], tag: str = "calib-v3-gate",
+             sanity: bool = False) -> Path:
     eng = Engine(ds, cfg, last_completed=current_season() - 1)
     df = gate_frame(eng, seasons)
     rep = gate_report(df, eng, seasons)
@@ -92,5 +98,5 @@ def run_gate(cfg: Config, ds: Dataset, seasons: list[int], tag: str = "calib-v3-
     out.mkdir(parents=True, exist_ok=True)
     df.write_parquet(out / "frame.parquet")
     (out / "gate.json").write_text(json.dumps(rep, indent=2, default=float))
-    (out / "gate.md").write_text(gate_markdown(rep))
+    (out / "gate.md").write_text(gate_markdown(rep, sanity=sanity))
     return out

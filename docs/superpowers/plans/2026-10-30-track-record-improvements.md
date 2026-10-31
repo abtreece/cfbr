@@ -1171,7 +1171,7 @@ Fail case:
 
 - [ ] README command table: add `cfbr calibration-gate [--seasons] [--sanity]`.
 - [ ] `uv run pytest -q` → all pass. Commit `Docs: record the calibration v3 gate result`.
-- [ ] PR titled `feat: calibration v3 gate (pooled-FCS slope) and shadow` (or `test: ...` if it failed and only the record ships). Squash-merge. Deploy is stop-and-ask; if the gate passed, deploy **before the first week-10 kickoff (Thu 2026-11-05)** so the shadow's first write precedes its window (the predictions are point-in-time regardless, but the record is cleaner).
+- [ ] PR titled `feat: calibration v3 gate (pooled-FCS slope) and shadow` (or `test: ...` if it failed and only the record ships). Squash-merge. Deploy is stop-and-ask; if the gate passed, deploy **before the Sunday 2026-11-01 9 AM Central `weekly` run**: the first week-10 kickoff is Tue 2026-11-03 18:00 Central (2026-11-04 00:00 UTC, Akron vs Ohio), and `weekly` is the only scheduled writer of the shadow file; if the deploy slips past Sunday, run `cfbr shadow --season 2026` on javelin before Tuesday evening instead. Merge this branch with a merge commit, never a rebase: the result line cites 5738f8f, and the PR number should be named next to that hash in the PR description so the chain stays traceable after squash-merge (the predictions are point-in-time regardless, but the record is cleaner).
 
 ---
 
@@ -1716,7 +1716,7 @@ git commit -m "Paper bets: show the closing-line-value verdict in bets.md, /bets
 ## Order and dependencies
 
 1. **Part A** first; it is additive and gives every later discussion the right comparator.
-2. **Part B** next. B1 is a one-line commit that must land before any fitting; B5 decides whether B6 exists. If the gate passes, deploy before Thu 2026-11-05.
+2. **Part B** next. B1 is a one-line commit that must land before any fitting; B5 decides whether B6 exists. If the gate passes, deploy before the Sunday 2026-11-01 9 AM Central `weekly` run.
 3. **Part C** and **Part D** are independent of A and B and of each other. Both reuse `paired_mae_gain` (C) from B6; if C merges first, carry the function in C and let the later merge dedupe.
 4. Every PR: `uv run pytest -q` green, CI green, squash-merge, then stop and ask before `deploy/deploy.sh`.
 
