@@ -450,6 +450,16 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     except Exception:
         log.exception("calibration shadow comparison failed; continuing")
         shadow_failed = True
+    try:
+        from cfbr.report.shadow import run_calibration_v3_shadow
+
+        if eng.cfg.model.calibration_v3:
+            log.info("calibration v3 is the published model; no v3 shadow")
+        else:
+            run_calibration_v3_shadow(eng, season)
+    except Exception:
+        log.exception("calibration v3 shadow comparison failed; continuing")
+        shadow_failed = True
     # Season simulation: isolated too.
     sim_failed = False
     if cfg.sim.enabled:
@@ -718,14 +728,16 @@ def shadow(
     from cfbr.data import Dataset
     from cfbr.ingest.fetch import current_season
     from cfbr.model.engine import Engine
-    from cfbr.report.shadow import run_calibration_shadow, run_shadow
+    from cfbr.report.shadow import run_calibration_shadow, run_calibration_v3_shadow, run_shadow
 
     cfg = _default_config(config)
     ds = Dataset.load(cfg)
     last = min(current_season(), season) - 1
     path = run_shadow(cfg, ds, season, last_completed=last)
-    cal = run_calibration_shadow(Engine(ds, cfg, last_completed=last), season)
-    typer.echo(f"wrote {path}, {cal} and their .md summaries")
+    eng = Engine(ds, cfg, last_completed=last)
+    cal = run_calibration_shadow(eng, season)
+    cal3 = run_calibration_v3_shadow(eng, season)
+    typer.echo(f"wrote {path}, {cal}, {cal3} and their .md summaries")
 
 
 @app.command()

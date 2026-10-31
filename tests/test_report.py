@@ -201,3 +201,19 @@ def test_market_ratings_summary_and_markdown():
     md = markdown(2025, s)
     assert "## By conference (after r06)" in md and "Pooled FCS" in md and "2.80" in md
     assert markdown(2025, {}).endswith("No lined games yet.\n")
+
+
+def test_calibration_v3_shadow_window_and_gain():
+    from cfbr.report.shadow import calibration_v3_markdown, in_window_v3, paired_mae_gain
+
+    df = pl.DataFrame({
+        "game_id": [1, 2, 3], "season": [2026] * 3, "week": [9, 10, 1],
+        "season_type": ["regular", "regular", "postseason"], "completed": [True, True, True],
+        "home_team": ["A", "A", "A"], "away_team": ["B", "B", "B"], "margin": [5.0, 5.0, 5.0],
+        "pred_v2": [0.0, 1.0, 1.0], "pred_v3": [8.0, 3.0, 3.0],
+    }).with_columns(in_window=in_window_v3())
+    assert df["in_window"].to_list() == [False, True, True]
+    g = paired_mae_gain(df.filter(pl.col("in_window")), "pred_v2", "pred_v3")
+    assert g["n"] == 2 and g["gain"] == 2.0
+    md = calibration_v3_markdown(df, 2026)
+    assert "weeks 10+" in md and "v3" in md and "adopt v3" in md
