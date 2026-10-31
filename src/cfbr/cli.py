@@ -401,6 +401,7 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     bets_failed = _bets_step(cfg, ds, season, week)
     # Shadow prior comparison: also isolated, never affects published output.
     shadow_failed = False
+    plain_shadow_failed = False
     try:
         from cfbr.report.shadow import run_portal_shadow, run_shadow
 
@@ -408,11 +409,16 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     except Exception:
         log.exception("prior shadow comparison failed; continuing")
         shadow_failed = True
-    try:
-        run_portal_shadow(cfg, ds, season, last_completed=season - 1)
-    except Exception:
-        log.exception("portal prior shadow comparison failed; continuing")
+        plain_shadow_failed = True
+    if plain_shadow_failed:
+        log.error("portal prior shadow skipped: plain shadow failed")
         shadow_failed = True
+    else:
+        try:
+            run_portal_shadow(cfg, ds, season, last_completed=season - 1)
+        except Exception:
+            log.exception("portal prior shadow comparison failed; continuing")
+            shadow_failed = True
     try:
         from cfbr.report.shadow import run_totals_shadow
 

@@ -277,8 +277,8 @@ PORTAL_MIN_SEASON = 2021       # roster regression trains and applies from this 
 
 
 def in_window_portal() -> pl.Expr:
-    """2026 postseason and every 2027 game: nothing earlier is unseen, nothing later is in the rule."""
-    return ((pl.col("season") == 2026) & (pl.col("season_type") == "postseason")) | (pl.col("season") == 2027)
+    """Every 2027 game: 2026 week 7+ and its postseason belong to the plain roster shadow's window, nothing earlier is unseen, nothing later is in the rule."""
+    return pl.col("season") == 2027
 
 
 def portal_comparison(cfg: Config, ds: Dataset, season: int, last_completed: int,
@@ -307,7 +307,7 @@ def portal_markdown(df: pl.DataFrame, season: int) -> str:
     w = paired_mae_gain(win, "pred_published", "pred_portal")
     r = paired_mae_gain(win, "pred_roster", "pred_portal")
     if w["n"] == 0:
-        status = "No window games completed yet (the window opens with the 2026 postseason)."
+        status = "No window games completed yet (the window is the 2027 season)."
     else:
         passing = (w["gain"] > 0 and w["ci95"][0] > GAIN_CI_FLOOR and r["n"] > 0 and r["gain"] > 0)
         status = (f"Window so far: gain vs published {w['gain']:+.3f} (95% CI lower bound {w['ci95'][0]:+.3f}), "
@@ -320,8 +320,8 @@ def portal_markdown(df: pl.DataFrame, season: int) -> str:
         f"applies the roster regression only from {PORTAL_MIN_SEASON} on. Gain = first error − second error "
         "(positive favors the second). Rule (DECISIONS.md): adopt portal before 2028 week 1 if its window gain vs "
         f"the published model is > 0 with 95% CI lower bound > {GAIN_CI_FLOOR:+.2f} and it also beats the plain "
-        "roster prior over the window. The window pools the 2026 postseason with 2027; this file's table and status use "
-        "every window game recorded so far, and its CSV holds this season's rows.", "",
+        "roster prior over the window. Window: the 2027 regular season and postseason. 2026 rows are recorded for "
+        "reference and never enter the status.", "",
         status, "",
         "| window games | n | first MAE | second MAE | gain [95% CI] |", "|---|---|---|---|---|",
         row("**portal vs published (primary)**", win, "pred_published", "pred_portal"),
@@ -342,21 +342,17 @@ def run_portal_shadow(cfg: Config, ds: Dataset, season: int, last_completed: int
     src = out / "prior_comparison.csv"
     if not src.exists():
         raise RuntimeError(f"{src} missing; run_shadow writes it first")
-    published = pl.read_csv(src, try_parse_dates=True)
+    published = pl.read_csv(src, try_parse_dates=True, schema_overrides={
+        "margin": pl.Float64, "pred_v1": pl.Float64, "pred_roster": pl.Float64})
     df = portal_comparison(cfg, ds, season, last_completed, published)
     csv, md = out / "prior_portal_comparison.csv", out / "prior_portal_comparison.md"
     tmp = csv.with_suffix(".csv.tmp")
     df.write_csv(tmp)
     tmp.replace(csv)
-    pooled = df
-    prev_csv = cfg.paths.out_dir / "2026" / "prior_portal_comparison.csv"
-    if season > 2026 and prev_csv.exists():
-        prev = pl.read_csv(prev_csv, try_parse_dates=True).filter(pl.col("in_window"))
-        pooled = pl.concat([prev, df], how="diagonal_relaxed")
     tmp = md.with_suffix(".md.tmp")
-    tmp.write_text(portal_markdown(pooled, season))
+    tmp.write_text(portal_markdown(df, season))
     tmp.replace(md)
-    w = paired_mae_gain(pooled.filter(pl.col("in_window")), "pred_published", "pred_portal")
+    w = paired_mae_gain(df.filter(pl.col("in_window")), "pred_published", "pred_portal")
     log.info("portal prior shadow: %d window games settled, gain %s", w["n"],
              "n/a" if w["n"] == 0 else f"{w['gain']:+.3f} [{w['ci95'][0]:+.3f}, {w['ci95'][1]:+.3f}]")
     return csv

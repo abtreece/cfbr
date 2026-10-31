@@ -191,34 +191,61 @@ def test_portal_shadow_window_and_markdown():
     from cfbr.report.shadow import in_window_portal, paired_mae_gain, portal_markdown
 
     df = pl.DataFrame({
-        "game_id": [1, 2, 3], "season": [2026, 2026, 2027], "week": [9, 1, 1],
-        "season_type": ["regular", "postseason", "regular"],
-        "kickoff_ts": [datetime(2026, 3, 1, tzinfo=UTC)] * 3, "completed": [True] * 3,
-        "home_team": ["A"] * 3, "away_team": ["B"] * 3, "margin": [10.0, 3.0, -7.0],
-        "pred_published": [6.0, 0.0, -1.0], "pred_roster": [7.0, 1.0, -2.0], "pred_portal": [8.0, 2.0, -4.0],
+        "game_id": [1, 2, 3, 4], "season": [2026, 2026, 2027, 2027], "week": [9, 1, 1, 1],
+        "season_type": ["regular", "postseason", "regular", "postseason"],
+        "kickoff_ts": [datetime(2026, 3, 1, tzinfo=UTC)] * 4, "completed": [True] * 4,
+        "home_team": ["A"] * 4, "away_team": ["B"] * 4, "margin": [10.0, 3.0, -7.0, 4.0],
+        "pred_published": [6.0, 0.0, -1.0, 1.0], "pred_roster": [7.0, 1.0, -2.0, 2.0],
+        "pred_portal": [8.0, 2.0, -4.0, 3.0],
     }).with_columns(in_window=in_window_portal())
-    assert df["in_window"].to_list() == [False, True, True]
+    assert df["in_window"].to_list() == [False, False, True, True]
     assert paired_mae_gain(df.filter(pl.col("in_window")), "pred_published", "pred_portal")["gain"] == 2.5
-    md = portal_markdown(df, 2026)
+    md = portal_markdown(df, 2027)
     assert "portal" in md and "published" in md and "before 2028 week 1" in md
+    assert "the 2027 regular season and postseason" in md
     assert "| published → portal, weeks 1–4 (reported, not gated) | 1 |" in md
     assert "| published → portal, week 5+ and bowls (reported, not gated) | 1 |" in md
 
 
-def test_portal_markdown_pools_the_two_season_window():
+def _portal_cfg(tmp_path):
+    from cfbr.config import Config
+
+    cfg = Config()
+    cfg.paths.out_dir = tmp_path
+    return cfg
+
+
+def test_run_portal_shadow_with_no_completed_games(tmp_path, monkeypatch):
     from datetime import UTC, datetime
 
-    from cfbr.report.shadow import in_window_portal, portal_markdown
+    from cfbr.report import shadow
 
-    def frame(season, season_type):
-        return pl.DataFrame({
-            "game_id": [season], "season": [season], "week": [1], "season_type": [season_type],
-            "kickoff_ts": [datetime(season, 3, 1, tzinfo=UTC)], "completed": [True],
-            "home_team": ["A"], "away_team": ["B"], "margin": [10.0],
-            "pred_published": [6.0], "pred_roster": [7.0], "pred_portal": [8.0],
-        }).with_columns(in_window=in_window_portal())
+    class StubEngine:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    both = pl.concat([frame(2026, "postseason"), frame(2027, "regular")], how="diagonal_relaxed")
-    assert both["in_window"].to_list() == [True, True]
-    assert "| **portal vs published (primary)** | 2 |" in portal_markdown(both, 2027)
-    assert frame(2028, "regular")["in_window"].to_list() == [False]
+        def predict(self, season):
+            return pl.DataFrame({"game_id": [1, 2], "pred_margin": [3.0, -2.0]})
+
+    monkeypatch.setattr(shadow, "Engine", StubEngine)
+    out = tmp_path / "2026"
+    out.mkdir()
+    pl.DataFrame({
+        "game_id": [1, 2], "season": [2026, 2026], "week": [1, 1], "season_type": ["regular", "regular"],
+        "kickoff_ts": [datetime(2026, 9, 1, tzinfo=UTC)] * 2, "completed": [False, False],
+        "home_team": ["A", "C"], "away_team": ["B", "D"], "margin": [None, None],
+        "pred_v1": [2.0, -1.0], "pred_roster": [2.5, -1.5],
+    }, schema_overrides={"margin": pl.Float64}).write_csv(out / "prior_comparison.csv")
+    csv = shadow.run_portal_shadow(_portal_cfg(tmp_path), None, 2026, last_completed=2025)
+    assert csv.exists() and (out / "prior_portal_comparison.md").exists()
+    assert "No window games completed yet" in (out / "prior_portal_comparison.md").read_text()
+
+
+def test_run_portal_shadow_missing_source_raises(tmp_path):
+    import pytest
+
+    from cfbr.report import shadow
+
+    (tmp_path / "2026").mkdir()
+    with pytest.raises(RuntimeError):
+        shadow.run_portal_shadow(_portal_cfg(tmp_path), None, 2026, last_completed=2025)
