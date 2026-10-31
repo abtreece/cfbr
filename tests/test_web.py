@@ -2513,3 +2513,12 @@ def test_voided_real_bets_are_hidden_behind_a_toggle(web_cfg, monkeypatch):
 
     css = (Path(cfbr.web.__file__).parent / "static" / "style.css").read_text()
     assert "#real-bets:not(.show-void) tr.voided { display: none; }" in css
+
+
+def test_bets_page_and_api_carry_the_verdict(bets_client):
+    html = " ".join(bets_client.get("/bets").text.split())
+    assert "Verdict by closing-line value" in html
+    assert "provisional until the decision point" in html
+    api = bets_client.get("/api/bets").json()
+    assert api["verdict"]["status"] in ("unavailable", "too few")
+    assert api["verdict"]["min_bets"] == 300

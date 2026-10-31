@@ -21,6 +21,7 @@ from cfbr.bets.experiments import tracked_tests
 from cfbr.bets.ledger import (HOLDOUT_TIER_COVER, book_key, break_even, by_tier, risk, summarize, tier_expr,
                               tier_reference, tiers, week_label, weekly, what_if)
 from cfbr.bets.shortlist import BOOK_RE, shortlist
+from cfbr.bets.verdict import verdict
 from cfbr.config import Config
 from cfbr.web import MODEL_NAME
 from cfbr.web.access import (BOOKS_COOKIE, BOOKS_COOKIE_DAYS, bets_access, book_cookie_value, choose_books,
@@ -351,6 +352,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             open_bets = with_line_now([r for r in rows if r["status"] == "open"], s, cfg.bets.threshold)
             ctx |= {"summary": summarize(ledger, cfg.bets), "best": summarize(ledger, cfg.bets, "best"),
                     "breakdown": breakdown(ledger, cfg), "weeks": weeks, "tiers": by_tier(ledger, cfg.bets),
+                    "verdict": verdict(ledger, cfg.bets, season_pricing_table(season)),
                     "tests": tracked_tests(ledger, cfg.bets),
                     "what_if": (wi := what_if(ledger, cfg.bets)), "what_if_chart": what_if_chart(wi, cfg.bets.bankroll),
                     "open_bets": open_bets,
@@ -512,6 +514,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             "summary_best_line": clean_summary(summarize(ledger, cfg.bets, "best")),
             "weekly": [clean_summary(w) for w in weekly(ledger, cfg.bets)],
             "tiers": [clean_summary(t) for t in by_tier(ledger, cfg.bets)],
+            "verdict": clean_summary(verdict(ledger, cfg.bets, season_pricing_table(season))),
             "tests": [clean_summary(t) | {"groups": [clean_summary(g) for g in t["groups"]]}
                       for t in tracked_tests(ledger, cfg.bets)],
             "what_if": what_if(ledger, cfg.bets),

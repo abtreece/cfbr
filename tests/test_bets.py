@@ -517,3 +517,10 @@ def test_moneyline_book_with_no_usable_rows_reports_nan():
     p = primary(s)
     assert p["n_sides"] == 0 and math.isnan(p["real"]) and not p["adopt"]
     assert all(b["n"] == 0 and math.isnan(b["real"]) for b in bands(s))
+
+
+def test_summary_markdown_has_the_verdict_section():
+    md = summary_markdown(read_ledger(Path("/nonexistent")), CFG, 2026)
+    assert "## Verdict by closing-line value" in md
+    assert "provisional until the decision point" in md
+    assert "Pricing table not available" in md

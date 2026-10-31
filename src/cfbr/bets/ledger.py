@@ -575,6 +575,24 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
         f"Open bets: {m['open']} ({money(m['open_risk_dollars'], signed=False)} at risk). "
         "CLV > 0 means the recorded line was better than where the market closed.", "",
     ]
+    from cfbr.bets.verdict import verdict
+
+    v = verdict(ledger, cfg, table)
+    lines += [
+        "## Verdict by closing-line value", "",
+        "Pre-registered 2026-10-30 (DECISIONS.md) after 57 bets had settled, none excluded. Closing-implied ROI = "
+        "units won per unit risked at the recorded number and price if the snapshot close were the true line; "
+        f"taking the close itself earns about the vig ({_fmt(v['at_close'], pct=True)} here). "
+        f"At >= {v['min_bets']} bets with a snapshot close: **edge over the market** if the 95% CI lower bound is "
+        "above 0, **no edge** if the upper bound is below 0, otherwise undecided. "
+        f"Decision: {v['decision_point']}.", ""]
+    if v["status"] == "unavailable":
+        lines += ["Pricing table not available, so no verdict can be computed.", ""]
+    else:
+        lines += [f"Bets with a snapshot close: {v['n']} of {v['min_bets']} needed. "
+                  f"Mean closing-implied ROI: {_fmt(v['mean'], pct=True)} "
+                  f"(95% CI [{_fmt(v['ci_low'], pct=True)}, {_fmt(v['ci_high'], pct=True)}]).", ""]
+    lines += [f"Status (provisional until the decision point): **{v['status']}**.", ""]
     wk = weekly(ledger, cfg)
     if wk:
         lines += ["## Week by week", "",
