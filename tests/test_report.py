@@ -267,13 +267,32 @@ def test_refresh_lines_adds_opener_and_keeps_headline(cfg, tmp_path):
     assert "spread_open" in pl.read_parquet(run / "predictions.parquet").columns
 
 
-def test_refresh_lines_refuses_when_the_close_changed(cfg, tmp_path):
+def test_refresh_lines_keeps_the_stored_close(cfg, tmp_path):
+    import json
+    import polars as pl
+    from cfbr.backtest.harness import refresh_lines
+
+    run = _mini_run(tmp_path, [-7.0, 3.0])
+    before = json.loads((run / "metrics.json").read_text())
+    refresh_lines(cfg, run, _mini_lines([-6.0, 3.0]))          # the lines table's close differs
+    preds = pl.read_parquet(run / "predictions.parquet")
+    assert preds["spread"].to_list() == [-7.0, 3.0]
+    assert preds["spread_open"].to_list() == [-4.0, 3.5]
+    assert json.loads((run / "metrics.json").read_text())["overall"] == before["overall"]
+
+
+def test_refresh_lines_refuses_a_tampered_run(cfg, tmp_path):
     import json
     import pytest
     from cfbr.backtest.harness import refresh_lines
 
     run = _mini_run(tmp_path, [-7.0, 3.0])
-    before = (run / "metrics.json").read_text()
+    m = json.loads((run / "metrics.json").read_text())
+    m["overall"]["mae"] = 999.0
+    (run / "metrics.json").write_text(json.dumps(m))
+    metrics_before = (run / "metrics.json").read_bytes()
+    preds_before = (run / "predictions.parquet").read_bytes()
     with pytest.raises(RuntimeError, match="overall would change"):
-        refresh_lines(cfg, run, _mini_lines([-6.0, 3.0]))
-    assert (run / "metrics.json").read_text() == before        # nothing written
+        refresh_lines(cfg, run, _mini_lines([-7.0, 3.0]))
+    assert (run / "metrics.json").read_bytes() == metrics_before
+    assert (run / "predictions.parquet").read_bytes() == preds_before

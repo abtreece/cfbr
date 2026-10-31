@@ -57,19 +57,19 @@ def write_results(cfg: Config, seasons: list[int], preds: pl.DataFrame, metrics:
     return out
 
 
-LINE_COLUMNS = ["spread", "n_providers", "source", "spread_open", "n_providers_open"]
+OPENER_COLUMNS = ["spread_open", "n_providers_open"]
 HEADLINE_KEYS = ("overall", "by_season", "by_bucket", "by_season_bucket")
 
 
 def refresh_lines(cfg: Config, run_dir: Path, lines: pl.DataFrame) -> dict:
-    """Re-join the lines table to an existing run's predictions and recompute the line-derived
-    parts of its ``metrics.json``. The model is not re-run. Refuses if any headline metric would
-    change, so a frozen run (the tuned holdout) only ever gains diagnostics such as the opener
-    block; ``seasons`` and ``calibration`` are kept from the existing file."""
+    """Add the opening consensus to an existing run's predictions and recompute the line-derived
+    diagnostics. The stored closing line is kept, so a frozen run's headline metrics cannot change
+    (and the function refuses if they would); openers do not change after the fact, so the opener
+    block's CLV is against the run's own close. The model is not re-run; ``seasons`` and
+    ``calibration`` are kept from the existing file."""
     preds = pl.read_parquet(run_dir / "predictions.parquet")
-    preds = preds.drop([c for c in LINE_COLUMNS if c in preds.columns])
-    preds = (preds.join(consensus_spread(lines, cfg.backtest.spread_consensus), on="game_id", how="left")
-                  .join(opening_spread(lines, cfg.backtest.spread_consensus), on="game_id", how="left"))
+    preds = preds.drop([c for c in OPENER_COLUMNS if c in preds.columns])
+    preds = preds.join(opening_spread(lines, cfg.backtest.spread_consensus), on="game_id", how="left")
     old = json.loads((run_dir / "metrics.json").read_text())
     new = report(preds.filter(pl.col("completed")))
     for key in HEADLINE_KEYS:

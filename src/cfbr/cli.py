@@ -190,9 +190,9 @@ def backtest_lines(
     run: Annotated[str, typer.Option(help="results/ run id, e.g. 20261011T145524Z-tuned-holdout")],
     config: ConfigOpt = None,
 ) -> None:
-    """Re-join the lines table (closing and opening consensus) to an existing backtest run and
-    recompute its line-derived diagnostics. The model is not re-run; refuses if a headline metric
-    would change."""
+    """Add the opening consensus (CFBD spreadOpen) to an existing backtest run and recompute its
+    line-derived diagnostics. The stored closing line is kept; the model is not re-run; refuses if a
+    headline metric would change."""
     from cfbr.backtest.harness import refresh_lines
     from cfbr.data import Dataset
 
