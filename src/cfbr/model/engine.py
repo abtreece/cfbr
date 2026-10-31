@@ -252,9 +252,10 @@ class Engine:
         return g, predict_margin(self.calibration(season), g)
 
     def stage2(self, season: int, fcs_slope: bool | None = None) -> np.ndarray:
-        """Stage-2 coefficients for ``season`` (``fcs_slope`` None = the config's calibration_v3): OLS of margin − pred on the stage-2 terms over the
-        same training seasons as the base calibration, each game's pred from its own slot snapshot and
-        its own season's calibration (out of sample for the base fit)."""
+        """Stage-2 coefficients for ``season`` (``fcs_slope`` None = the config's calibration_v3): OLS
+        of margin − pred on the stage-2 terms over the same training seasons as the base calibration,
+        each game's pred from its own slot snapshot and its own season's calibration (out of sample
+        for the base fit)."""
         if fcs_slope is None:
             fcs_slope = self.cfg.model.calibration_v3
         key = (season, fcs_slope)

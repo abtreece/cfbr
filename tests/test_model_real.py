@@ -45,8 +45,7 @@ def test_stage2_v3_coefficients_are_cached_per_design(cfg, dataset):
     eng = Engine(dataset, tuned, last_completed=2025)
     v2 = eng.stage2(2019, fcs_slope=False)
     v3 = eng.stage2(2019, fcs_slope=True)
-    print("v2", v2.tolist())
-    print("v3", v3.tolist())
     assert v2.shape == (4,) and v3.shape == (5,)
+    assert eng.stage2(2019) is v2                      # default follows cfg.model.calibration_v3 == False
     assert eng.stage2(2019, fcs_slope=True) is v3
-    assert v3[4] < 0
+    assert v3[4] < 0                                  # FCS games: the model is too extreme, so the slope term shrinks
