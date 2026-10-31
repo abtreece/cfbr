@@ -1,6 +1,7 @@
 import time
 
 import polars as pl
+import pytest
 
 from cfbr.model.engine import Engine
 
@@ -35,3 +36,16 @@ def test_prior_share_uses_recency_weighted_plays(cfg, dataset):
     unweighted = snap.select("team", raw=sum(x / (x + pl.col(c)) for x in a for c in ("n_off", "n_def")) / 4)
     joined = tbl.join(unweighted, on="team")
     assert (joined["prior_share"] > joined["raw"]).all()
+
+
+def test_portal_variant_is_v1_before_the_cutoff(cfg, dataset):
+    if dataset.roster is None or dataset.player_ppa is None or dataset.player_defense is None:
+        pytest.skip("roster tables not in the local store")
+    portal = cfg.model_copy(deep=True)
+    portal.prior.features = "roster"
+    portal.prior.roster_min_season = 2021
+    a = Engine(dataset, cfg, last_completed=2025).priors(2019).sort("team")
+    b = Engine(dataset, portal, last_completed=2025).priors(2019).sort("team")
+    assert a.equals(b)
+    c = Engine(dataset, portal, last_completed=2025).priors(2025).sort("team")
+    assert not a.select("team").join(c, on="team").is_empty()  # it still produces priors after the cutoff

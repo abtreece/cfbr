@@ -162,11 +162,13 @@ class Engine:
         finals = {s: self.final(s) for s in range(min(train_seasons) - 1, max(train_seasons) + 1)}
         finals[season - 1] = self.final(season - 1)
         mode = self.cfg.prior.features
+        if mode == "roster" and season < self.cfg.prior.roster_min_season:
+            mode = "v1"  # portal-era variant: v1 before the cutoff season
         rows = []
         for s in train_seasons:
             f = self._prior_features(s, finals, mode)
             rows.append(f.join(finals[s].select("team", *COMPONENTS), on="team", how="left"))
-        models = fit_prior_models(pl.concat(rows, how="diagonal_relaxed"), mode)
+        models = fit_prior_models(pl.concat(rows, how="diagonal_relaxed"), mode, self.cfg.prior.roster_min_season)
         feats = self._prior_features(season, finals, mode)
         fbs_prior = predict_priors(models, feats).select("team", *COMPONENTS)
         pooled = [e for e in self.entities(season) if e not in set(self.fbs(season))]

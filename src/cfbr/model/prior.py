@@ -77,7 +77,7 @@ def season_features(
 PriorModels = dict[str, list[tuple[list[str], LinearRegression]]]
 
 
-def fit_prior_models(train: pl.DataFrame, mode: str = "v1") -> PriorModels:
+def fit_prior_models(train: pl.DataFrame, mode: str = "v1", roster_min_season: int = 0) -> PriorModels:
     """``train`` = stacked season_features rows joined with targets (``o_ppa`` ...).
 
     Returns, per component, models in priority order. In roster mode the first
@@ -93,7 +93,8 @@ def fit_prior_models(train: pl.DataFrame, mode: str = "v1") -> PriorModels:
             feats = _features_for(comp, m)
             if any(f not in rows.columns for f in feats):
                 continue
-            r = rows.drop_nulls([comp, *feats])
+            pool = rows.filter(pl.col("season") >= roster_min_season) if m == "roster" and roster_min_season else rows
+            r = pool.drop_nulls([comp, *feats])
             if r.height < 2 * len(feats) + 10:
                 continue
             models[comp].append((feats, LinearRegression().fit(r.select(feats).to_numpy(), r[comp].to_numpy())))
