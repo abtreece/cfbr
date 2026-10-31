@@ -72,6 +72,15 @@ BACKTEST_TIER_COVER = {(3.0, 6.0): (860, 1706), (6.0, 10.0): (493, 972), (10.0, 
 # The same, over the 2022-2025 holdout (results/20261011T145524Z-tuned-holdout). These seasons were
 # never tuned on; the tuning-season Large-tier 54.2% does not carry over.
 HOLDOUT_TIER_COVER = {(3.0, 6.0): (525, 1041), (6.0, 10.0): (334, 681), (10.0, None): (176, 364)}
+# The same holdout, scored against the opening consensus line instead of the close
+# (diagnostics.ats_by_edge_open in that run; openers exist for most games from 2021 on).
+# Bets are recorded early in the week, so the opener is the closer comparator.
+OPENER_TIER_COVER = {(3.0, 6.0): (534, 1039), (6.0, 10.0): (345, 649), (10.0, None): (149, 294)}
+
+
+def _cover_range(table: dict) -> str:
+    rates = [wins / n for wins, n in table.values()]
+    return f"{100 * min(rates):.1f}–{100 * max(rates):.1f}%"
 
 # Non-books (numberfire projections, teamrankings/consensus aggregates) can't be
 # bet, so they never price a bet.
@@ -423,7 +432,8 @@ def by_tier(ledger: pl.DataFrame, cfg: Bets) -> list[dict]:
     for t in tiers(cfg):
         m = summarize(d.filter(pl.col("_tier") == t["name"]).drop("_tier"), cfg)
         out.append({**t, **m, "bets": m["open"] + m["settled"], "backtest": tier_reference(t, BACKTEST_TIER_COVER),
-                    "holdout": tier_reference(t, HOLDOUT_TIER_COVER)})
+                    "holdout": tier_reference(t, HOLDOUT_TIER_COVER),
+                    "opener": tier_reference(t, OPENER_TIER_COVER)})
     return out
 
 
@@ -468,8 +478,11 @@ def sample_size_note(ledger: pl.DataFrame, cfg: Bets, table: PricingTable | None
     return (f"{clv_txt} Win rate is not: a fair coin over {n} flat {cfg.odds} bets finishes with ROI ≥ 0 "
             f"{100 * coin_roi_chance(n, cfg.odds, 0.0):.0f}% of the time and ROI ≥ +5% "
             f"{100 * coin_roi_chance(n, cfg.odds, 0.05):.1f}% of the time, so a profitable {n}-bet record is weak "
-            "evidence by itself. The 2022–2025 backtest (never tuned on) covered 48.5–50.5% in every edge tier."
-            + (f" {power_note(table, cfg)}" if table is not None else ""))
+            "evidence by itself. The 2022–2025 backtest (never tuned on) covered "
+            f"{_cover_range(HOLDOUT_TIER_COVER)} against the closing line and {_cover_range(OPENER_TIER_COVER)} "
+            "against the opening line, by edge tier; bets are recorded early in the week, so the opener is the "
+            "closer comparator."
+            +(f" {power_note(table, cfg)}" if table is not None else ""))
 
 
 def money(x: float | None, signed: bool = True) -> str:
@@ -589,17 +602,18 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
               "Every bet is the same flat stake, so the payout per bet is identical; tiers group bets by how far the "
               "model is from the market. Backtest = how often that tier covered the closing line in the walk-forward "
               "backtest (pushes excluded): 2015–2021 are the seasons the model was tuned on, 2022–2025 the holdout it "
-              "never saw. No tier has cleared break-even with confidence in either, and none is above 50.5% in the "
-              "holdout.", "",
+              "never saw. The holdout is also scored against the opening line (available for most games from "
+              "2021 on), the closer comparator for bets recorded early in the week. No tier has cleared "
+              "break-even with confidence in either.", "",
               "| tier | bets | open | settled | W-L-P | win % [95% CI] | units | $ | ROI | backtest 2015–21 [95% CI] "
-              "| holdout 2022–25 [95% CI] |",
-              "|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| holdout 2022–25 vs close [95% CI] | holdout 2022–25 vs opener [95% CI] |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     def cover_txt(bt: dict | None) -> str:
         return "–" if bt is None else (f"{_fmt(bt['rate'], pct=True)} [{_fmt(bt['ci95'][0], pct=True)}, "
                                        f"{_fmt(bt['ci95'][1], pct=True)}] (n={bt['n']})")
 
     for t in by_tier(ledger, cfg):
-        bt_txt = f"{cover_txt(t['backtest'])} | {cover_txt(t['holdout'])}"
+        bt_txt = f"{cover_txt(t['backtest'])} | {cover_txt(t['holdout'])} | {cover_txt(t['opener'])}"
         lines.append(f"| {t['label']} | {t['bets']} | {t['open']} | {t['settled']} | {t['won']}-{t['lost']}-{t['push']} | "
                      f"{_fmt(t['win_rate'], pct=True)} [{_fmt(t['ci95'][0], pct=True)}, {_fmt(t['ci95'][1], pct=True)}] | "
                      f"{_fmt(t['units'], signed=True)} | {money(t['dollars'])} | {_fmt(t['roi'], pct=True)} | {bt_txt} |")
