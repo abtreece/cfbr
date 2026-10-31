@@ -192,7 +192,7 @@ def calibration_comparison(eng: Engine, season: int) -> pl.DataFrame:
     from cfbr.model.calibrate import stage2_design
 
     g, base = eng.base_predictions(season)
-    v2 = base + stage2_design(g, base) @ eng.stage2(season)
+    v2 = base + stage2_design(g, base) @ eng.stage2(season, fcs_slope=False)
     return (g.select("game_id", "season", "week", "season_type", "kickoff_ts", "completed", "home_team",
                      "away_team", "margin")
             .with_columns(pred_base=pl.Series(base), pred_v2=pl.Series(v2), in_window=in_window())

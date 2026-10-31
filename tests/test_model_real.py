@@ -35,3 +35,18 @@ def test_prior_share_uses_recency_weighted_plays(cfg, dataset):
     unweighted = snap.select("team", raw=sum(x / (x + pl.col(c)) for x in a for c in ("n_off", "n_def")) / 4)
     joined = tbl.join(unweighted, on="team")
     assert (joined["prior_share"] > joined["raw"]).all()
+
+
+def test_stage2_v3_coefficients_are_cached_per_design(cfg, dataset):
+    from cfbr.backtest.tune import apply_params
+
+    tuned = apply_params(cfg, {"alpha_ppa": 303.298, "alpha_sr": 90.7544, "half_life_weeks": 3.6978,
+                               "fcs_pooling": "conference", "gt_enabled": False, "margin_cap": 42})
+    eng = Engine(dataset, tuned, last_completed=2025)
+    v2 = eng.stage2(2019, fcs_slope=False)
+    v3 = eng.stage2(2019, fcs_slope=True)
+    print("v2", v2.tolist())
+    print("v3", v3.tolist())
+    assert v2.shape == (4,) and v3.shape == (5,)
+    assert eng.stage2(2019, fcs_slope=True) is v3
+    assert v3[4] < 0

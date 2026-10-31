@@ -18,7 +18,7 @@ from cfbr.backtest.metrics import consensus_spread
 from cfbr.config import Config
 from cfbr.data import STALE_GAME, Dataset
 from cfbr.ingest.fetch import current_season
-from cfbr.model.calibrate import STAGE2_TERMS
+from cfbr.model.calibrate import stage2_terms
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 from cfbr.report.roster_web import write_roster_web
@@ -263,8 +263,9 @@ def build_season(eng: Engine, season: int, out_root: Path, now: datetime | None 
         # neutral field); win probability = Phi(margin / sigma). With calibration v2 the
         # stage-2 terms apply on top (see cfbr.model.calibrate.stage2_design).
         "calibration": {"b_home": cal.b_home, "b_ppa": cal.b_ppa, "b_sr": cal.b_sr, "sigma": cal.sigma,
-                        "stage2": (dict(zip(STAGE2_TERMS, (float(c) for c in eng.stage2(season))))
-                                   if eng.cfg.model.calibration_v2 else None)},
+                        "stage2": (dict(zip(stage2_terms(eng.cfg.model.calibration_v3),
+                                        (float(c) for c in eng.stage2(season))))
+                                   if (eng.cfg.model.calibration_v2 or eng.cfg.model.calibration_v3) else None)},
         "weeks": sorted(set(ratings["week"].to_list())),
         "labels": dict(ratings.select("week", "label").unique().sort("week").iter_rows()),
         # Poll week shown beside each table (int, "final", or null if not released yet).
