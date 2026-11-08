@@ -1,20 +1,24 @@
 """Tools for the investigation agent.
 
-`query` enforces, in order: (1) the SQL must parse as exactly one statement of type SELECT
-(DuckDB also classifies PRAGMA, DESCRIBE, SHOW and SUMMARIZE as SELECT); (2) it must not call a
-function on DENIED_FUNCTIONS; then it runs on a snapshot of cfb.duckdb opened read-only with
-external access disabled (no file reads such as read_csv on .keys, no ATTACH, COPY or INSTALL),
-configuration locked (no SET to undo that) and temp_directory empty (so DuckDB's automatic
-allowance for `<db>.tmp/` is gone; `<db>.wal` is refused by the read-only, no-external-access
-connection). Refusals are returned as tool errors. `read_output` serves a fixed set of `rank`
-output files by name, never by path. Both tools number their results in one sequence; a
-verdict's evidence cites those ids and the grounding check (agent.grounded) looks them up in
-`results`.
+`query` runs agent-written SQL on a snapshot of cfb.duckdb. What is enforced:
+- The connection is read-only, has external access disabled (no read_csv on .keys, no ATTACH, COPY
+  or INSTALL), configuration locked (no SET to undo that), an empty temp_directory (so DuckDB's
+  automatic allowance for `<db>.tmp/` is gone; `<db>.wal` is refused by the read-only,
+  no-external-access connection) and TimeZone UTC (so TIMESTAMPTZ renders identically everywhere).
+- Before executing, the SQL is checked using only that restricted connection (never module-level
+  `duckdb.*`, which uses an unrestricted default connection): it must be exactly one statement of
+  type SELECT (DuckDB also classifies DESCRIBE, SHOW and SUMMARIZE as SELECT); it must serialize to
+  a parse tree (PRAGMA forms don't, so they are refused); and every table function in that tree
+  must be in ALLOWED_TABLE_FUNCTIONS. This is an allowlist on the parse tree, so quoting, comments,
+  schema qualification, CTEs and subqueries can't hide a function.
+Refusals are returned as tool errors. `read_output` serves a fixed set of `rank` output files by
+name, never by path. Both tools number their results in one sequence; a verdict's evidence cites
+those ids and the grounding check (agent.grounded) looks them up in `results`.
 """
 
 from __future__ import annotations
 
-import re
+import json
 import threading
 from pathlib import Path
 
@@ -30,23 +34,20 @@ OUTPUT_FILES = {
 }
 
 
-# enable_logging/disable_logging/truncate_duckdb_logs: calling them aborts the whole process
-# (uncaught C++ PermissionException); query/query_table: run string-built SQL that bypasses the
-# single-SELECT statement gate.
-DENIED_FUNCTIONS = ("enable_logging", "disable_logging", "truncate_duckdb_logs", "query", "query_table")
-_DENIED_CALL = re.compile(r"\b(" + "|".join(DENIED_FUNCTIONS) + r")\s*\(", re.IGNORECASE)
+ALLOWED_TABLE_FUNCTIONS = {"range", "generate_series", "unnest", "duckdb_tables", "duckdb_columns"}
 
 
-def _refusal(sql: str) -> str | None:
-    try:
-        statements = duckdb.extract_statements(sql)
-    except Exception as e:  # noqa: BLE001 - parser message goes back to the model
-        return str(e)
-    if len(statements) != 1 or statements[0].type.name != "SELECT":
-        return "exactly one SELECT statement is allowed"
-    if m := _DENIED_CALL.search(sql):
-        return f"{m.group(1).lower()}() is not allowed"
-    return None
+def _table_functions(node, found: list[str]) -> None:
+    if isinstance(node, dict):
+        if node.get("type") == "TABLE_FUNCTION":
+            function = node.get("function")
+            if isinstance(function, dict):
+                found.append(str(function.get("function_name", "")))
+        for v in node.values():
+            _table_functions(v, found)
+    elif isinstance(node, list):
+        for v in node:
+            _table_functions(v, found)
 
 
 def _cell(v) -> str:
@@ -56,11 +57,33 @@ def _cell(v) -> str:
 class ToolSession:
     def __init__(self, db_path: Path, out_dir: Path, season: int, week: int, cfg: Investigate):
         self.db_path, self.out_dir, self.season, self.week, self.cfg = db_path, out_dir, season, week, cfg
-        self.con = duckdb.connect(str(db_path), read_only=True,
-                                  config={"enable_external_access": False, "lock_configuration": True,
-                                          "temp_directory": ""})
+        self.con = duckdb.connect(str(db_path), read_only=True, config={"temp_directory": ""})
+        # Order matters: TimeZone needs the icu extension autoloaded, which external access forbids.
+        self.con.execute("SET TimeZone = 'UTC'")
+        self.con.execute("SET enable_external_access = false")
+        self.con.execute("SET lock_configuration = true")
         self.results: dict[int, str] = {}
         self.log: list[dict] = []
+
+    def _refusal(self, sql: str) -> str | None:
+        try:
+            statements = self.con.extract_statements(sql)
+        except Exception as e:  # noqa: BLE001 - parser message goes back to the model
+            return str(e)[:300]
+        if len(statements) != 1 or statements[0].type.name != "SELECT":
+            return "only a single SELECT statement is allowed"
+        try:
+            tree = json.loads(self.con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+        except Exception as e:  # noqa: BLE001
+            return f"statement can't be checked: {str(e)[:300]}"
+        if tree.get("error"):
+            return f"statement can't be checked: {str(tree.get('error_message', ''))[:300]}"
+        found: list[str] = []
+        _table_functions(tree, found)
+        for name in found:
+            if name.lower() not in ALLOWED_TABLE_FUNCTIONS:
+                return f"table function not allowed: {name}"
+        return None
 
     def _next_id(self) -> int:
         return len(self.log) + 1
@@ -77,7 +100,7 @@ class ToolSession:
 
     def query(self, sql: str) -> tuple[str, bool]:
         rid = self._next_id()
-        if (reason := _refusal(sql)) is not None:
+        if (reason := self._refusal(sql)) is not None:
             return self._done(rid, "query", sql, f"result_id {rid}: error: refused: {reason}", False)
         timed_out = threading.Event()
 
