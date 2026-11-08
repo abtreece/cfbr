@@ -1,6 +1,6 @@
 # What moved — design
 
-Date: 2026-11-08. Status: design approved, not built.
+Date: 2026-11-08. Status: built 2026-11-08; storage simplified (columns in ratings/games parquet), see the plan.
 
 ## Problem
 

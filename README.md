@@ -31,7 +31,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr calibration-gate [--seasons 2015-2021] [--sanity]` | Calibration v3 gate (pooled-FCS slope term vs v2); refuses holdout seasons without `--sanity`; writes `results/{ts}-calib-v3-gate/` or `results/{ts}-calib-v3-sanity/` with `--sanity` |
 | `cfbr fcs-gate --gate N` | FCS two-stage gates 1–3 (2015–2021, 2022–2025, 2026 through week 10), `config/tuned_v1.toml` vs `config/tuned.toml`; each needs the previous one passed; writes `results/{ts}-fcs-gate-N/` |
 | `cfbr restate --season 2026 --through-week 10` | Server only, after a published-model change: archives `out/{season}/wNN/` and `accuracy.csv` to `out/{season}/_v1/`, re-ranks those weeks, rebuilds sims, shadows and web data; never touches the ledger; don't run during `cfbr weekly` |
-| `cfbr rank --season 2026 --week 6` | Write `out/2026/w06/` rankings and next-week predictions |
+| `cfbr rank --season 2026 --week 6` | Write `out/2026/w06/` rankings, next-week predictions and `moves.csv` (each team's rating change split into own game, older plays fading and other games) |
 | `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line → web data for the season |
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
