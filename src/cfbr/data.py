@@ -69,6 +69,7 @@ class Dataset:
     game_players: pl.DataFrame | None = None
     draft_picks: pl.DataFrame | None = None  # display only (roster departures)
     portal: pl.DataFrame | None = None       # display only (roster departures)
+    player_stats: pl.DataFrame | None = None  # display only (roster and player pages)
 
     @classmethod
     def load(cls, cfg: Config) -> "Dataset":
@@ -87,13 +88,13 @@ class Dataset:
             tables = {r[0] for r in con.execute("SELECT table_name FROM information_schema.tables").fetchall()}
             player = {t: (con.execute(f"SELECT * FROM {t}").pl() if t in tables else None)
                       for t in ("roster", "player_ppa", "player_defense", "roster_latest", "game_players",
-                                "draft_picks", "portal")}
+                                "draft_picks", "portal", "player_stats")}
         finally:
             con.close()
         games = games.filter(~(pl.col("home_fcs") & pl.col("away_fcs")))
         return cls(scrimmage, assign_slots(games), team_status, returning, talent, recruiting, lines, polls,
                    player["roster"], player["player_ppa"], player["player_defense"], player["roster_latest"],
-                   player["game_players"], player["draft_picks"], player["portal"])
+                   player["game_players"], player["draft_picks"], player["portal"], player["player_stats"])
 
     def model_plays(self, cfg: Config) -> pl.DataFrame:
         return apply_filters(self.scrimmage, cfg)

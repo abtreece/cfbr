@@ -327,15 +327,73 @@ def build_player_defense(raw: Path) -> pl.DataFrame:
     return wide.select("season", "player_id", "team", *[pl.col(c).fill_null(0.0) for c in cols])
 
 
-GAME_PLAYER_STATS = {
-    ("passing", "C/ATT"): None,  # parsed into pass_cmp / pass_att
-    ("rushing", "CAR"): "rush_att", ("receiving", "REC"): "rec", ("defensive", "TOT"): "tackles",
-    ("defensive", "TFL"): "tfl", ("defensive", "PD"): "pd", ("interceptions", "INT"): "ints",
+# Display-only season stats (roster and player pages); never a model input. CFBD
+# gives one row per (player, team, category, statType), so the sums below never
+# combine two values and LONG stays a single game's long.
+PLAYER_STATS = {
+    ("passing", "COMPLETIONS"): "pass_cmp", ("passing", "ATT"): "pass_att", ("passing", "YDS"): "pass_yds",
+    ("passing", "TD"): "pass_td", ("passing", "INT"): "pass_int",
+    ("rushing", "CAR"): "rush_car", ("rushing", "YDS"): "rush_yds", ("rushing", "TD"): "rush_td",
+    ("receiving", "REC"): "rec", ("receiving", "YDS"): "rec_yds", ("receiving", "TD"): "rec_td",
+    ("defensive", "TOT"): "tackles", ("defensive", "TFL"): "tfl", ("defensive", "SACKS"): "sacks",
+    ("defensive", "PD"): "pd", ("defensive", "QB HUR"): "hurries", ("defensive", "TD"): "def_td",
+    ("interceptions", "INT"): "ints",
+    ("kicking", "FGM"): "fgm", ("kicking", "FGA"): "fga", ("kicking", "LONG"): "fg_long",
+    ("kicking", "XPM"): "xpm", ("kicking", "XPA"): "xpa",
+    ("punting", "NO"): "punts", ("punting", "YDS"): "punt_yds", ("punting", "In 20"): "punt_in20",
 }
+PLAYER_STATS_COLS = list(PLAYER_STATS.values())
+
+
+def build_player_stats(raw: Path) -> pl.DataFrame:
+    """Season box-score stats per (season, player, team), from CFBD season stats.
+    Null = no row in that stat's category (e.g. a receiver's passing)."""
+    rows = []
+    for y, p in _season_files(raw, "stats_player_season"):
+        for r in _read(p):
+            col = PLAYER_STATS.get((r.get("category"), r.get("statType")))
+            if col is None:
+                continue
+            try:
+                v = float(r.get("stat"))
+            except (TypeError, ValueError):
+                continue
+            rows.append({"season": y, "player_id": str(r["playerId"]), "team": r.get("team"), "stat": col, "value": v})
+    long = pl.DataFrame(rows, schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8, "stat": pl.Utf8,
+                                      "value": pl.Float64})
+    if long.is_empty():
+        return pl.DataFrame(schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8,
+                                    **{c: pl.Float64 for c in PLAYER_STATS_COLS}})
+    # Sum first, then pivot with "first": a "sum" pivot would fill absent stats with 0, not null.
+    long = long.group_by("season", "player_id", "team", "stat").agg(pl.col("value").sum())
+    wide = long.pivot(on="stat", index=["season", "player_id", "team"], values="value", aggregate_function="first")
+    for c in PLAYER_STATS_COLS:
+        if c not in wide.columns:
+            wide = wide.with_columns(pl.lit(None, pl.Float64).alias(c))
+    return wide.select("season", "player_id", "team", *PLAYER_STATS_COLS)
+
+
+# Box-score (category, type) -> column. "made/att" stats split into two columns.
+GAME_PLAYER_STATS = {
+    ("passing", "YDS"): "pass_yds", ("passing", "TD"): "pass_td", ("passing", "INT"): "pass_int",
+    ("rushing", "CAR"): "rush_att", ("rushing", "YDS"): "rush_yds", ("rushing", "TD"): "rush_td",
+    ("receiving", "REC"): "rec", ("receiving", "YDS"): "rec_yds", ("receiving", "TD"): "rec_td",
+    ("defensive", "TOT"): "tackles", ("defensive", "TFL"): "tfl", ("defensive", "PD"): "pd",
+    ("defensive", "SACKS"): "sacks", ("defensive", "QB HUR"): "hurries", ("defensive", "TD"): "def_td",
+    ("interceptions", "INT"): "ints",
+    ("kicking", "LONG"): "fg_long",
+    ("punting", "NO"): "punts", ("punting", "YDS"): "punt_yds", ("punting", "In 20"): "punt_in20",
+}
+GAME_PLAYER_SPLIT = {("passing", "C/ATT"): ("pass_cmp", "pass_att"), ("kicking", "FG"): ("fgm", "fga"),
+                     ("kicking", "XP"): ("xpm", "xpa")}
+GAME_PLAYER_MAX = {"fg_long"}
+GAME_PLAYER_COLS = ["pass_cmp", "pass_att", "pass_yds", "pass_td", "pass_int", "rush_att", "rush_yds", "rush_td",
+                    "rec", "rec_yds", "rec_td", "tackles", "tfl", "pd", "sacks", "hurries", "def_td", "ints",
+                    "fgm", "fga", "fg_long", "xpm", "xpa", "punts", "punt_yds", "punt_in20"]
+assert set(GAME_PLAYER_COLS) == set(GAME_PLAYER_STATS.values()) | {c for p in GAME_PLAYER_SPLIT.values() for c in p}
 GAME_PLAYER_SCHEMA = {
     "season": pl.Int32, "season_type": pl.Utf8, "week": pl.Int32, "game_id": pl.Int64, "team": pl.Utf8,
-    "player_id": pl.Utf8, "name": pl.Utf8, "pass_cmp": pl.Float64, "pass_att": pl.Float64, "rush_att": pl.Float64,
-    "rec": pl.Float64, "tackles": pl.Float64, "tfl": pl.Float64, "pd": pl.Float64, "ints": pl.Float64,
+    "player_id": pl.Utf8, "name": pl.Utf8, **{c: pl.Float64 for c in GAME_PLAYER_COLS},
 }
 
 
@@ -360,7 +418,7 @@ def build_game_players(raw: Path) -> pl.DataFrame:
                 for cat in t.get("categories") or []:
                     for ty in cat.get("types") or []:
                         key_stat = (cat.get("name"), ty.get("name"))
-                        if key_stat not in GAME_PLAYER_STATS:
+                        if key_stat not in GAME_PLAYER_STATS and key_stat not in GAME_PLAYER_SPLIT:
                             continue
                         for a in ty.get("athletes") or []:
                             if a.get("id") is None or str(a["id"]).startswith("-"):
@@ -369,14 +427,17 @@ def build_game_players(raw: Path) -> pl.DataFrame:
                             r = rows.setdefault(k, {
                                 "season": year, "season_type": st, "week": int(wk), "game_id": g["id"],
                                 "team": t["team"], "player_id": str(a["id"]), "name": a.get("name"),
-                                **{c: 0.0 for c in ("pass_cmp", "pass_att", "rush_att", "rec", "tackles", "tfl", "pd", "ints")},
+                                **{c: 0.0 for c in GAME_PLAYER_COLS},
                             })
-                            if key_stat == ("passing", "C/ATT"):
-                                cmp_, _, att = str(a.get("stat", "")).partition("/")
-                                r["pass_cmp"] += _num(cmp_)
-                                r["pass_att"] += _num(att)
+                            if key_stat in GAME_PLAYER_SPLIT:
+                                made_col, att_col = GAME_PLAYER_SPLIT[key_stat]
+                                made, _, att = str(a.get("stat", "")).partition("/")
+                                r[made_col] += _num(made)
+                                r[att_col] += _num(att)
+                            elif (col := GAME_PLAYER_STATS[key_stat]) in GAME_PLAYER_MAX:
+                                r[col] = max(r[col], _num(a.get("stat")))
                             else:
-                                r[GAME_PLAYER_STATS[key_stat]] += _num(a.get("stat"))
+                                r[col] += _num(a.get("stat"))
     return pl.DataFrame(list(rows.values()), schema=GAME_PLAYER_SCHEMA)
 
 
@@ -451,7 +512,7 @@ def build_store(raw: Path, db_path: Path) -> dict[str, int]:
             ("calendar", build_calendar), ("polls", build_polls), ("roster", build_roster),
             ("roster_latest", build_roster_latest), ("draft_picks", build_draft_picks), ("portal", build_portal),
             ("player_ppa", build_player_ppa), ("player_defense", build_player_defense),
-            ("game_players", build_game_players),
+            ("player_stats", build_player_stats), ("game_players", build_game_players),
         ]:
             df = builder(raw)
             con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM df")
