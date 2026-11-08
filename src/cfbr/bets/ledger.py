@@ -608,6 +608,11 @@ def summary_markdown(ledger: pl.DataFrame, cfg: Bets, season: int, table: Pricin
         lines += [f"Bets with a snapshot close: {v['n']} of {v['min_bets']} needed. "
                   f"Mean closing-implied ROI: {_fmt(v['mean'], pct=True)} "
                   f"(95% CI [{_fmt(v['ci_low'], pct=True)}, {_fmt(v['ci_high'], pct=True)}]).", ""]
+        if v["split"]:
+            s = v["split"]
+            lines += [f"Context only (the verdict pools all bets): before the {s['at'][:10]} model switch "
+                      f"{s['before']['n']} bets, mean {_fmt(s['before']['mean'], pct=True)}; after it "
+                      f"{s['after']['n']} bets, mean {_fmt(s['after']['mean'], pct=True)}.", ""]
     lines += [f"Status (provisional until the decision point): **{v['status']}**.", ""]
     wk = weekly(ledger, cfg)
     if wk:

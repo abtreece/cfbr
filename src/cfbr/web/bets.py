@@ -272,6 +272,14 @@ def clean_summary(m: dict) -> dict:
     return {k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in m.items()}
 
 
+def clean_verdict(v: dict) -> dict:
+    """clean_summary, also inside the nested before/after split (JSON has no NaN)."""
+    s = v["split"]
+    if s is not None:
+        s = {"at": s["at"], "before": clean_summary(s["before"]), "after": clean_summary(s["after"])}
+    return clean_summary(v) | {"split": s}
+
+
 def parse_pick(game: str | None, side: str | None) -> tuple[int, str]:
     """The form's game select and team choice."""
     from cfbr.bets.real import RealBetError
@@ -515,7 +523,7 @@ def make_router(cfg: Config, store: Store, render: Callable[..., HTMLResponse]) 
             "summary_best_line": clean_summary(summarize(ledger, cfg.bets, "best")),
             "weekly": [clean_summary(w) for w in weekly(ledger, cfg.bets)],
             "tiers": [clean_summary(t) for t in by_tier(ledger, cfg.bets)],
-            "verdict": clean_summary(verdict(ledger, cfg.bets, season_pricing_table(season))),
+            "verdict": clean_verdict(verdict(ledger, cfg.bets, season_pricing_table(season))),
             "tests": [clean_summary(t) | {"groups": [clean_summary(g) for g in t["groups"]]}
                       for t in tracked_tests(ledger, cfg.bets)],
             "what_if": what_if(ledger, cfg.bets),

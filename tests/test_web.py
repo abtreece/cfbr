@@ -665,6 +665,18 @@ def test_bets_page(bets_client):
     assert "No conclusion yet." in html and "of the 50 per group set as the minimum" in html and "Decision rule:" in html
 
 
+def test_bets_api_verdict_split_is_json_safe(web_cfg):
+    from cfbr.web.bets import clean_verdict
+
+    v = {"status": "too few", "n": 0, "mean": float("nan"),
+         "split": {"at": "2026-11-09T00:00:00+00:00", "before": {"n": 0, "mean": float("nan")},
+                   "after": {"n": 2, "mean": -0.045}}}
+    c = clean_verdict(v)
+    assert c["mean"] is None and c["split"]["before"]["mean"] is None and c["split"]["after"]["mean"] == -0.045
+    assert json.loads(json.dumps(c, allow_nan=False)) == c
+    assert clean_verdict(v | {"split": None})["split"] is None
+
+
 def test_bets_api_matches_ledger_summary(bets_client, web_cfg):
     from cfbr.bets.ledger import read_ledger, summarize
 
@@ -1736,6 +1748,19 @@ def test_model_name_is_site_text_only(client):
 
 def test_footer_shows_build_time(client):
     assert "data built" in client.get("/rankings").text
+
+
+def test_method_page_describes_the_fcs_two_stage_fit(web_cfg):
+    web_cfg.prep.fcs_pooling = "conference"
+    web_cfg.model.fcs_two_stage = True
+    web_cfg.model.fcs_weight = 0.537
+    _write_season(web_dir(web_cfg), datetime.now(UTC))
+    html = " ".join(TestClient(create_app(web_cfg)).get("/method").text.split())
+    assert "counts for 54% of a normal game" in html
+    assert "restated in November 2026" in html
+    web_cfg.model.fcs_two_stage = False
+    html = " ".join(TestClient(create_app(web_cfg)).get("/method").text.split())
+    assert "of a normal game" not in html
 
 
 def test_method_page_holds_shared_definitions(client, web_cfg):

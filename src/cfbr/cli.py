@@ -279,11 +279,12 @@ def _default_config(config: Optional[Path]):
 @app.command("fcs-gate")
 def fcs_gate(
     gate: Annotated[int, typer.Option(help="1 = 2015–2021, 2 = 2022–2025, 3 = 2026 through week 10")],
-    v2: Annotated[Optional[Path], typer.Option(help="Candidate config (default config/tuned_v2.toml)")] = None,
+    v2: Annotated[Optional[Path], typer.Option(help="Candidate config (default config/tuned.toml, adopted)")] = None,
     config: ConfigOpt = None,
 ) -> None:
     """FCS two-stage gate (DECISIONS "FCS games, two-stage fit"): paired MAE gain of the tuned two-stage
-    candidate over the published config. Gates run in order; each needs the previous one passed.
+    candidate over the v1 config. Gates run in order; each needs the previous one passed. Since adoption
+    the defaults are v1 = config/tuned_v1.toml and candidate = config/tuned.toml, so the record reproduces.
     Writes results/<ts>-fcs-gate-N/."""
     import json
 
@@ -293,8 +294,8 @@ def fcs_gate(
 
     if gate not in GATES:
         raise typer.BadParameter(f"--gate must be one of {sorted(GATES)}")
-    v1_cfg = load_config(config or REPO_ROOT / "config" / "tuned.toml")
-    v2_cfg = load_config(v2 or REPO_ROOT / "config" / "tuned_v2.toml")
+    v1_cfg = load_config(config or REPO_ROOT / "config" / "tuned_v1.toml")
+    v2_cfg = load_config(v2 or REPO_ROOT / "config" / "tuned.toml")
     if gate > 1:
         prev = latest_gate(v1_cfg.paths.results_dir, gate - 1)
         if not prev or not prev["primary"]["passes"]:

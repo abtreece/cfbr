@@ -27,7 +27,7 @@ def test_fcs_sensitivity_grid_never_turns_recency_off_or_varies_fixed_settings()
 
 
 def test_patch_frozen_changes_only_the_named_keys(tmp_path):
-    base = REPO_ROOT / "config" / "tuned.toml"
+    base = REPO_ROOT / "config" / "tuned_v1.toml"
     out = tmp_path / "t.toml"
     best = {"fcs_two_stage": True, "fcs_weight": 0.12, "alpha_ppa": 250.0, "alpha_sr": 80.0,
             "half_life_weeks": 4.2, "fcs_pooling": "conference", "gt_enabled": False}
@@ -37,4 +37,4 @@ def test_patch_frozen_changes_only_the_named_keys(tmp_path):
     assert cfg.baseline == ref.baseline and cfg.ingest == ref.ingest and cfg.seasons == ref.seasons
     assert cfg.prior == ref.prior and cfg.backtest == ref.backtest and cfg.bets == ref.bets
     assert cfg.prep == ref.prep
-    assert "[bets]" not in out.read_text()  # unlisted sections stay on pydantic defaults, as in tuned.toml
+    assert "[bets]" not in out.read_text()  # unlisted sections stay on pydantic defaults, as in tuned_v1.toml

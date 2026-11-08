@@ -99,6 +99,9 @@ class Bets(BaseModel):
     # "Paper-bet verdict by closing-line value").
     # Pre-registered in DECISIONS.md (2026-10-30): changing this breaks the pre-registration.
     verdict_min_bets: int = 300
+    # When the published model changed mid-season (DECISIONS "FCS games, two-stage fit"): bets recorded
+    # at or after this ISO time are shown separately, as context only; the verdict still pools all bets.
+    verdict_split_at: str | None = None
     # Offshore books: their lines feed the consensus (market data) but a bet is
     # never priced at one, so they never supply the best-line number.
     offshore_books: list[str] = ["Bovada", "BetOnline", "LowVig", "MyBookie", "BetUS", "Bookmaker", "5Dimes",

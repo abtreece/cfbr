@@ -48,10 +48,15 @@ def _stage1(a, w, alpha=300.0, keep=None):
                                  None if w is None else w[sel], a.center)
 
 
-def test_config_defaults_leave_behaviour_unchanged():
-    for path in (None, "config/tuned.toml"):
+def test_config_files():
+    for path in (None, "config/tuned_v1.toml"):
         m = load_config(path).model
         assert m.fcs_two_stage is False and m.fcs_weight == 1.0
+    v1, pub = load_config("config/tuned_v1.toml"), load_config("config/tuned.toml")
+    assert pub.model.fcs_two_stage is True and 0.0 <= pub.model.fcs_weight <= 1.0
+    assert (v1.model.alpha_ppa, v1.model.alpha_sr, v1.model.half_life_weeks) == (303.298, 90.7544, 3.6978)
+    assert pub.baseline == v1.baseline and pub.prep == v1.prep and pub.prior == v1.prior
+    assert pub.bets.verdict_min_bets == v1.bets.verdict_min_bets
 
 
 def test_fcs_weight_must_be_a_fraction():
