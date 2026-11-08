@@ -394,14 +394,30 @@ def test_build_player_stats_and_box_score_kicking(tmp_path):
     assert "-1" not in gp["player_id"].to_list()                                # team totals dropped
 
 
-def test_roster_web_box_score_stats_and_duplicate_ppa_rows():
+def test_build_player_ppa_drops_cfbd_duplicate_rows(tmp_path):
+    import json
+
+    from cfbr.ingest.store import build_player_ppa
+
+    def ppa(pid, team, conference, total):
+        return {"season": 2025, "id": pid, "name": pid, "position": "RB", "team": team, "conference": conference,
+                "averagePPA": {"all": total / 100}, "totalPPA": {"all": total}}
+    (tmp_path / "ppa_players_season" / "2025").mkdir(parents=True)
+    (tmp_path / "ppa_players_season" / "2025" / "season.json").write_text(json.dumps([
+        ppa("rb", "Troy", "SBC", 40.0), ppa("rb", "Troy", "", 40.0),     # CFBD repeats a player with conference ""
+        ppa("tr", "A", "X", 10.0), ppa("tr", "B", "Y", 5.0)]))         # a mid-season transfer keeps both teams
+    built = build_player_ppa(tmp_path)
+    assert sorted(built.select("player_id", "team").rows()) == [("rb", "Troy"), ("tr", "A"), ("tr", "B")]
+    assert built.filter(pl.col("player_id") == "rb")["total_ppa"].sum() == 40.0
+
+
+def test_roster_web_box_score_stats():
     from types import SimpleNamespace
 
     from cfbr.ingest.store import PLAYER_STATS_COLS
     from cfbr.report.roster_web import PREV_STATS, roster_tables
 
     roster, ppa, d, status = _data()
-    ppa = pl.concat([ppa, ppa.filter(pl.col("player_id") == "qbB")])  # CFBD repeats some rows verbatim
     cur = pl.DataFrame({"season": [2026] * 2, "player_id": ["kA", "pA"], "team": ["A", "A"], "position": ["PK", "P"],
                         "class_year": [3, 2]})
     roster = (pl.concat([roster, cur], how="diagonal_relaxed")
@@ -420,7 +436,7 @@ def test_roster_web_box_score_stats_and_duplicate_ppa_rows():
                          fbs_teams=lambda s: ["A", "B"])
     t = roster_tables(ds, 2026)
     p = t["roster_players"]
-    assert p.height == p["player_id"].n_unique()                       # duplicate PPA rows don't duplicate players
+    assert p.height == p["player_id"].n_unique()                       # one row per player
     assert all(f"prev_{c}" in p.columns for c in PREV_STATS) and "prev_tackles" in p.columns
     rows = {r["player_id"]: r for r in p.iter_rows(named=True)}
     assert (rows["qbB"]["prev_pass_yds"], rows["qbB"]["prev_pass_td"]) == (2500.0, 20.0)

@@ -316,11 +316,20 @@ def build_player_ppa(raw: Path) -> pl.DataFrame:
     season stats (null when the player has none). Averages come straight from
     CFBD's averagePPA. (Earlier versions back-calculated plays as total/average,
     which blows up when the rounded average is near zero.)
+
+    CFBD lists some players twice for the same team, once with ``conference``
+    empty and otherwise identical (25-63 a season), so only the first row per
+    season, player and team is kept. A mid-season transfer keeps one row per team.
     """
     counts = _season_counts(raw)
     rows = []
+    seen: set[tuple[int, str, str | None]] = set()
     for y, p in _season_files(raw, "ppa_players_season"):
         for r in _read(p):
+            key = (y, str(r["id"]), r.get("team"))
+            if key in seen:
+                continue
+            seen.add(key)
             avg, tot = r.get("averagePPA") or {}, r.get("totalPPA") or {}
             c = counts.get((y, str(r["id"])))
             plays = (c.get("pass_att", 0.0) + c.get("rush_car", 0.0) + c.get("rec", 0.0)) if c else None
