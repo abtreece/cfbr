@@ -119,8 +119,10 @@ class Engine:
         return self._arrays[season]
 
     # -- fits ---------------------------------------------------------------
-    def _fit(self, season: int, prior: pl.DataFrame | None, as_of=None) -> pl.DataFrame:
-        """Fit both components on season plays with kickoff < as_of (all plays when None)."""
+    def _fit(self, season: int, prior: pl.DataFrame | None, as_of=None, mask: np.ndarray | None = None) -> pl.DataFrame:
+        """Fit both components on season plays with kickoff < as_of (all plays when None).
+        ``mask`` (bool, length n_before(as_of)) keeps only some of those plays; the what-moved
+        breakdown uses it for leave-one-game-out refits through this same path."""
         a = self.arrays(season)
         k = a.n_before(as_of)
         teams = a.teams
@@ -131,22 +133,27 @@ class Engine:
             p = {c: None for c in RATING_COLS}
         m = self.cfg.model
         w = play_weights(a, k, None if as_of is None else _ns(as_of), m)
-        off, de, h = a.off[:k], a.de[:k], a.home[:k]
-        f_ppa = fit_efficiency_arrays(off, de, h, a.ppa[:k], teams, m.alpha_ppa, p["o_ppa"], p["d_ppa"], w, a.center)
-        f_sr = fit_efficiency_arrays(off, de, h, a.success[:k], teams, m.alpha_sr, p["o_sr"], p["d_sr"], w, a.center)
+        sel = slice(None) if mask is None else np.asarray(mask, dtype=bool)
+        off, de, h = a.off[:k][sel], a.de[:k][sel], a.home[:k][sel]
+        ppa, success = a.ppa[:k][sel], a.success[:k][sel]
+        w = None if w is None else w[sel]
+        f_ppa = fit_efficiency_arrays(off, de, h, ppa, teams, m.alpha_ppa, p["o_ppa"], p["d_ppa"], w, a.center)
+        f_sr = fit_efficiency_arrays(off, de, h, success, teams, m.alpha_sr, p["o_sr"], p["d_sr"], w, a.center)
         if m.fcs_two_stage:
             # Stage 2 (DECISIONS "FCS games, two-stage fit"): FCS rows from FCS plays at full recency
             # weight, Stage 1 FBS ratings held fixed. w_off/w_def below stay the Stage 1 weights.
             rec = None if as_of is None else recency_weights(a.kickoff_ns[:k], _ns(as_of), m.half_life_weeks)
+            rec = None if rec is None else rec[sel]
             fcs = ~a.center
-            f_ppa = fit_fcs_stage2(off, de, h, a.ppa[:k], fcs, m.alpha_ppa, f_ppa, p["o_ppa"], p["d_ppa"], rec)
-            f_sr = fit_fcs_stage2(off, de, h, a.success[:k], fcs, m.alpha_sr, f_sr, p["o_sr"], p["d_sr"], rec)
+            f_ppa = fit_fcs_stage2(off, de, h, ppa, fcs, m.alpha_ppa, f_ppa, p["o_ppa"], p["d_ppa"], rec)
+            f_sr = fit_fcs_stage2(off, de, h, success, fcs, m.alpha_sr, f_sr, p["o_sr"], p["d_sr"], rec)
         n = len(teams)
         w_off = np.bincount(off, weights=w, minlength=n).astype(float)
         w_def = np.bincount(de, weights=w, minlength=n).astype(float)
         return pl.DataFrame({
             "team": teams, "o_ppa": f_ppa.o, "d_ppa": f_ppa.d, "o_sr": f_sr.o, "d_sr": f_sr.d,
             "n_off": f_ppa.n_off, "n_def": f_ppa.n_def, "w_off": w_off, "w_def": w_def,
+            "home_ppa": np.full(n, f_ppa.home), "home_sr": np.full(n, f_sr.home),
         })
 
     def final(self, season: int) -> pl.DataFrame:
