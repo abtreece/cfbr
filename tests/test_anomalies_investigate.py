@@ -238,3 +238,19 @@ def test_auth_alert():
     title, body, priority = investigate_alert(s)
     assert title == "cfbr investigate: Anthropic key rejected" and priority == "high"
     assert "HTTP 401" in body
+
+
+def test_doc_write_failure_is_not_an_item_error(env, monkeypatch):
+    cfg, path = env
+    real_patch = __import__("cfbr.anomalies.run", fromlist=["_patch"])._patch
+
+    def failing_patch(doc_path, ids, patch):
+        if patch.get("status") == "investigated":
+            raise OSError("No space left on device")
+        return real_patch(doc_path, ids, patch)
+
+    monkeypatch.setattr("cfbr.anomalies.run._patch", failing_patch)
+    with pytest.raises(OSError, match="No space left"):
+        investigate_doc(cfg, path, FakeClient(_ok_script()), now=NOW)
+    row = next(r for r in read_doc(path)["items"] if r["check"] == "A2")
+    assert row["status"] == "pending" and "attempts" not in row  # not misrecorded as a transient/item error

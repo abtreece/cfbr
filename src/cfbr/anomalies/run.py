@@ -214,13 +214,15 @@ def _investigate_locked(cfg: Config, doc_path: Path, client, *, now: datetime | 
         session = ToolSession(icfg.snapshot, cfg.paths.out_dir, int(row["season"]), int(row["week"]), icfg)
         outcome = None
         try:
-            outcome = investigate(client, row, _context(doc, row), session, system, icfg, icfg.ledger, clock)
-            _patch(doc_path, [row["id"]], {"status": "investigated", "verdict": outcome,
-                                           "investigated_at": now.isoformat()})
-            summary["items"].append({"id": row["id"], "check": row["check"], "message": row["message"],
-                                     **{k: outcome[k] for k in ("verdict", "confidence", "summary",
-                                                                "model_impact", "reason")}})
-        except Exception as e:  # noqa: BLE001 - classified below; one item never stops the others unless auth/budget
+            try:
+                outcome = investigate(client, row, _context(doc, row), session, system, icfg, icfg.ledger, clock)
+            finally:
+                transcript = icfg.transcripts / str(row["season"]) / f"w{int(row['week']):02d}" / f"{row['id']}.json"
+                transcript.parent.mkdir(parents=True, exist_ok=True)
+                transcript.write_text(json.dumps({"row": row, "queries": session.log, "outcome": outcome},
+                                                 indent=2, default=str) + "\n")
+                session.close()
+        except Exception as e:  # noqa: BLE001 - only API/agent failures land here; doc writes below are not item errors
             kind = classify_error(e)
             error = f"{type(e).__name__}: {e}"[:300]
             if kind == "auth":
@@ -239,12 +241,12 @@ def _investigate_locked(cfg: Config, doc_path: Path, client, *, now: datetime | 
             else:
                 _patch(doc_path, [row["id"]], {"status": "error", "attempts": attempts, "last_error": error})
                 summary["errors"] += 1
-        finally:
-            transcript = icfg.transcripts / str(row["season"]) / f"w{int(row['week']):02d}" / f"{row['id']}.json"
-            transcript.parent.mkdir(parents=True, exist_ok=True)
-            transcript.write_text(json.dumps({"row": row, "queries": session.log, "outcome": outcome},
-                                             indent=2, default=str) + "\n")
-            session.close()
+            continue
+        _patch(doc_path, [row["id"]], {"status": "investigated", "verdict": outcome,
+                                       "investigated_at": now.isoformat()})
+        summary["items"].append({"id": row["id"], "check": row["check"], "message": row["message"],
+                                 **{k: outcome[k] for k in ("verdict", "confidence", "summary",
+                                                            "model_impact", "reason")}})
     doc_path.with_suffix(".md").write_text(render_md(read_doc(doc_path)))
     summary["cost_usd"] = round(_ledger_total(icfg.ledger) - ledger_before, 2)
     return summary
