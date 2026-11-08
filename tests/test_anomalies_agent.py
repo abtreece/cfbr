@@ -33,8 +33,10 @@ def test_system_prompt_carries_schema_and_domain_notes(tmp_path):
     assert schema == "games(game_id BIGINT, home_team VARCHAR)"
     system = build_system(schema)
     for needle in ["games(game_id BIGINT, home_team VARCHAR)", "play_id::DECIMAL(38,0)", "after the play",
-                   "2025 week 8", "submit_verdict", "result_id", "model_plays"]:
+                   "2025 week 8", "submit_verdict", "result_id", "model_plays", "a PPA value",
+                   "garbage-time filter is off"]:
         assert needle in system, needle
+    assert build_system(schema) == system  # byte-identical, so the prompt caches across a run
 
 
 def test_item_message_has_the_record_and_context_but_no_status():

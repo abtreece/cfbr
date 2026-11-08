@@ -72,9 +72,10 @@ when offense = home, else defense_score.
 - games has one row per game: home_points/away_points are finals, home_class/away_class are 'fbs', 'fcs', 'ii', \
 'iii' or NULL, plus completed and neutral_site.
 - model_plays holds the plays the model fits on, after filtering. Kickoffs, punts, field goals, penalty-only rows, \
-timeouts, end-of-period rows, two-point tries and uncategorized rows are dropped. Plays where both offense and \
-defense are non-FBS are dropped. Non-FBS teams are pooled into FCS entities (offense_fcs/defense_fcs), and plays with \
-a pooled FCS side get reduced weight in the fit.
+timeouts, end-of-period rows, two-point tries and uncategorized rows are dropped, as are rows without a down (1-4), \
+a positive distance or a PPA value. Plays where both offense and defense are non-FBS are dropped. Non-FBS teams are \
+pooled into FCS entities (offense_fcs/defense_fcs; offense/defense hold the pooled name, offense_team/defense_team the \
+real one), and plays with a pooled FCS side get reduced weight in the fit. The garbage-time filter is off.
 - Penalty-only rows have yards_gained signed from the offense's view through 2025 week 8 and unsigned after.
 - CFBD has listed the same play twice: hundreds of games a season in 2022-2025, rare in 2026.
 - team_status is derived from games plus CFBD's FBS team list, per season.
