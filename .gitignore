@@ -1,15 +1,10 @@
 .keys
 .env
-data/raw/
-data/*.duckdb
-data/*.duckdb.wal
+data/
 results/
 out/
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
-data/.weekly.lock
-data/*.log
-data/news/
 .claude/worktrees/
