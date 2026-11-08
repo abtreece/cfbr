@@ -311,3 +311,32 @@ def test_load_config_resolves_investigate_paths_against_repo_root(monkeypatch, t
     i = load_config().investigate
     for p in (i.ledger, i.snapshot, i.transcripts):
         assert p.is_absolute() and p.is_relative_to(REPO_ROOT)
+
+
+def test_cli_investigate_crash_sends_an_alert_and_fails(env, monkeypatch):
+    from cfbr import cli
+    cfg, path = env
+    sent = []
+    monkeypatch.setattr(cli, "_default_config", lambda c: cfg)
+    monkeypatch.setattr("cfbr.config.anthropic_api_key", lambda: "sk-test")
+    monkeypatch.setattr("cfbr.alerts.send", lambda cfg_, title, message, priority="high": sent.append(title) or True)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("cfbr.anomalies.run.investigate_doc", boom)
+    result = CliRunner().invoke(cli.app, ["investigate", "--doc", str(path)])
+    assert result.exit_code != 0
+    assert sent == ["cfbr investigate crashed"]
+
+
+def test_cli_sample_patterns_refuses_to_overwrite(env, monkeypatch):
+    from cfbr import cli
+    cfg, _ = env
+    monkeypatch.setattr(cli, "_default_config", lambda c: cfg)
+    out = cfg.paths.results_dir / "anomaly_shakedown" / "anomalies.json"
+    out.parent.mkdir(parents=True)
+    out.write_text("paid verdicts")
+    result = CliRunner().invoke(cli.app, ["anomalies", "--sample-patterns", "--seasons", "2022-2022"])
+    assert result.exit_code == 1 and "exists" in result.output
+    assert out.read_text() == "paid verdicts"

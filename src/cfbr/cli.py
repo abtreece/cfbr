@@ -511,9 +511,9 @@ def investigate(
     if not key:
         typer.echo("no ANTHROPIC_API_KEY: investigation is off")
         return
-    import anthropic
-
     try:
+        import anthropic
+
         summary = arun.investigate_doc(cfg, doc, anthropic.Anthropic(api_key=key), force_ids=force_ids)
     except Exception as e:
         send(cfg, "cfbr investigate crashed", f"{type(e).__name__}: {e}"[:300])
