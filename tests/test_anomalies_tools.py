@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import duckdb
 import polars as pl
 import pytest
@@ -37,13 +40,50 @@ def test_query_caps_rows_and_chars(env):
     small.close()
 
 
-@pytest.mark.parametrize("sql", ["SELECT * FROM read_csv('/etc/hosts')", "ATTACH '/tmp/x.db'",
-                                 "COPY (SELECT 1) TO '/tmp/y.csv'", "CREATE TABLE t AS SELECT 1",
-                                 "SET enable_external_access = true", "INSTALL httpfs"])
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM read_csv('/etc/hosts')", "ATTACH '/tmp/x.db'", "COPY (SELECT 1) TO '/tmp/y.csv'",
+    "CREATE TABLE t AS SELECT 1", "SET enable_external_access = true", "INSTALL httpfs",
+    "SELECT 1; SELECT 2", "CALL enable_logging()", "CHECKPOINT", "CREATE TEMP TABLE x AS SELECT 1",
+    "SET VARIABLE v = 1", "SELECT * FROM query('SELECT 1')", "SELECT * FROM QUERY_TABLE('games')",
+    "COPY (SELECT 1) TO '{wal}'"])
 def test_sandbox_refuses_writes_files_and_config(env, sql):
-    text, err = env.query(sql)
+    text, err = env.query(sql.format(wal=f"{env.db_path}.wal"))
     assert err and text.startswith("result_id 1: error:")
     assert 1 not in env.results and env.log[0]["ok"] is False
+
+
+def test_enable_logging_select_is_refused_without_executing(tmp_path):
+    db = tmp_path / "snap.duckdb"
+    with duckdb.connect(str(db)) as con:
+        con.execute("CREATE TABLE games AS SELECT 1 AS game_id")
+    code = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from cfbr.anomalies.tools import ToolSession\n"
+        "from cfbr.config import Investigate\n"
+        "s = ToolSession(Path(sys.argv[1]), Path(sys.argv[2]), 2026, 9, Investigate())\n"
+        "text, err = s.query(\"SELECT * FROM enable_logging(storage='file', storage_path='/nonexistent/x')\")\n"
+        "print(text)\n"
+        "s.close()\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code, str(db), str(tmp_path)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert "refused" in proc.stdout
+
+
+def test_tmp_directory_write_refused_even_when_it_exists(env):
+    tmp_dir = env.db_path.parent / f"{env.db_path.name}.tmp"
+    tmp_dir.mkdir()
+    text, err = env.query(f"COPY (SELECT 1) TO '{tmp_dir / 'x.csv'}'")
+    assert err and text.startswith("result_id 1: error:")
+    assert not (tmp_dir / "x.csv").exists()
+
+
+def test_allowed_introspection_and_timestamptz(env):
+    for sql in ("DESCRIBE games", "SELECT game_id FROM games LIMIT 1",
+                "SELECT TIMESTAMPTZ '2026-11-08 12:00:00+00' AS ts"):
+        text, err = env.query(sql)
+        assert not err, text
 
 
 def test_query_timeout_interrupts(env):

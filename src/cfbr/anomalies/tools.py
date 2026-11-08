@@ -1,14 +1,20 @@
 """Tools for the investigation agent.
 
-`query` runs SQL on a snapshot of cfb.duckdb opened read-only, with external access disabled
-and configuration locked: no writes, no file reads (read_csv on .keys), no ATTACH, COPY or
-INSTALL, and no SET to undo that. `read_output` serves a fixed set of `rank` output files by
-name, never by path. Both tools number their results in one sequence; a verdict's evidence cites
-those ids and the grounding check (agent.grounded) looks them up in `results`.
+`query` enforces, in order: (1) the SQL must parse as exactly one statement of type SELECT
+(DuckDB also classifies PRAGMA, DESCRIBE, SHOW and SUMMARIZE as SELECT); (2) it must not call a
+function on DENIED_FUNCTIONS; then it runs on a snapshot of cfb.duckdb opened read-only with
+external access disabled (no file reads such as read_csv on .keys, no ATTACH, COPY or INSTALL),
+configuration locked (no SET to undo that) and temp_directory empty (so DuckDB's automatic
+allowance for `<db>.tmp/` is gone; `<db>.wal` is refused by the read-only, no-external-access
+connection). Refusals are returned as tool errors. `read_output` serves a fixed set of `rank`
+output files by name, never by path. Both tools number their results in one sequence; a
+verdict's evidence cites those ids and the grounding check (agent.grounded) looks them up in
+`results`.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -24,6 +30,25 @@ OUTPUT_FILES = {
 }
 
 
+# enable_logging/disable_logging/truncate_duckdb_logs: calling them aborts the whole process
+# (uncaught C++ PermissionException); query/query_table: run string-built SQL that bypasses the
+# single-SELECT statement gate.
+DENIED_FUNCTIONS = ("enable_logging", "disable_logging", "truncate_duckdb_logs", "query", "query_table")
+_DENIED_CALL = re.compile(r"\b(" + "|".join(DENIED_FUNCTIONS) + r")\s*\(", re.IGNORECASE)
+
+
+def _refusal(sql: str) -> str | None:
+    try:
+        statements = duckdb.extract_statements(sql)
+    except Exception as e:  # noqa: BLE001 - parser message goes back to the model
+        return str(e)
+    if len(statements) != 1 or statements[0].type.name != "SELECT":
+        return "exactly one SELECT statement is allowed"
+    if m := _DENIED_CALL.search(sql):
+        return f"{m.group(1).lower()}() is not allowed"
+    return None
+
+
 def _cell(v) -> str:
     return "NULL" if v is None else str(v)
 
@@ -32,7 +57,8 @@ class ToolSession:
     def __init__(self, db_path: Path, out_dir: Path, season: int, week: int, cfg: Investigate):
         self.db_path, self.out_dir, self.season, self.week, self.cfg = db_path, out_dir, season, week, cfg
         self.con = duckdb.connect(str(db_path), read_only=True,
-                                  config={"enable_external_access": False, "lock_configuration": True})
+                                  config={"enable_external_access": False, "lock_configuration": True,
+                                          "temp_directory": ""})
         self.results: dict[int, str] = {}
         self.log: list[dict] = []
 
@@ -51,6 +77,8 @@ class ToolSession:
 
     def query(self, sql: str) -> tuple[str, bool]:
         rid = self._next_id()
+        if (reason := _refusal(sql)) is not None:
+            return self._done(rid, "query", sql, f"result_id {rid}: error: refused: {reason}", False)
         timed_out = threading.Event()
 
         def stop() -> None:
