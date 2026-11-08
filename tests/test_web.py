@@ -36,11 +36,19 @@ def _ratings() -> pl.DataFrame:
                 "offense": 10.0 - i, "defense": 10.0 - 4 * i + week, "prior_share": 1.0 - 0.3 * week,
                 "rating_change": None if week == 0 else 1.0, "rank_change": None if week == 0 else 0,
                 "o_ppa": 0.1, "d_ppa": 0.1, "o_sr": 0.05, "d_sr": 0.05,
+                "move_decay": None if week == 0 else -0.2, "move_own": None if week == 0 else 1.5,
+                "move_others": None if week == 0 else -0.3,
+                "passed_by": None if week == 0 else (["Ohio State"] if i == 0 else []),
+                "passed": None if week == 0 else [], "n_passed_by": None if week == 0 else (1 if i == 0 else 0),
+                "n_passed": None if week == 0 else 0,
             })
     rows.append({**rows[-1], "team": "FCS:Big Sky", "conference": None, "fbs": False, "rank": None,
                  "rating": -20.0, "rating_change": 0.0, "rank_change": None})
     return pl.DataFrame(rows, schema_overrides={"rank": pl.Int32, "rank_change": pl.Int32,
-                                                "rating_change": pl.Float64})
+                                                "rating_change": pl.Float64, "move_decay": pl.Float64,
+                                                "move_own": pl.Float64, "move_others": pl.Float64,
+                                                "passed_by": pl.List(pl.Utf8), "passed": pl.List(pl.Utf8),
+                                                "n_passed_by": pl.Int32, "n_passed": pl.Int32})
 
 
 def _game(gid, slot, home, away, kickoff, completed, hp=None, ap=None, pred=3.0, spread=-2.5):
@@ -54,6 +62,8 @@ def _game(gid, slot, home, away, kickoff, completed, hp=None, ap=None, pred=3.0,
         "win_prob": 1 / (1 + math.exp(-pred / 8)), "prior_pred": pred, "massey_pred": pred - 1, "sigma": 16.0,
         "prior_share_h": 0.5, "prior_share_a": 0.5, "home_points": hp, "away_points": ap,
         "home_conference": "SEC", "away_conference": "SEC", "spread": spread,
+        "home_ppa": 0.25, "away_ppa": 0.05, "home_sr": 0.48, "away_sr": 0.38, "exp_ppa_edge": 0.10,
+        "exp_sr_edge": 0.04,
     }
 
 
@@ -862,6 +872,10 @@ def test_free_api_withholds_live_model_output(free_client):
         assert any(g["spread"] is not None for g in games)  # lines are public
     assert free_client.get("/api/rankings?season=2025").json()["teams"][0]["rating"] == 21.0
     assert free_client.get("/bets").status_code == 402 and free_client.get("/api/bets").status_code == 402
+    from cfbr.web.app import MODEL_GAME_COLS, MODEL_RATING_COLS
+
+    assert {"move_own", "move_decay", "move_others", "passed_by", "passed"} <= set(MODEL_RATING_COLS)
+    assert {"exp_ppa_edge", "exp_sr_edge"} <= set(MODEL_GAME_COLS)
 
 
 def test_accuracy_stays_free_and_aggregate(free_client):
@@ -2637,3 +2651,38 @@ def test_bets_verdict_withheld_for_past_season(web_cfg):
 def test_bets_verdict_missing_table(bets_client):
     html = " ".join(bets_client.get("/bets").text.split())
     assert "Pricing table not available" in html and "not recomputed" not in html
+
+
+# -- what moved (spec 2026-11-08-what-moved-design.md) ---------------------------------
+
+def test_team_page_shows_what_moved(client):
+    html = " ".join(client.get(f"/team/{SEASON}/Texas%20A%26M").text.split())
+    assert "What moved" in html and "Own game" in html and "+1.50" in html
+    assert "Older plays fading" in html and "−0.20" in html and "Other games" in html
+    assert "Beat &lt;b&gt;Evil&lt;/b&gt; 31–10" in html  # opponent name escaped
+    assert "expected to win by 10.0" in html
+    assert "PPA +0.250 vs +0.050" in html and "48.0% vs 38.0%" in html
+    assert "Passed by</th><td></td><td>Ohio State" in html.replace("> <", "><")
+
+
+def test_what_moved_bye_week():
+    from cfbr.web.app import what_moved
+
+    hist = [{"label": "Preseason", "as_of": T0, "rating": 1.0, "rank": 2, "move_own": None},
+            {"label": "Week 1", "as_of": T0 + timedelta(days=7), "rating": 0.8, "rank": 3, "rank_change": -1,
+             "rating_change": -0.2, "move_own": 0.0, "move_decay": -0.2, "move_others": 0.0,
+             "passed_by": ["X"], "passed": [], "n_passed_by": 1, "n_passed": 0}]
+    m = what_moved(hist, [])
+    assert m["games"] == [] and m["own"] == 0.0 and m["passed_by"] == ["X"]
+    assert what_moved(hist[:1], []) is None
+
+
+def test_rankings_tooltips_and_prior_column(client):
+    html = client.get(f"/rankings?season={SEASON}&week=1").text
+    assert 'title="Own game +1.50 · fading −0.20 · others −0.30 · passed by Ohio State"' in html
+    assert 'class="num opt" title="How much of the rating' in html  # Prior no longer behind More columns
+
+
+def test_free_viewers_get_no_what_moved(free_client):
+    html = free_client.get(f"/team/{SEASON}/Texas%20A%26M").text
+    assert "What moved" not in html and "Own game" not in html
