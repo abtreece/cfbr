@@ -1,4 +1,5 @@
 import duckdb
+import polars as pl
 import pytest
 
 from cfbr.anomalies import checks
@@ -109,3 +110,54 @@ def test_a5_flags_status_change_only_in_first_week(tmp_path):
     assert msg["Sacramento State"] == "Sacramento State: fcs last season → fbs this season (check FBS status and pooling)"
     assert msg["Newco"] == "Newco: no row last season → fbs this season (check FBS status and pooling)"
     assert all(not a.investigate and a.alert for a in out)
+
+
+THRESH = {"b1": {"1-3": 9.0, "4-7": 6.0, "8+": 4.0}, "b3": {"max_abs_gap": 18.0}}
+
+
+def test_week_bucket():
+    assert [checks.week_bucket(w) for w in (1, 3, 4, 7, 8, 15)] == ["1-3", "1-3", "4-7", "4-7", "8+", "8+"]
+
+
+def test_b1_uses_the_week_bucket_threshold(tmp_path):
+    p = tmp_path / "rankings.csv"
+    pl.DataFrame({"rank": [1, 2, 3], "team": ["Iowa", "Rice", "Ohio"],
+                  "rating_change": [-4.5, 3.9, None]}).write_csv(p)
+    out = checks.b1_rating_moves(p, 2026, 9, THRESH)                     # 8+: threshold 4.0
+    assert [(a.key, a.value, a.threshold, a.investigate) for a in out] == [("Iowa", -4.5, 4.0, True)]
+    assert out[0].message == "Iowa: rating -4.5 this week (threshold 4.0, weeks 8+)"
+    assert checks.b1_rating_moves(p, 2026, 5, THRESH) == []              # 4-7: threshold 6.0
+
+
+def test_b2_flags_single_game_ppa_outliers_as_context(tmp_path):
+    con = _db(tmp_path / "x.duckdb")
+    rows = []
+    for g in range(200):                                                  # season-to-date spread
+        rows += [[2026, 1 + g % 9, "regular", g, f"T{g}", False, 0.1 + (g % 10) * 0.01]] * 10
+    rows += [[2026, 9, "regular", 999, "Iowa", False, 1.5]] * 10          # extreme, this week
+    rows += [[2026, 9, "regular", 998, "Fcsu", True, 2.0]] * 10           # FCS offense: ignored
+    con.executemany("INSERT INTO model_plays VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    out = checks.b2_ppa_outliers(con, 2026, 9, CFG)
+    assert [(a.check, a.key, a.alert, a.investigate) for a in out] == [("B2", "999:Iowa", False, False)]
+    assert out[0].message.startswith("Iowa in game 999: offense +1.50 PPA/play over 10 plays")
+
+
+def test_b3_compares_model_to_current_line(tmp_path):
+    p = tmp_path / "predictions.csv"
+    pl.DataFrame({"game_id": [1, 2, 3], "home_team": ["Army", "Iowa", "Rice"], "away_team": ["Navy", "Ohio", "UTSA"],
+                  "pred_margin": [10.0, 5.0, 3.0], "closing_spread": [10.0, -4.0, None]}).write_csv(p)
+    out = checks.b3_line_gaps(p, 2026, 9, THRESH)                        # gap 20 > 18; 1; no line
+    assert [(a.key, a.value, a.investigate) for a in out] == [("1", 20.0, True)]
+    assert out[0].message == "Navy @ Army: model +10.0 vs line -10.0 home margin (gap 20.0, threshold 18.0)"
+
+
+def test_run_checks_turns_a_crashing_check_into_err(tmp_path):
+    db = tmp_path / "x.duckdb"
+    _db(db).close()
+    week_dir = tmp_path / "w09"
+    week_dir.mkdir()                                                      # no rankings/predictions files
+    out = checks.run_checks(db, week_dir, tmp_path / "missing.toml", 2026, 9, CFG)
+    errs = {a.key: a for a in out if a.check == "ERR"}
+    assert set(errs) == {"B1", "B3"}
+    assert errs["B1"].message.startswith("check B1 failed: FileNotFoundError")
+    assert errs["B1"].alert and not errs["B1"].investigate
