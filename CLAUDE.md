@@ -40,7 +40,7 @@ CFBD API → data/raw/ (JSON cache) → data/cfb.duckdb (build_store rebuilds it
 - `bets/`: paper-betting tracker (it never places bets). `ledger.py` holds the append-only ledger, `read_ledger` and `summarize`. `run.py` settles open bets and records new ones. The rules were fixed before any results came in (see DECISIONS.md "Bets").
 - `web/`: `build.py` precomputes everything into `out/web/{season}/`. The server (`app.py`, `store.py`, Jinja templates, no CDN assets) **never fits a model**; it only reads files. Betting data lives only in `web/bets.py` (`/bets`, `/api/bets`), and every route there is gated by `web/access.py:bets_access` so the section can become paid later. No other page or API response may include ledger data (tested in `tests/test_web.py`).
 
-`cfbr weekly` is the cron entry point (Sunday 9am and 3pm Central; see README). It takes a lock and runs ingest → build_store → prep → rank → accuracy line → paper bets (isolated; a failure there exits with 6) → web season rebuild (last). Exit codes: 3 = quota, 4 = lock held, 5 = no completed weeks, 6 = bets step failed.
+`cfbr weekly` is the cron entry point (Sunday 9am and 3pm Central; see README). It takes a lock and runs ingest → build_store → prep → rank → accuracy line → anomaly checks (advisory; `anomalies/`) → paper bets (isolated; a failure there exits with 6) → web season rebuild (last). Exit codes: 3 = quota, 4 = lock held, 5 = no completed weeks, 6 = bets step failed.
 
 ## Where things run
 
