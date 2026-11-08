@@ -176,20 +176,59 @@ def _roster_rows(year: int, records: list) -> list[dict]:
             for r in records if r.get("id") is not None]
 
 
+# A team whose known class years are more than this share freshmen (with at least
+# BROKEN_CLASS_MIN_KNOWN known) has a broken class field. CFBD's 2026 w08 snapshot listed
+# every FBS player as a freshman (138 teams over 90%); in every other cached snapshot,
+# 2014-2026, no team tops 61%.
+BROKEN_CLASS_SHARE = 0.9
+BROKEN_CLASS_MIN_KNOWN = 20
+
+
+def _broken_class_teams(df: pl.DataFrame) -> set[str]:
+    return set(df.filter(pl.col("class_year").is_not_null()).group_by("team")
+               .agg(n=pl.len(), fr=(pl.col("class_year") == 1).mean())
+               .filter((pl.col("n") >= BROKEN_CLASS_MIN_KNOWN) & (pl.col("fr") > BROKEN_CLASS_SHARE))["team"])
+
+
+def _repair_class_years(year: int, df: pl.DataFrame, older: list[Path]) -> pl.DataFrame:
+    """For teams whose class years look broken, take each player's class_year from the
+    newest earlier snapshot where his team's looked right (null if none)."""
+    broken = _broken_class_teams(df)
+    if not broken:
+        return df
+    fixes = pl.DataFrame(schema={"player_id": pl.Utf8, "good_class": ROSTER_SCHEMA["class_year"]})
+    for f in reversed(older):
+        prev = pl.DataFrame(_roster_rows(year, _read(f)), schema=ROSTER_SCHEMA)
+        ok = prev.filter(~pl.col("team").is_in(list(_broken_class_teams(prev))))
+        found = (ok.unique("player_id", keep="first").select("player_id", good_class="class_year")
+                 .join(fixes, on="player_id", how="anti"))
+        fixes = pl.concat([fixes, found])
+    log.warning("roster %d: class years look broken for %d teams (%s); taken from earlier snapshots",
+                year, len(broken), ", ".join(sorted(broken)[:5]) + (", ..." if len(broken) > 5 else ""))
+    return (df.join(fixes, on="player_id", how="left")
+            .with_columns(class_year=pl.when(pl.col("team").is_in(list(broken))).then(pl.col("good_class"))
+                          .otherwise(pl.col("class_year")))
+            .drop("good_class"))
+
+
 def build_roster_latest(raw: Path) -> pl.DataFrame:
     """Newest roster snapshot per season (weekly wNN.json if any, else season.json),
     with ``as_of`` = when that file was fetched. For display only; the model uses
-    ``roster`` (the first, fixed snapshot)."""
+    ``roster`` (the first, fixed snapshot).
+
+    Teams whose class years look broken in the newest snapshot (see BROKEN_CLASS_SHARE)
+    get them from earlier snapshots instead; everything else comes from the newest."""
     from datetime import UTC, datetime
 
     frames = []
     d = raw / "roster"
     for yd in sorted(p for p in d.iterdir() if p.is_dir()) if d.exists() else []:
-        weekly = sorted(yd.glob("w*.json"))
-        f = weekly[-1] if weekly else (yd / "season.json")
-        if not f.exists():
+        snapshots = [f for f in [yd / "season.json", *sorted(yd.glob("w*.json"))] if f.exists()]
+        if not snapshots:
             continue
+        f = snapshots[-1]
         df = pl.DataFrame(_roster_rows(int(yd.name), _read(f)), schema=ROSTER_SCHEMA)
+        df = _repair_class_years(int(yd.name), df, snapshots[:-1])
         frames.append(df.with_columns(as_of=pl.lit(datetime.fromtimestamp(f.stat().st_mtime, UTC))))
     if not frames:
         return pl.DataFrame(schema={**ROSTER_SCHEMA, "as_of": pl.Datetime("us", "UTC")})
