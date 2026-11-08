@@ -105,6 +105,32 @@ def test_roster_web_tables_status_departures_and_labels():
     assert a["in_qb_name"] == "qbB" and a["in_qb_from"] == "B" and a["in_qb_pass_att"] == 330
 
 
+def test_roster_web_status_uses_last_seasons_roster_when_no_stats():
+    """Offensive linemen and backups rarely record a stat: last season's roster says
+    whether they returned or transferred. Production still wins where it exists."""
+    from types import SimpleNamespace
+
+    from cfbr.report.roster_web import roster_tables
+
+    roster, ppa, d, status = _data()
+    prev = pl.DataFrame({"season": [2025] * 4, "player_id": ["olA", "olB", "rbA", "qbB"], "team": ["A", "B", "B", "B"],
+                         "position": ["OL", "OL", "RB", "QB"], "class_year": [2, 3, 2, 3]})
+    cur = pl.DataFrame({"season": [2026] * 3, "player_id": ["olA", "olB", "frA"], "team": ["A", "A", "A"],
+                        "position": ["OL", "OL", "OL"], "class_year": [3, 4, 1]})
+    roster = (pl.concat([roster, cur, prev], how="diagonal_relaxed")
+              .with_columns(name=pl.col("player_id"), jersey=pl.lit(None, pl.Int32), height=pl.lit(None, pl.Int32),
+                            weight=pl.lit(None, pl.Int32), home_city=pl.lit(None, pl.Utf8),
+                            home_state=pl.lit(None, pl.Utf8)))
+    ds = SimpleNamespace(roster=roster, player_ppa=ppa, player_defense=d, team_status=status,
+                         fbs_teams=lambda s: ["A", "B"])
+    p = {r["player_id"]: r for r in roster_tables(ds, 2026)["roster_players"].iter_rows(named=True)}
+    assert p["olA"]["status"] == "returner" and p["olA"]["from_team"] is None
+    assert p["olB"]["status"] == "transfer_in" and p["olB"]["from_team"] == "B"
+    assert p["frA"]["status"] == "new" and p["frA"]["from_team"] is None
+    # rbA is on B's 2025 roster here but produced for A: production wins.
+    assert p["rbA"]["status"] == "returner"
+
+
 def test_roster_web_prefers_latest_snapshot_but_model_keeps_fixed_one():
     from types import SimpleNamespace
 
