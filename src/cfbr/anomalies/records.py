@@ -96,9 +96,10 @@ def render_md(doc: dict) -> str:
         return "\n".join(lines + ["No anomalies.", ""])
     lines += ["| Status | Check | Detail |", "|---|---|---|"]
     for row in doc["items"]:
-        detail = row["message"].replace("|", "\\|")
+        detail = " ".join(row["message"].split()).replace("|", "\\|")
         verdict = row.get("verdict")
         if verdict:
-            detail += f" — **{verdict.get('verdict')}**: {verdict.get('summary', '')}".replace("|", "\\|")
+            summary = " ".join(str(verdict.get("summary", "")).split())
+            detail += f" — **{verdict.get('verdict')}**: {summary}".replace("|", "\\|")
         lines.append(f"| {row['status']} | {row['check']} | {detail} |")
     return "\n".join(lines + [""])

@@ -88,3 +88,5 @@ def test_render_md_lists_items_and_says_when_empty():
     assert "2026 week 9" in md and "Rice @ UTSA: 38 duplicate play rows" in md and "| pending | A4 |" in md
     empty, _ = merge(None, [], 2026, 9, T0)
     assert "No anomalies." in render_md(empty)
+    multi, _ = merge(None, [_a(msg="Binder Error:\n\nbad column", check="ERR")], 2026, 9, T0)
+    assert "Binder Error: bad column" in render_md(multi)
