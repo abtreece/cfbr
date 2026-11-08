@@ -1,0 +1,39 @@
+# Frozen by `cfbr tune`. Do not edit after holdout evaluation.
+
+[ingest]
+base_url = "https://apinext.collegefootballdata.com"
+first_season = 2014
+recruiting_lookback = 3
+monthly_quota = 1000
+quota_reserve = 50
+
+[prep]
+fcs_pooling = "conference"
+
+[prep.garbage_time]
+enabled = false
+q2 = 38
+q3 = 28
+q4 = 22
+
+[model]
+alpha_ppa = 236.3203
+alpha_sr = 124.2297
+half_life_weeks = 5.4366
+prior_k = 0.0
+fcs_two_stage = true
+fcs_weight = 0.5371
+
+[baseline]
+margin_cap = 42
+alpha = 1.0
+
+[prior]
+fit_scheme = "hybrid"
+
+[seasons]
+tuning = [2015, 2021]
+holdout = [2022, 2025]
+
+[backtest]
+spread_consensus = "median"
