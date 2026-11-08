@@ -154,3 +154,18 @@ byes = 4
 losses_weight = 6.5
 champion_bonus = 0.0
 power_bonus = 10.0
+
+[anomalies]
+# Advisory data checks after `cfbr weekly` ranks (src/cfbr/anomalies). They write
+# out/{season}/wNN/anomalies.{json,md} and push new items to ntfy; they never block publishing.
+# A1 no play-by-play, A2 PBP score vs final, A3 play count, A4 duplicate plays, A5 FBS status
+# change, B1 rating move, B2 single-game PPA (context only), B3 model vs current line.
+enabled = true
+a2_max_score_gap = 8
+a3_min_plays = 110
+a3_max_plays = 250
+a4_max_duplicates = 3
+b2_quantiles = [0.0025, 0.9975]
+# B1/B3 thresholds are this quantile of history, frozen in `thresholds` by `cfbr anomalies --baselines`.
+baseline_quantile = 0.995
+thresholds = "config/anomaly_thresholds.toml"

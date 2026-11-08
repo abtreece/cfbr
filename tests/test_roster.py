@@ -170,6 +170,40 @@ def test_build_roster_latest_picks_newest_weekly_file(tmp_path):
     assert latest["as_of"][0].timestamp() == 1_800_000_000
 
 
+def test_build_roster_latest_repairs_broken_class_years(tmp_path):
+    """CFBD's 2026 w08 roster listed every FBS player as a freshman. The display roster keeps
+    the newest snapshot's players and other fields, but takes a broken team's class years
+    from the newest earlier snapshot where that team's looked right."""
+    import json
+
+    from cfbr.ingest.store import BROKEN_CLASS_MIN_KNOWN, build_roster, build_roster_latest
+
+    d = tmp_path / "roster" / "2026"
+    d.mkdir(parents=True)
+    n = BROKEN_CLASS_MIN_KNOWN
+    real = [1, 2, 3, 4] * (n // 4)                          # a normal class spread, n players
+
+    def snap(name, teams, weight=200):
+        recs = [{"id": f"{t}{i}", "firstName": "A", "lastName": str(i), "team": t, "year": y, "position": "QB",
+                 "weight": weight} for t, years in teams.items() for i, y in enumerate(years)]
+        (d / name).write_text(json.dumps(recs))
+
+    def classes(team):
+        df = build_roster_latest(tmp_path).filter(pl.col("team") == team)
+        return df.sort(pl.col("player_id").str.slice(1).cast(pl.Int32))["class_year"].to_list()
+    snap("season.json", {"A": real, "B": real, "S": [2, 3]})
+    snap("w06.json", {"A": [*real, 2026], "B": real, "S": [2, 3]})          # 2026 = unknown class (null)
+    snap("w07.json", {"A": [1] * (n + 2), "B": real, "S": [1, 1]}, weight=210)  # A broken; A21 new
+    assert classes("A") == [*real, None, None]              # from w06; A20 unknown there, A21 new
+    assert classes("B") == real                             # healthy team left alone
+    assert classes("S") == [1, 1]                           # too few to judge: taken as given
+    assert build_roster_latest(tmp_path)["weight"].unique().to_list() == [210]  # other fields from w07
+    assert build_roster(tmp_path).filter(pl.col("team") == "A")["class_year"].to_list() == real  # model untouched
+
+    snap("w08.json", {"A": real, "B": real})                # a later good snapshot is used as-is
+    assert classes("A") == real
+
+
 def test_career_history_and_qb_experience():
     from types import SimpleNamespace
 

@@ -194,5 +194,10 @@ def run_rank(cfg: Config, season: int, week: int, last_completed: int, ds: Datas
     (out / "rankings.md").write_text(
         to_markdown(rankings, f"{season} ratings after week {week} (as of {as_of:%Y-%m-%d})", note=note))
     build_predictions(eng, season, week, as_of).write_csv(out / "predictions.csv")
+    from cfbr.report.moves import moves_csv_frame, rating_moves
+
+    # Same previous table as build_rankings, so moves.csv's rating_change equals rankings.csv's.
+    prev_as_of = week_as_of(eng, season, week - 1) if week > 1 else eng.slot_as_of(season, "r01")
+    moves_csv_frame(rating_moves(eng, season, prev_as_of, as_of)).write_csv(out / "moves.csv")
     log.info("wrote %s", out)
     return out

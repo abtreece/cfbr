@@ -183,6 +183,19 @@ class Sim(BaseModel):
     power_bonus: float = 10.0
 
 
+class Anomalies(BaseModel):
+    """Advisory data checks run by `cfbr weekly` after ranking (cfbr/anomalies). They write
+    out/{season}/wNN/anomalies.{json,md} and push new items to ntfy; they never block publishing."""
+    enabled: bool = True
+    a2_max_score_gap: int = 8  # |PBP max score - final|, home + away
+    a3_min_plays: int = 110
+    a3_max_plays: int = 250
+    a4_max_duplicates: int = 3  # duplicate play rows in one game
+    b2_quantiles: tuple[float, float] = (0.0025, 0.9975)  # single-game offensive PPA/play
+    baseline_quantile: float = 0.995  # B1/B3 thresholds, computed by `cfbr anomalies --baselines`
+    thresholds: Path = Path("config/anomaly_thresholds.toml")
+
+
 class Config(BaseModel):
     paths: Paths = Paths()
     ingest: Ingest = Ingest()
@@ -198,6 +211,7 @@ class Config(BaseModel):
     alerts: Alerts = Alerts()
     backup: Backup = Backup()
     sim: Sim = Sim()
+    anomalies: Anomalies = Anomalies()
     source: str | None = Field(default=None, exclude=True)
 
 

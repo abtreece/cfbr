@@ -20,6 +20,7 @@ from cfbr.data import STALE_GAME, Dataset
 from cfbr.ingest.fetch import current_season
 from cfbr.model.calibrate import stage2_terms
 from cfbr.model.engine import RATING_COLS, Engine, team_ratings_points
+from cfbr.report.moves import game_efficiency, rating_moves
 from cfbr.report.rank import POLLS, poll_ranks, records, week_as_of
 from cfbr.report.roster_web import write_roster_web
 from cfbr.web.lines import apply_lines, book_lines, consensus, kickoff_closes, newer_than, odds_books
@@ -162,12 +163,20 @@ def game_polls(polls: pl.DataFrame, season: int, games: pl.DataFrame) -> pl.Data
     return df.select("game_id", *[pl.col(c).cast(pl.Int32) for c in cols])
 
 
-def season_ratings(eng: Engine, season: int, now: datetime) -> pl.DataFrame:
+# What-moved columns (spec 2026-11-08-what-moved-design.md); null outside a live season.
+MOVE_COLS = {"move_decay": pl.Float64, "move_own": pl.Float64, "move_others": pl.Float64,
+             "passed_by": pl.List(pl.Utf8), "passed": pl.List(pl.Utf8), "n_passed_by": pl.Int32, "n_passed": pl.Int32}
+
+
+def season_ratings(eng: Engine, season: int, now: datetime, moves: bool | None = None) -> pl.DataFrame:
+    """``moves`` adds the what-moved columns (None = only for a live season; about 2 s per week)."""
     cal = eng.calibration(season)
     live = not season_over(eng, season, now)
+    moves = live if moves is None else moves
     fbs = eng.fbs(season)
     conf = eng.ds.team_status.filter(pl.col("season") == season).select("team", "conference")
     parts = []
+    prev_as_of = None
     for week, label, as_of in timeline(eng, season, now):
         snap = _snapshot(eng, season, as_of)
         t = (team_ratings_points(snap, cal, eng.cfg)
@@ -177,17 +186,23 @@ def season_ratings(eng: Engine, season: int, now: datetime) -> pl.DataFrame:
             "team", rank=pl.col("rating").rank("ordinal", descending=True).cast(pl.Int32))
         rec = records(eng, season, as_of).select("team", "w", "l")
         polls, _ = timeline_polls(eng.ds.polls, season, week)
-        parts.append(t.join(rank, on="team", how="left").join(rec, on="team", how="left")
-                     .join(conf, on="team", how="left").join(polls, on="team", how="left")
-                     .with_columns(season=pl.lit(season, pl.Int32), week=pl.lit(week, pl.Int32),
-                                   label=pl.lit(label), as_of=pl.lit(as_of),
-                                   w=pl.col("w").fill_null(0), l=pl.col("l").fill_null(0)))
-    df = pl.concat(parts).sort("team", "week")
+        part = (t.join(rank, on="team", how="left").join(rec, on="team", how="left")
+                .join(conf, on="team", how="left").join(polls, on="team", how="left"))
+        if moves and prev_as_of is not None and week != FINAL:
+            part = part.join(rating_moves(eng, season, prev_as_of, as_of).select("team", *MOVE_COLS),
+                             on="team", how="left")
+        parts.append(part.with_columns(season=pl.lit(season, pl.Int32), week=pl.lit(week, pl.Int32),
+                                       label=pl.lit(label), as_of=pl.lit(as_of),
+                                       w=pl.col("w").fill_null(0), l=pl.col("l").fill_null(0)))
+        prev_as_of = as_of
+    df = pl.concat(parts, how="diagonal_relaxed").sort("team", "week")
+    df = df.with_columns([pl.lit(None, dt).alias(c) for c, dt in MOVE_COLS.items() if c not in df.columns])
     return (df.with_columns(
         rating_change=pl.col("rating") - pl.col("rating").shift(1).over("team"),
         rank_change=pl.col("rank").shift(1).over("team") - pl.col("rank"),
     ).select("season", "week", "label", "as_of", "team", "conference", "fbs", "rank", "w", "l",
-             "rating", "offense", "defense", "prior_share", "rating_change", "rank_change", *POLLS, *RATING_COLS)
+             "rating", "offense", "defense", "prior_share", "rating_change", "rank_change", *POLLS, *RATING_COLS,
+             *MOVE_COLS)
             .sort("week", "rank", "team", nulls_last=True))
 
 
@@ -197,7 +212,8 @@ def season_games(eng: Engine, season: int) -> pl.DataFrame:
     spread = consensus_spread(eng.ds.lines, eng.cfg.backtest.spread_consensus)
     g = (eng.predict(season)
          .join(pts, on="game_id", how="left")
-         .join(spread.select("game_id", "spread"), on="game_id", how="left"))
+         .join(spread.select("game_id", "spread"), on="game_id", how="left")
+         .join(game_efficiency(eng, season), on="game_id", how="left"))
     return g.join(game_polls(eng.ds.polls, season, g), on="game_id", how="left").sort("kickoff_ts", "game_id")
 
 
