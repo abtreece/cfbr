@@ -2,9 +2,9 @@
 who left, and the team-level roster summary.
 
 Linking is by CFBD player id between the season's roster and the previous
-season's player production (at any school). Rosters are imperfect: players
-without box-score production look like "new", and CFBD's roster for a season
-may be a later snapshot. Facts and model inputs only; no predictions.
+season's player production and roster (at any school). Rosters are imperfect:
+CFBD's roster for a season may be a later snapshot, and a player missing from
+last season's data looks "new". Facts and model inputs only; no predictions.
 
 No API calls: everything comes from the Dataset already loaded. A season with
 no roster rows writes nothing.
@@ -12,8 +12,9 @@ no roster rows writes nothing.
 Columns (null = unknown):
   roster_players     season, team (CFBD school name, FBS only), player_id, name, jersey,
                      position, class_year (1-5), height (inches), weight (lbs), home_city,
-                     home_state, status ("returner" | "transfer_in" | "new"), from_team
-                     (transfer_in only), prev_plays, prev_ppa_total, prev_ppa_avg (per play),
+                     home_state, status ("returner" | "transfer_in" | "new": where he was
+                     last season, from production first, else last season's roster; "new"
+                     = in neither), from_team (transfer_in only), prev_plays, prev_ppa_total, prev_ppa_avg (per play),
                      prev_pass_plays, prev_pass_ppa_total, prev_pass_ppa_avg, prev_tackles,
                      prev_havoc (TFL + passes defended + interceptions) -- all "prev_" values
                      are last season's, at whatever school the player was on
@@ -226,11 +227,16 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
     fbs = list(set(teams))
     ros = ros.unique("player_id", keep="first").select("season", "team", *PLAYER_COLS)
     prev = _prev_production(ds, season)
-    players = (ros.join(prev, on="player_id", how="left")
-               .with_columns(status=pl.when(pl.col("prev_team").is_null()).then(pl.lit("new"))
-                             .when(pl.col("prev_team") == pl.col("team")).then(pl.lit("returner"))
+    # Where he was last season: the team he produced for, else last season's roster.
+    # Stats alone miss most offensive linemen and backups, who'd look brand new.
+    prev_ros = (ds.roster.filter(pl.col("season") == season - 1).unique("player_id", keep="first")
+                .select("player_id", prev_roster_team="team"))
+    was_on = pl.coalesce("prev_team", "prev_roster_team")
+    players = (ros.join(prev, on="player_id", how="left").join(prev_ros, on="player_id", how="left")
+               .with_columns(status=pl.when(was_on.is_null()).then(pl.lit("new"))
+                             .when(was_on == pl.col("team")).then(pl.lit("returner"))
                              .otherwise(pl.lit("transfer_in")))
-               .with_columns(from_team=pl.when(pl.col("status") == "transfer_in").then(pl.col("prev_team")))
+               .with_columns(from_team=pl.when(pl.col("status") == "transfer_in").then(was_on))
                .select("season", "team", *PLAYER_COLS, "status", "from_team", "prev_plays", "prev_ppa_total",
                        "prev_ppa_avg", "prev_pass_plays", "prev_pass_ppa_total", "prev_pass_ppa_avg",
                        "prev_tackles", "prev_havoc")

@@ -12,7 +12,7 @@
 </p>
 
 <div class="tiles">
-  {{ tile("Status", "Transfer" if player.status == "transfer_in" else "Returner" if player.status == "returner" else "No prior stats",
+  {{ tile("Status", "Transfer" if player.status == "transfer_in" else "Returner" if player.status == "returner" else "Newcomer",
           ("from " ~ player.from_team) if player.status == "transfer_in" and player.from_team else "") }}
   {{ tile(extra_labels.career_seasons[0], player.career_seasons|count) }}
   {% if player.position == "QB" or (player.career_pass_att or 0) > 0 %}

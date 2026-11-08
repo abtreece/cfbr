@@ -158,7 +158,7 @@ def roster_card(roster: Roster | None, team: str) -> dict | None:
         return None
     counts = dict(p.group_by("status").len().iter_rows())
     return {"size": p.height, "returners": counts.get("returner", 0), "transfers_in": counts.get("transfer_in", 0),
-            "no_stats": counts.get("new", 0), "departures": d.height, "transfers_out": d["to_team"].is_not_null().sum(),
+            "newcomers": counts.get("new", 0), "departures": d.height, "transfers_out": d["to_team"].is_not_null().sum(),
             "drafted": int((d["reason"] == "drafted").sum()) if "reason" in d.columns else None,
             "ret_offense": feature_value("off_ret_share", s.get("off_ret_share")) if s else "—",
             "last_qb": last_qb(p, d, s),
