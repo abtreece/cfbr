@@ -42,7 +42,7 @@ CFBD API → data/raw/ (JSON cache) → data/cfb.duckdb (build_store rebuilds it
 
 `cfbr weekly` is the cron entry point (Sunday 9am and 3pm Central; see README). It takes a lock and runs ingest → build_store → prep → rank → accuracy line → anomaly checks (advisory; `anomalies/`) → paper bets (isolated; a failure there exits with 6) → web season rebuild (last). Exit codes: 3 = quota, 4 = lock held, 5 = no completed weeks, 6 = bets step failed.
 
-`cfbr investigate` (cron, Sunday afternoons) runs an advisory Claude agent over pending anomalies; it is off without `ANTHROPIC_API_KEY`, and its output never feeds the model or bets.
+`cfbr investigate` (cron, Sundays 10 AM–6 PM Central) runs an advisory Claude agent over pending anomalies; it is off without `ANTHROPIC_API_KEY`, and its output never feeds the model or bets.
 
 ## Where things run
 
