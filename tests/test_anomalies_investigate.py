@@ -340,3 +340,9 @@ def test_cli_sample_patterns_refuses_to_overwrite(env, monkeypatch):
     result = CliRunner().invoke(cli.app, ["anomalies", "--sample-patterns", "--seasons", "2022-2022"])
     assert result.exit_code == 1 and "exists" in result.output
     assert out.read_text() == "paid verdicts"
+
+
+def test_classify_error_credit_balance_400_is_budget():
+    e = FakeAPIError(400, "invalid_request_error")
+    e.args = ("Your credit balance is too low to access the Anthropic API.",)
+    assert classify_error(e) == "budget"

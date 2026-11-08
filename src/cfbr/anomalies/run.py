@@ -99,6 +99,8 @@ def classify_error(e: BaseException) -> str:
         return "auth"
     if status == 402 or kind == "billing_error" or type(e).__name__ == "EnforcedSpendLimitReachedError":
         return "budget"
+    if status == 400 and "credit balance" in str(e).lower():
+        return "budget"
     if status in TRANSIENT_STATUSES or status >= 500:
         return "transient"
     return "item"
