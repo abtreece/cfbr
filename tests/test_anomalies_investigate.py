@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 
 import duckdb
 import pytest
+from typer.testing import CliRunner
 
 from cfbr.anomalies import ledger
 from cfbr.anomalies.records import Anomaly, merge, read_doc, update_doc, write_doc
+from cfbr.anomalies.shakedown import pattern_group, sample_patterns, shakedown_doc
 from cfbr.anomalies.run import classify_error, investigate_alert, investigate_doc, plan_targets
 from cfbr.config import Config, Paths, anthropic_api_key
 from tests.anomaly_fakes import FakeAPIError, FakeClient, message, tool_use
@@ -254,3 +256,50 @@ def test_doc_write_failure_is_not_an_item_error(env, monkeypatch):
         investigate_doc(cfg, path, FakeClient(_ok_script()), now=NOW)
     row = next(r for r in read_doc(path)["items"] if r["check"] == "A2")
     assert row["status"] == "pending" and "attempts" not in row  # not misrecorded as a transient/item error
+
+
+def _h(check, value, key):
+    return {"id": f"{check}{key}", "check": check, "season": 2023, "week": 5, "key": key, "message": "m",
+            "value": value, "threshold": None, "investigate": True, "alert": True, "game_id": int(key), "team": None}
+
+
+def test_pattern_groups():
+    assert pattern_group(_h("A2", None, "1"), 110) == "A2 no scores"
+    assert [pattern_group(_h("A2", v, "1"), 110) for v in (9, 17, 31)] == ["A2 gap 9-16", "A2 gap 17-30", "A2 gap >30"]
+    assert [pattern_group(_h("A3", v, "1"), 110) for v in (90, 300)] == ["A3 low", "A3 high"]
+    assert [pattern_group(_h("A4", v, "1"), 110) for v in (4, 11, 41)] == ["A4 4-10", "A4 11-40", "A4 >40"]
+    assert pattern_group(_h("A1", None, "1"), 110) is None and pattern_group(_h("B2", 1.5, "1"), 110) is None
+
+
+def test_sample_patterns_is_deterministic_and_capped():
+    rows = [_h("A4", 5, str(k)) for k in range(10)] + [_h("A2", 20, "99")]
+    picked = sample_patterns(rows, 3, 110)
+    assert [r["group"] for r in picked].count("A4 4-10") == 3 and len(picked) == 4
+    assert picked == sample_patterns(list(reversed(rows)), 3, 110)
+
+
+def test_shakedown_doc_is_pending_and_titled():
+    doc = shakedown_doc(sample_patterns([_h("A3", 90, "1")], 3, 110), [2022, 2023], NOW)
+    assert doc["title"] == "shakedown 2022\u20132023" and doc["items"][0]["status"] == "pending"
+    assert doc["items"][0]["verdict"] is None and doc["items"][0]["group"] == "A3 low"
+
+
+def test_cli_investigate_without_key_exits_zero(env, monkeypatch):
+    from cfbr import cli
+    cfg, path = env
+    monkeypatch.setattr(cli, "_default_config", lambda c: cfg)
+    monkeypatch.setattr("cfbr.config.anthropic_api_key", lambda: None)
+    result = CliRunner().invoke(cli.app, ["investigate", "--doc", str(path)])
+    assert result.exit_code == 0 and "investigation is off" in result.output
+    assert _status(path)["A2"] == "pending"
+
+
+def test_cli_investigate_dry_run_lists_targets_without_a_key(env, monkeypatch):
+    from cfbr import cli
+    cfg, path = env
+    monkeypatch.setattr(cli, "_default_config", lambda c: cfg)
+    monkeypatch.setattr("cfbr.config.anthropic_api_key", lambda: None)
+    result = CliRunner().invoke(cli.app, ["investigate", "--doc", str(path), "--dry-run"])
+    assert result.exit_code == 0
+    assert "A2 Navy @ Army: gap 19" in result.output and "A3 Ohio @ Iowa: 105 plays" in result.output
+    assert "would investigate 2" in result.output

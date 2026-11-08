@@ -395,12 +395,16 @@ def check(config: ConfigOpt = None) -> None:
 
 @app.command()
 def anomalies(
-    season: Annotated[int, typer.Option()],
+    season: Annotated[Optional[int], typer.Option()] = None,
     week: Annotated[Optional[int], typer.Option(help="Regular-season week (default: latest out/{season}/wNN)")] = None,
     history: Annotated[bool, typer.Option(help="Database checks over every completed week; "
                                                "writes results/anomalies_history_{season}.json")] = False,
     baselines: Annotated[bool, typer.Option(help="Recompute the B1/B3 thresholds file from history "
                                                  "(no API calls; several minutes)")] = False,
+    sample_patterns: Annotated[bool, typer.Option("--sample-patterns", help="Build the shakedown set from "
+                                                  "--history output for --seasons (no API calls)")] = False,
+    seasons: Annotated[Optional[str], typer.Option(help="Season range for --sample-patterns, e.g. 2022-2025")] = None,
+    per_group: Annotated[int, typer.Option(help="Items per check/shape group for --sample-patterns")] = 3,
     config: ConfigOpt = None,
 ) -> None:
     """Advisory data-anomaly checks. Without flags: run all checks for one week, update
@@ -414,6 +418,38 @@ def anomalies(
     from cfbr.anomalies.records import read_doc, render_md
 
     cfg = _default_config(config)
+    if sample_patterns:
+        from datetime import UTC, datetime
+
+        from cfbr.anomalies.records import write_doc
+        from cfbr.anomalies.shakedown import sample_patterns as sample, shakedown_doc
+        from cfbr.backtest.harness import parse_seasons
+
+        if not seasons:
+            raise typer.BadParameter("--sample-patterns needs --seasons, e.g. 2022-2025")
+        years = parse_seasons(seasons)
+        out = cfg.paths.results_dir / "anomaly_shakedown" / "anomalies.json"
+        if out.exists():
+            typer.echo(f"{out} exists (it may hold paid verdicts); delete it to resample")
+            raise typer.Exit(code=1)
+        rows = []
+        for year in years:
+            hist = cfg.paths.results_dir / f"anomalies_history_{year}.json"
+            if not hist.exists():
+                items = arun.run_history(cfg, year)
+                hist.parent.mkdir(parents=True, exist_ok=True)
+                hist.write_text(json.dumps([{"id": a.id, **asdict(a)} for a in items], indent=2) + "\n")
+            rows += json.loads(hist.read_text())
+        picked = sample(rows, per_group, cfg.anomalies.a3_min_plays)
+        doc = shakedown_doc(picked, years, datetime.now(UTC))
+        write_doc(out, doc)
+        out.with_suffix(".md").write_text(render_md(doc))
+        counts = Counter(r["group"] for r in picked)
+        typer.echo("\n".join(f"{g}: {n}" for g, n in sorted(counts.items())))
+        typer.echo(f"wrote {out} ({len(picked)} items)")
+        return
+    if season is None:
+        raise typer.BadParameter("--season is required")
     if baselines:
         from cfbr.anomalies.baselines import compute_baselines
 
@@ -432,6 +468,61 @@ def anomalies(
     added = arun.run_step(cfg, season, week)
     typer.echo(render_md(read_doc(arun.week_dir(cfg, season, week) / "anomalies.json")))
     typer.echo(f"{len(added)} new alertable item(s)")
+
+
+@app.command()
+def investigate(
+    season: Annotated[Optional[int], typer.Option(help="Default: the current season")] = None,
+    week: Annotated[Optional[int], typer.Option(help="Default: the latest out/{season}/wNN")] = None,
+    doc: Annotated[Optional[Path], typer.Option(help="Investigate this anomalies.json instead (e.g. the shakedown set)")] = None,
+    force: Annotated[Optional[list[str]], typer.Option(help="Re-investigate this anomaly id (repeatable)")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="List what would be investigated; no API calls")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Investigate pending anomalies with Claude (advisory). Cron runs it hourly on Sundays; it exits
+    quietly when there is nothing to do, the weekly lock is held, or no ANTHROPIC_API_KEY is configured."""
+    from cfbr import config as cfbr_config
+    from cfbr.alerts import send
+    from cfbr.anomalies import run as arun
+    from cfbr.anomalies.records import read_doc
+    from cfbr.ingest.fetch import current_season
+
+    cfg = _default_config(config)
+    if doc is None:
+        season = season or current_season()
+        try:
+            week = week or arun.latest_week(cfg, season)
+        except FileNotFoundError:
+            typer.echo(f"no weekly output for {season}; nothing to investigate")
+            return
+        doc = arun.week_dir(cfg, season, week) / "anomalies.json"
+    force_ids = tuple(force or ())
+    if dry_run:
+        current = read_doc(doc)
+        if current is None:
+            typer.echo(f"{doc} does not exist")
+            return
+        todo, overflow = arun.plan_targets(current, force_ids, cfg.investigate.max_items)
+        for row in todo:
+            typer.echo(f"{row['id']}  {row['check']} {row['message']}")
+        typer.echo(f"would investigate {len(todo)}; {len(overflow)} over the per-run limit")
+        return
+    key = cfbr_config.anthropic_api_key()
+    if not key:
+        typer.echo("no ANTHROPIC_API_KEY: investigation is off")
+        return
+    import anthropic
+
+    try:
+        summary = arun.investigate_doc(cfg, doc, anthropic.Anthropic(api_key=key), force_ids=force_ids)
+    except Exception as e:
+        send(cfg, "cfbr investigate crashed", f"{type(e).__name__}: {e}"[:300])
+        raise
+    alert = arun.investigate_alert(summary)
+    if alert:
+        title, body, priority = alert
+        send(cfg, title, body, priority=priority)
+    typer.echo(f"{summary['status']}: {len(summary['items'])} investigated, ${summary['cost_usd']:.2f}")
 
 
 def _bets_step(cfg, ds, season: int, week: int) -> bool:
