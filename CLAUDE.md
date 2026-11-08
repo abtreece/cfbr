@@ -30,7 +30,7 @@ CFBD API → data/raw/ (JSON cache) → data/cfb.duckdb (build_store rebuilds it
 ```
 
 - `ingest/`: `client.py` handles HTTP, caching and quota ledger, `fetch.py` decides what to fetch (backfill/weekly, completed-week logic, live line snapshots), and `store.py` rebuilds DuckDB from the raw cache. The store is always derived from the cache, never edited in place.
-- `prep/plays.py`: play-type filtering, score at the snap, the garbage-time filter, success, and FCS pooling.
+- `prep/plays.py`: play-type filtering, score at the snap, the garbage-time filter, success, and FCS pooling. Penalty-only rows are dropped. Their `yards_gained` is signed from the offense's view only through 2025 week 8 and unsigned after that, so any penalty work has to attribute penalties from `play_text`.
 - `data.py`: `Dataset.load` reads DuckDB once per run. `assign_slots` defines **prediction slots**: `r{week}` for regular-season weeks and `p{n}` for 7-day postseason buckets. `training_slice` is the point-in-time filter.
 - `model/engine.py`: `Engine` is the core. It lazily caches, per season, `final()` (no-prior full-season fit, used as prior targets and features), `priors()`, `snapshot(season, as_of)` (fit on plays with kickoff < as_of, a prefix found by binary search over kickoff-sorted arrays), `calibration()` and `predict()`. The ridge math is in `ridge.py`, the prior regression in `prior.py`, the points calibration in `calibrate.py`, and the Massey baseline in `massey.py`.
 - `model/schemes.py`: which past seasons may train the cross-season models (prior, calibration). `hybrid` uses leave-one-season-out inside the tuning seasons (2015–2021) and a strict expanding window for holdout (2022–2025) and live seasons. This was a user-approved decision; don't change it casually.
