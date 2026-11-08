@@ -2230,6 +2230,8 @@ def test_shortlist_follows_the_viewers_books(shortlist_client):
     # An explicit ?books= wins over the cookie, even when empty (the reference set); junk falls back to the reference set.
     assert c.get("/api/bets/shortlist?books=FanDuel").json()["books"] == ["FanDuel"]
     assert c.get("/api/bets/shortlist?books=").json()["books"] == ["DraftKings", "FanDuel", "bet365"]
+    # Replace, don't add: httpx2's jar keeps a domain-less cookie beside the server-set one and sends both.
+    c.cookies.clear()
     c.cookies.set("cfbr_books", "nope.bovada")
     assert c.get("/api/bets/shortlist").json()["books"] == ["DraftKings", "FanDuel", "bet365"]
     # Submitting no books clears the choice.
