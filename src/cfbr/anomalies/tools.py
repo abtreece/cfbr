@@ -8,7 +8,7 @@
   rlimit) is reported as a tool error, never raised; so is any failure to create the pipe, start the
   child or read its message.
 - Memory: the parent's is bounded by the row/char caps. The child's is bounded by DuckDB's
-  memory_limit for DuckDB itself and, on Linux, by RLIMIT_AS at 2x that; Python conversion of a
+  memory_limit for DuckDB itself and, on Linux, by RLIMIT_AS at 4x that; Python conversion of a
   fetched batch in the child is not separately bounded. The parent's `__main__` must be guarded by
   `if __name__ == "__main__"` (spawn re-imports it; the cfbr console script and `python -m cfbr.cli`
   are guarded).
@@ -17,7 +17,7 @@
   temp_directory (so DuckDB's automatic allowance for `<db>.tmp/` is gone; `<db>.wal` is refused by
   the read-only, no-external-access connection), and memory_limit/threads from
   query_memory_limit/query_threads, all set at connect time. On Linux the child also sets
-  RLIMIT_AS to twice query_memory_limit, best effort (ignored where the OS rejects it).
+  RLIMIT_AS to RLIMIT_AS_FACTOR x query_memory_limit, best effort (ignored where the OS rejects it).
 - Before executing, the child checks the SQL using only that restricted connection (never
   module-level `duckdb.*`, which uses an unrestricted default connection): it must be exactly one
   statement of type SELECT (DuckDB also classifies DESCRIBE, SHOW and SUMMARIZE as SELECT); it must
@@ -60,6 +60,10 @@ ALLOWED_TABLE_FUNCTIONS = {"range", "generate_series", "unnest", "duckdb_tables"
 DENIED_SCALAR_FUNCTIONS = {"json_serialize_plan", "json_execute_serialized_sql", "query", "query_table"}
 
 _FETCH_BATCH = 50
+# RLIMIT_AS counts reserved address space, not resident memory. Measured on javelin (x86_64,
+# duckdb 1.5.6, memory_limit 2GB): a 1 GB result peaked at 1.5 GB resident but 4.3 GB virtual,
+# so 2x failed and 4x passes with margin.
+RLIMIT_AS_FACTOR = 4
 _UNITS = {"b": 1, "kb": 1000, "mb": 1000**2, "gb": 1000**3, "tb": 1000**4,
           "kib": 1024, "mib": 1024**2, "gib": 1024**3, "tib": 1024**4}
 
@@ -154,7 +158,7 @@ def _query_child(conn, db_path: str, sql: str, settings: dict) -> None:
             try:
                 import resource
 
-                limit = 2 * _parse_bytes(settings["memory_limit"])
+                limit = RLIMIT_AS_FACTOR * _parse_bytes(settings["memory_limit"])
                 resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
             except Exception:  # noqa: BLE001, S110 - best effort; DuckDB's memory_limit still applies
                 pass
