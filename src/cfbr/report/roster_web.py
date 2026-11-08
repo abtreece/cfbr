@@ -161,11 +161,6 @@ def _sum_or_null(col: str) -> pl.Expr:
     return pl.when(pl.col(col).count() > 0).then(pl.col(col).sum()).alias(col)
 
 
-def _player_ppa(ds: Dataset) -> pl.DataFrame:
-    """player_ppa without CFBD's exact duplicate rows (25-63 players a season repeat)."""
-    return ds.player_ppa.unique(maintain_order=True)
-
-
 def _player_stats(ds: Dataset) -> pl.DataFrame:
     """Season box-score stats per (season, player_id), summed over schools (fg_long: max),
     with the first school as ``team``. Players whose stats are all zero (CFBD lists some
@@ -180,7 +175,7 @@ def _player_stats(ds: Dataset) -> pl.DataFrame:
 
 
 def _prev_production(ds: Dataset, season: int) -> pl.DataFrame:
-    off = _player_ppa(ds).filter(pl.col("season") == season - 1).select(
+    off = ds.player_ppa.filter(pl.col("season") == season - 1).select(
         "player_id", prev_team="team", prev_plays="plays", prev_ppa_total="total_ppa", prev_ppa_avg="avg_ppa",
         prev_pass_plays="pass_plays", prev_pass_ppa_total="pass_ppa", prev_pass_ppa_avg="avg_pass_ppa")
     de = ds.player_defense.filter(pl.col("season") == season - 1).select(
@@ -340,7 +335,7 @@ def _qb_starts(gp: pl.DataFrame) -> pl.DataFrame:
 def career_tables(ds: Dataset, season: int, players: pl.DataFrame) -> pl.DataFrame:
     """Season-by-season history (all schools) for players on this season's roster."""
     ids = players.select("player_id", "team")
-    ppa = _player_ppa(ds).with_columns([pl.lit(None, pl.Float64).alias(c) for c in ("rush_car", "rec")
+    ppa = ds.player_ppa.with_columns([pl.lit(None, pl.Float64).alias(c) for c in ("rush_car", "rec")
                                       if c not in ds.player_ppa.columns])  # stores built before these existed
     off = ppa.filter(pl.col("season") < season).select(
         "season", "player_id", career_team="team", plays="plays", pass_att="pass_plays", rush_car="rush_car",
