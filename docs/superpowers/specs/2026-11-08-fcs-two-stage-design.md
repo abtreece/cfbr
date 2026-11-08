@@ -1,6 +1,6 @@
 # FCS games, two-stage fit — design
 
-Date: 2026-11-08. Status: rule fixed, not built.
+Date: 2026-11-08. Status: built; adopted 2026-11-08 (all three gates passed), see DECISIONS.md.
 
 ## Problem
 
