@@ -265,3 +265,26 @@ def test_roster_regression_trains_only_on_seasons_at_or_after_the_cutoff():
     manual = LinearRegression().fit(sub.select(feats).to_numpy(), sub["o_ppa"].to_numpy())
     assert np.allclose(portal.coef_, manual.coef_)
     assert not np.allclose(portal.coef_, all_rows.coef_)
+
+
+def test_roster_as_of_is_utc_whatever_the_session_time_zone(tmp_path):
+    """DuckDB returns TIMESTAMPTZ columns in the session's (machine's) time zone; roster_as_of must still
+    hand back UTC so roster_tables can stamp roster_as_of as Datetime(UTC) on a non-UTC host."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from cfbr.report.roster_web import roster_as_of, roster_tables
+
+    fetched = datetime(2026, 10, 11, 17, 3, 43, tzinfo=UTC)
+    latest = pl.DataFrame({"season": [2026], "as_of": [fetched]}).with_columns(
+        pl.col("as_of").dt.convert_time_zone("America/Chicago"))
+    roster, ppa, d, status = _data()
+    roster = roster.with_columns(name=pl.col("player_id"), jersey=pl.lit(None, pl.Int32), height=pl.lit(74, pl.Int32),
+                                 weight=pl.lit(210, pl.Int32), home_city=pl.lit("X"), home_state=pl.lit("MO"))
+    ds = SimpleNamespace(roster=roster, player_ppa=ppa, player_defense=d, team_status=status, roster_latest=latest,
+                         fbs_teams=lambda s: ["A", "B"])
+    cfg = SimpleNamespace(paths=SimpleNamespace(raw_dir=tmp_path))
+    as_of = roster_as_of(cfg, 2026, ds)
+    assert as_of == fetched and as_of.utcoffset().total_seconds() == 0
+    summary = roster_tables(ds, 2026, as_of)["roster_summary"]
+    assert summary["roster_as_of"].dtype == pl.Datetime("us", "UTC") and summary["roster_as_of"][0] == fetched
