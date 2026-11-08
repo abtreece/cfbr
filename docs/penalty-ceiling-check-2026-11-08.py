@@ -36,9 +36,9 @@ team_game AS (
 per_team AS (
   SELECT tg.game_id, tg.season, tg.team,
     COALESCE(SUM(CASE WHEN pen.offense = tg.team THEN pen.y
-                      WHEN pen.defense = tg.team THEN -pen.y END), 0) AS net_yards,
+                      WHEN pen.defense = tg.team THEN -pen.y END), 0)::DOUBLE AS net_yards,
     COALESCE(SUM(CASE WHEN (pen.offense = tg.team AND pen.y < 0)
-                        OR (pen.defense = tg.team AND pen.y > 0) THEN 1 ELSE 0 END), 0) AS committed
+                        OR (pen.defense = tg.team AND pen.y > 0) THEN 1 ELSE 0 END), 0)::DOUBLE AS committed
   FROM team_game tg
   LEFT JOIN pen ON pen.game_id = tg.game_id AND (pen.offense = tg.team OR pen.defense = tg.team)
   GROUP BY 1, 2, 3
