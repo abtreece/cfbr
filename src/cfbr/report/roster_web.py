@@ -2,9 +2,9 @@
 who left, and the team-level roster summary.
 
 Linking is by CFBD player id between the season's roster and the previous
-season's player production (at any school). Rosters are imperfect: players
-without box-score production look like "new", and CFBD's roster for a season
-may be a later snapshot. Facts and model inputs only; no predictions.
+season's player production and roster (at any school). Rosters are imperfect:
+CFBD's roster for a season may be a later snapshot, and a player missing from
+last season's data looks "new". Facts and model inputs only; no predictions.
 
 No API calls: everything comes from the Dataset already loaded. A season with
 no roster rows writes nothing.
@@ -12,11 +12,14 @@ no roster rows writes nothing.
 Columns (null = unknown):
   roster_players     season, team (CFBD school name, FBS only), player_id, name, jersey,
                      position, class_year (1-5), height (inches), weight (lbs), home_city,
-                     home_state, status ("returner" | "transfer_in" | "new"), from_team
-                     (transfer_in only), prev_plays, prev_ppa_total, prev_ppa_avg (per play),
+                     home_state, status ("returner" | "transfer_in" | "new": where he was
+                     last season, from production first, else last season's roster; "new"
+                     = in neither), from_team (transfer_in only), prev_plays, prev_ppa_total, prev_ppa_avg (per play),
                      prev_pass_plays, prev_pass_ppa_total, prev_pass_ppa_avg, prev_tackles,
-                     prev_havoc (TFL + passes defended + interceptions) -- all "prev_" values
-                     are last season's, at whatever school the player was on
+                     prev_havoc (TFL + passes defended + interceptions), and prev_{stat} for
+                     every PREV_STATS stat (box-score season stats: yards, TDs, sacks,
+                     kicking, punting; summed over schools, fg_long the max) -- all "prev_"
+                     values are last season's, at whatever school the player was on
   roster_departures  season, team (the team they left), player_id, name, position,
                      prev_class_year (last season's, 1-5), to_team (this season's roster
                      they appear on, else null), reason (DEPARTURE_REASONS), draft_round,
@@ -26,9 +29,9 @@ Columns (null = unknown):
                      Rams"; null if unknown), in_portal (entered the transfer portal
                      for this season; null before 2021, when CFBD's portal data
                      starts), portal_destination (school listed in the portal, which
-                     may be non-FBS), prev_plays, prev_ppa_total, prev_tackles,
-                     prev_havoc. Players with no stats last season appear only if
-                     drafted. Portal records are linked by name + school (no id).
+                     may be non-FBS), prev_plays, prev_ppa_total, prev_pass_plays,
+                     prev_tackles, prev_havoc, prev_{stat} as above. Players with no
+                     stats last season appear only if drafted. Portal records are linked by name + school (no id).
   roster_careers     one row per player per season of history, for players on this season's
                      roster: season (display season), team (current team), player_id,
                      career_season, career_team, source ("season stats" for completed
@@ -36,8 +39,9 @@ Columns (null = unknown):
                      qb_starts (games he led his team in pass attempts, 5+), plays (pass
                      att + carries + receptions), pass_att, rush_car, rec, ppa_total,
                      ppa_avg, pass_ppa_total, pass_ppa_avg, tackles, tfl, sacks, pd,
-                     hurries, ints. PPA, sacks and hurries are null for to-date rows;
-                     defense is null before 2016; games/qb_starts only count games
+                     hurries, ints, and the box-score columns in CAREER_LABELS (yards,
+                     TDs, kicking, punting). PPA is null for to-date rows; defense is
+                     null before 2016; games/qb_starts only count games
                      involving an FBS team. Labels: CAREER_LABELS
   roster_summary     season, team, roster_as_of (UTC time the roster snapshot was fetched),
                      the features in ROSTER_SUMMARY_LABELS, and the incoming-QB display fields
@@ -57,6 +61,7 @@ import polars as pl
 
 from cfbr.config import Config
 from cfbr.data import Dataset
+from cfbr.ingest.store import PLAYER_STATS_COLS
 from cfbr.model.roster import ROSTER_FEATURES, roster_features
 
 # feature -> (label, definition with unit). Null when the prior season has no
@@ -106,13 +111,37 @@ CAREER_LABELS: dict[str, tuple[str, str]] = {
     "ppa_avg": ("PPA/play", "Expected points added per play"),
     "pass_ppa_total": ("Pass PPA", "Total passing PPA"),
     "pass_ppa_avg": ("Pass PPA/att", "Passing PPA per attempt"),
+    "pass_cmp": ("Cmp", "Completions"),
+    "pass_yds": ("Pass yds", "Passing yards"),
+    "pass_td": ("Pass TD", "Passing touchdowns"),
+    "pass_int": ("INT thrown", "Interceptions thrown"),
+    "rush_yds": ("Rush yds", "Rushing yards"),
+    "rush_td": ("Rush TD", "Rushing touchdowns"),
+    "rec_yds": ("Rec yds", "Receiving yards"),
+    "rec_td": ("Rec TD", "Receiving touchdowns"),
     "tackles": ("Tkl", "Total tackles"),
     "tfl": ("TFL", "Tackles for loss"),
     "sacks": ("Sacks", "Sacks"),
     "pd": ("PD", "Passes defended"),
     "hurries": ("Hur", "QB hurries"),
     "ints": ("INT", "Interceptions"),
+    "def_td": ("Def TD", "Defensive touchdowns"),
+    "fgm": ("FGM", "Field goals made"),
+    "fga": ("FGA", "Field goals attempted"),
+    "fg_long": ("FG long", "Longest field goal made (yards)"),
+    "xpm": ("XPM", "Extra points made"),
+    "xpa": ("XPA", "Extra points attempted"),
+    "punts": ("Punts", "Punts"),
+    "punt_yds": ("Punt yds", "Punting yards"),
+    "punt_in20": ("In 20", "Punts downed inside the opponent's 20"),
 }
+
+# Box-score season stats carried on roster_players / roster_departures as prev_{stat}.
+# Tackles already come from player_defense (same CFBD source) as prev_tackles.
+PREV_STATS = [c for c in PLAYER_STATS_COLS if c != "tackles"]
+# Career columns that only player_stats has (the rest come from player_ppa / player_defense).
+STATS_ONLY = [c for c in PLAYER_STATS_COLS if c not in {"pass_att", "rush_car", "rec", "tackles", "tfl", "sacks",
+                                                         "pd", "hurries", "ints"}]
 
 # roster_departures.reason, first match wins in this order.
 DEPARTURE_REASONS: dict[str, str] = {
@@ -126,15 +155,42 @@ DEPARTURE_REASONS: dict[str, str] = {
 PLAYER_COLS = ["player_id", "name", "jersey", "position", "class_year", "height", "weight", "home_city", "home_state"]
 
 
+def _sum_or_null(col: str) -> pl.Expr:
+    """Sum that stays null when every value is null (no stat in that category)."""
+    return pl.when(pl.col(col).count() > 0).then(pl.col(col).sum()).alias(col)
+
+
+def _player_ppa(ds: Dataset) -> pl.DataFrame:
+    """player_ppa without CFBD's exact duplicate rows (25-63 players a season repeat)."""
+    return ds.player_ppa.unique(maintain_order=True)
+
+
+def _player_stats(ds: Dataset) -> pl.DataFrame:
+    """Season box-score stats per (season, player_id), summed over schools (fg_long: max),
+    with the first school as ``team``. Players whose stats are all zero (CFBD lists some
+    specialists that way) are left out. Empty when the store predates the table."""
+    st = getattr(ds, "player_stats", None)
+    if st is None:
+        return pl.DataFrame(schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8,
+                                    **{c: pl.Float64 for c in PLAYER_STATS_COLS}})
+    st = st.filter(pl.any_horizontal([pl.col(c).fill_null(0) != 0 for c in PLAYER_STATS_COLS]))
+    return st.group_by("season", "player_id", maintain_order=True).agg(
+        pl.col("team").first(), *[pl.col(c).max() if c == "fg_long" else _sum_or_null(c) for c in PLAYER_STATS_COLS])
+
+
 def _prev_production(ds: Dataset, season: int) -> pl.DataFrame:
-    off = ds.player_ppa.filter(pl.col("season") == season - 1).select(
+    off = _player_ppa(ds).filter(pl.col("season") == season - 1).select(
         "player_id", prev_team="team", prev_plays="plays", prev_ppa_total="total_ppa", prev_ppa_avg="avg_ppa",
         prev_pass_plays="pass_plays", prev_pass_ppa_total="pass_ppa", prev_pass_ppa_avg="avg_pass_ppa")
     de = ds.player_defense.filter(pl.col("season") == season - 1).select(
         "player_id", prev_team_d="team", prev_tackles="tackles",
         prev_havoc=pl.col("tfl") + pl.col("pd") + pl.col("ints"))
-    both = off.join(de, on="player_id", how="full", coalesce=True)
-    return both.with_columns(prev_team=pl.coalesce("prev_team", "prev_team_d")).drop("prev_team_d")
+    st = _player_stats(ds).filter(pl.col("season") == season - 1).select(
+        "player_id", prev_team_s="team", **{f"prev_{c}": c for c in PREV_STATS})
+    both = (off.join(de, on="player_id", how="full", coalesce=True)
+            .join(st, on="player_id", how="full", coalesce=True))
+    return (both.with_columns(prev_team=pl.coalesce("prev_team", "prev_team_d", "prev_team_s"))
+            .drop("prev_team_d", "prev_team_s"))
 
 
 def _name_key(col: str) -> pl.Expr:
@@ -190,7 +246,7 @@ def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame)
     return out.select(pl.lit(season, pl.Int32).alias("season"), pl.col("prev_team").alias("team"), "player_id",
                       "name", "position", "prev_class_year", "to_team", reason.alias("reason"), "draft_round",
                       "draft_overall", "draft_nfl_team", "draft_nfl_team_name", "in_portal", "portal_destination", "prev_plays",
-                      "prev_ppa_total", "prev_pass_plays", "prev_tackles", "prev_havoc")
+                      "prev_ppa_total", "prev_pass_plays", "prev_tackles", "prev_havoc", *[f"prev_{c}" for c in PREV_STATS])
 
 
 def _display_roster(ds: Dataset, season: int) -> pl.DataFrame:
@@ -226,14 +282,19 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
     fbs = list(set(teams))
     ros = ros.unique("player_id", keep="first").select("season", "team", *PLAYER_COLS)
     prev = _prev_production(ds, season)
-    players = (ros.join(prev, on="player_id", how="left")
-               .with_columns(status=pl.when(pl.col("prev_team").is_null()).then(pl.lit("new"))
-                             .when(pl.col("prev_team") == pl.col("team")).then(pl.lit("returner"))
+    # Where he was last season: the team he produced for, else last season's roster.
+    # Stats alone miss most offensive linemen and backups, who'd look brand new.
+    prev_ros = (ds.roster.filter(pl.col("season") == season - 1).unique("player_id", keep="first")
+                .select("player_id", prev_roster_team="team"))
+    was_on = pl.coalesce("prev_team", "prev_roster_team")
+    players = (ros.join(prev, on="player_id", how="left").join(prev_ros, on="player_id", how="left")
+               .with_columns(status=pl.when(was_on.is_null()).then(pl.lit("new"))
+                             .when(was_on == pl.col("team")).then(pl.lit("returner"))
                              .otherwise(pl.lit("transfer_in")))
-               .with_columns(from_team=pl.when(pl.col("status") == "transfer_in").then(pl.col("prev_team")))
+               .with_columns(from_team=pl.when(pl.col("status") == "transfer_in").then(was_on))
                .select("season", "team", *PLAYER_COLS, "status", "from_team", "prev_plays", "prev_ppa_total",
                        "prev_ppa_avg", "prev_pass_plays", "prev_pass_ppa_total", "prev_pass_ppa_avg",
-                       "prev_tackles", "prev_havoc")
+                       "prev_tackles", "prev_havoc", *[f"prev_{c}" for c in PREV_STATS])
                .filter(pl.col("team").is_in(fbs)).sort("team", "position", "name"))
 
     departures = _departures(ds, season, prev, ros).filter(pl.col("team").is_in(fbs)).sort("team", "name")
@@ -259,6 +320,13 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
             "roster_careers": careers}
 
 
+# Career columns the current season's box scores can fill (summed over games; game_players
+# calls carries rush_att).
+TO_DATE_SUMS = ["pass_cmp", "pass_att", "pass_yds", "pass_td", "pass_int", "rush_car", "rush_yds", "rush_td", "rec",
+                "rec_yds", "rec_td", "tackles", "tfl", "sacks", "pd", "hurries", "ints", "def_td", "fgm", "fga", "xpm",
+                "xpa", "punts", "punt_yds", "punt_in20"]
+
+
 def _qb_starts(gp: pl.DataFrame) -> pl.DataFrame:
     """Per (season, player_id): games played and games he led his team in pass attempts (5+)."""
     lead = gp.with_columns(top=pl.col("pass_att").max().over("game_id", "team"))
@@ -270,7 +338,7 @@ def _qb_starts(gp: pl.DataFrame) -> pl.DataFrame:
 def career_tables(ds: Dataset, season: int, players: pl.DataFrame) -> pl.DataFrame:
     """Season-by-season history (all schools) for players on this season's roster."""
     ids = players.select("player_id", "team")
-    ppa = ds.player_ppa.with_columns([pl.lit(None, pl.Float64).alias(c) for c in ("rush_car", "rec")
+    ppa = _player_ppa(ds).with_columns([pl.lit(None, pl.Float64).alias(c) for c in ("rush_car", "rec")
                                       if c not in ds.player_ppa.columns])  # stores built before these existed
     off = ppa.filter(pl.col("season") < season).select(
         "season", "player_id", career_team="team", plays="plays", pass_att="pass_plays", rush_car="rush_car",
@@ -278,19 +346,27 @@ def career_tables(ds: Dataset, season: int, players: pl.DataFrame) -> pl.DataFra
     de = (ds.player_defense
           .filter((pl.col("season") < season) & ((pl.col("tackles") + pl.col("pd") + pl.col("ints")) > 0))
           .select("season", "player_id", "tackles", "tfl", "sacks", "pd", "hurries", "ints", career_team_d="team"))
+    st = (_player_stats(ds)
+          .filter((pl.col("season") < season) & pl.any_horizontal([pl.col(c).fill_null(0) != 0 for c in STATS_ONLY]))
+          .select("season", "player_id", *STATS_ONLY, career_team_s="team"))
     hist = (off.join(de, on=["season", "player_id"], how="full", coalesce=True)
-            .with_columns(career_team=pl.coalesce("career_team", "career_team_d"), source=pl.lit("season stats"))
-            .drop("career_team_d"))
+            .join(st, on=["season", "player_id"], how="full", coalesce=True)
+            .with_columns(career_team=pl.coalesce("career_team", "career_team_d", "career_team_s"),
+                          source=pl.lit("season stats"))
+            .drop("career_team_d", "career_team_s"))
     gp = getattr(ds, "game_players", None)
     if gp is not None and gp.height:
         starts = _qb_starts(gp)
         hist = hist.join(starts, on=["season", "player_id"], how="left")
         cur = gp.filter(pl.col("season") == season)
         if cur.height:
+            # Stores built before box scores carried yards, sacks, kicking etc. lack those columns.
+            cur = cur.rename({"rush_att": "rush_car"})
+            cur = cur.with_columns([pl.lit(None, pl.Float64).alias(c) for c in [*TO_DATE_SUMS, "fg_long"]
+                                    if c not in cur.columns])
             to_date = (cur.group_by("season", "player_id").agg(
-                career_team=pl.col("team").last(), pass_att=pl.col("pass_att").sum(), rush_car=pl.col("rush_att").sum(),
-                rec=pl.col("rec").sum(), tackles=pl.col("tackles").sum(), tfl=pl.col("tfl").sum(),
-                pd=pl.col("pd").sum(), ints=pl.col("ints").sum())
+                career_team=pl.col("team").last(), *[_sum_or_null(c) for c in TO_DATE_SUMS],
+                fg_long=pl.col("fg_long").max())
                 .with_columns(plays=pl.col("pass_att") + pl.col("rush_car") + pl.col("rec"),
                               source=pl.lit("box scores (to date)"))
                 .join(starts, on=["season", "player_id"], how="left"))

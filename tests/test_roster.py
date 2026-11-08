@@ -105,6 +105,32 @@ def test_roster_web_tables_status_departures_and_labels():
     assert a["in_qb_name"] == "qbB" and a["in_qb_from"] == "B" and a["in_qb_pass_att"] == 330
 
 
+def test_roster_web_status_uses_last_seasons_roster_when_no_stats():
+    """Offensive linemen and backups rarely record a stat: last season's roster says
+    whether they returned or transferred. Production still wins where it exists."""
+    from types import SimpleNamespace
+
+    from cfbr.report.roster_web import roster_tables
+
+    roster, ppa, d, status = _data()
+    prev = pl.DataFrame({"season": [2025] * 4, "player_id": ["olA", "olB", "rbA", "qbB"], "team": ["A", "B", "B", "B"],
+                         "position": ["OL", "OL", "RB", "QB"], "class_year": [2, 3, 2, 3]})
+    cur = pl.DataFrame({"season": [2026] * 3, "player_id": ["olA", "olB", "frA"], "team": ["A", "A", "A"],
+                        "position": ["OL", "OL", "OL"], "class_year": [3, 4, 1]})
+    roster = (pl.concat([roster, cur, prev], how="diagonal_relaxed")
+              .with_columns(name=pl.col("player_id"), jersey=pl.lit(None, pl.Int32), height=pl.lit(None, pl.Int32),
+                            weight=pl.lit(None, pl.Int32), home_city=pl.lit(None, pl.Utf8),
+                            home_state=pl.lit(None, pl.Utf8)))
+    ds = SimpleNamespace(roster=roster, player_ppa=ppa, player_defense=d, team_status=status,
+                         fbs_teams=lambda s: ["A", "B"])
+    p = {r["player_id"]: r for r in roster_tables(ds, 2026)["roster_players"].iter_rows(named=True)}
+    assert p["olA"]["status"] == "returner" and p["olA"]["from_team"] is None
+    assert p["olB"]["status"] == "transfer_in" and p["olB"]["from_team"] == "B"
+    assert p["frA"]["status"] == "new" and p["frA"]["from_team"] is None
+    # rbA is on B's 2025 roster here but produced for A: production wins.
+    assert p["rbA"]["status"] == "returner"
+
+
 def test_roster_web_prefers_latest_snapshot_but_model_keeps_fixed_one():
     from types import SimpleNamespace
 
@@ -288,3 +314,91 @@ def test_roster_as_of_is_utc_whatever_the_session_time_zone(tmp_path):
     assert as_of == fetched and as_of.utcoffset().total_seconds() == 0
     summary = roster_tables(ds, 2026, as_of)["roster_summary"]
     assert summary["roster_as_of"].dtype == pl.Datetime("us", "UTC") and summary["roster_as_of"][0] == fetched
+
+
+def test_build_player_stats_and_box_score_kicking(tmp_path):
+    import json
+
+    from cfbr.ingest.store import PLAYER_STATS_COLS, build_game_players, build_player_stats
+
+    (tmp_path / "stats_player_season" / "2025").mkdir(parents=True)
+    rows = [("qb", "A", "passing", "YDS", "3169"), ("qb", "A", "passing", "TD", "25"),
+            ("qb", "A", "passing", "COMPLETIONS", "234"), ("qb", "A", "rushing", "YDS", "-12"),
+            ("k", "A", "kicking", "FGM", "20"), ("k", "A", "kicking", "LONG", "47"),
+            ("k", "A", "kicking", "PCT", "87.0"),                      # not kept
+            ("lb", "A", "defensive", "SACKS", "1.5"), ("lb", "A", "defensive", "TD", "1"),
+            ("lb", "A", "defensive", "TOT", "bad")]                    # unparseable -> skipped
+    (tmp_path / "stats_player_season" / "2025" / "season.json").write_text(json.dumps(
+        [{"playerId": p, "team": t, "category": c, "statType": s, "stat": v} for p, t, c, s, v in rows]))
+    built = build_player_stats(tmp_path)
+    assert built.columns == ["season", "player_id", "team", *PLAYER_STATS_COLS]
+    st = {r["player_id"]: r for r in built.iter_rows(named=True)}
+    assert (st["qb"]["pass_yds"], st["qb"]["pass_td"], st["qb"]["pass_cmp"], st["qb"]["rush_yds"]) == (3169, 25, 234, -12)
+    assert st["qb"]["fgm"] is None                                     # no kicking row: unknown, not 0
+    assert (st["k"]["fgm"], st["k"]["fg_long"]) == (20, 47)
+    assert (st["lb"]["sacks"], st["lb"]["def_td"], st["lb"]["tackles"]) == (1.5, 1, None)
+    assert build_player_stats(tmp_path / "empty").height == 0
+
+    (tmp_path / "games_players" / "2026").mkdir(parents=True)
+
+    def ath(pid, stat):
+        return {"id": pid, "name": pid, "stat": stat}
+
+    def game(gid, fg, xp, long_, sacks):
+        return {"id": gid, "teams": [{"team": "A", "categories": [
+            {"name": "kicking", "types": [{"name": "FG", "athletes": [ath("k", fg), ath("-1", "9/9")]},
+                                          {"name": "XP", "athletes": [ath("k", xp)]},
+                                          {"name": "LONG", "athletes": [ath("k", long_)]}]},
+            {"name": "defensive", "types": [{"name": "SACKS", "athletes": [ath("lb", sacks)]}]}]}]}
+    (tmp_path / "games_players" / "2026" / "regular_w01.json").write_text(json.dumps([game(1, "2/3", "4/4", "47", "1")]))
+    (tmp_path / "games_players" / "2026" / "regular_w02.json").write_text(json.dumps([game(2, "1/1", "3/4", "38", "0.5")]))
+    gp = build_game_players(tmp_path)
+    k = gp.filter(pl.col("player_id") == "k")
+    assert k.select("fgm", "fga", "xpm", "xpa").sum().row(0) == (3, 4, 7, 8)   # "made/att" split per game
+    assert sorted(k["fg_long"].to_list()) == [38, 47]                           # one long per game
+    assert gp.filter(pl.col("player_id") == "lb")["sacks"].sum() == 1.5
+    assert "-1" not in gp["player_id"].to_list()                                # team totals dropped
+
+
+def test_roster_web_box_score_stats_and_duplicate_ppa_rows():
+    from types import SimpleNamespace
+
+    from cfbr.ingest.store import PLAYER_STATS_COLS
+    from cfbr.report.roster_web import PREV_STATS, roster_tables
+
+    roster, ppa, d, status = _data()
+    ppa = pl.concat([ppa, ppa.filter(pl.col("player_id") == "qbB")])  # CFBD repeats some rows verbatim
+    cur = pl.DataFrame({"season": [2026] * 2, "player_id": ["kA", "pA"], "team": ["A", "A"], "position": ["PK", "P"],
+                        "class_year": [3, 2]})
+    roster = (pl.concat([roster, cur], how="diagonal_relaxed")
+              .with_columns(name=pl.col("player_id"), jersey=pl.lit(None, pl.Int32), height=pl.lit(None, pl.Int32),
+                            weight=pl.lit(None, pl.Int32), home_city=pl.lit(None, pl.Utf8),
+                            home_state=pl.lit(None, pl.Utf8)))
+
+    def st_row(pid, team, **vals):
+        return {"season": 2025, "player_id": pid, "team": team, **{c: vals.get(c) for c in PLAYER_STATS_COLS}}
+    stats = pl.DataFrame([st_row("qbB", "B", pass_att=300.0, pass_yds=2500.0, pass_td=20.0),
+                          st_row("kA", "A", fgm=15.0, fga=18.0, fg_long=51.0),
+                          st_row("pA", "A", punts=0.0)],                 # all zeros: not production
+                         schema={"season": pl.Int32, "player_id": pl.Utf8, "team": pl.Utf8,
+                                 **{c: pl.Float64 for c in PLAYER_STATS_COLS}})
+    ds = SimpleNamespace(roster=roster, player_ppa=ppa, player_defense=d, team_status=status, player_stats=stats,
+                         fbs_teams=lambda s: ["A", "B"])
+    t = roster_tables(ds, 2026)
+    p = t["roster_players"]
+    assert p.height == p["player_id"].n_unique()                       # duplicate PPA rows don't duplicate players
+    assert all(f"prev_{c}" in p.columns for c in PREV_STATS) and "prev_tackles" in p.columns
+    rows = {r["player_id"]: r for r in p.iter_rows(named=True)}
+    assert (rows["qbB"]["prev_pass_yds"], rows["qbB"]["prev_pass_td"]) == (2500.0, 20.0)
+    assert rows["kA"]["prev_fg_long"] == 51.0
+    assert rows["pA"]["prev_punts"] is None
+    c = t["roster_careers"].filter(pl.col("player_id") == "kA")
+    assert c.select("career_season", "career_team", "fgm", "fga").row(0) == (2025, "A", 15.0, 18.0)
+    assert t["roster_careers"].filter(pl.col("player_id") == "pA").height == 0
+    dep = t["roster_departures"]
+    assert dep.height == dep.select("player_id", "team").n_unique()
+
+    # A store built before player_stats existed: same columns, box-score stats all null.
+    old = roster_tables(SimpleNamespace(**{k: v for k, v in vars(ds).items() if k != "player_stats"}), 2026)
+    op = old["roster_players"]
+    assert op.columns == p.columns and op["prev_pass_yds"].null_count() == op.height

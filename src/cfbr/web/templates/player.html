@@ -12,7 +12,7 @@
 </p>
 
 <div class="tiles">
-  {{ tile("Status", "Transfer" if player.status == "transfer_in" else "Returner" if player.status == "returner" else "No prior stats",
+  {{ tile("Status", "Transfer" if player.status == "transfer_in" else "Returner" if player.status == "returner" else "Newcomer",
           ("from " ~ player.from_team) if player.status == "transfer_in" and player.from_team else "") }}
   {{ tile(extra_labels.career_seasons[0], player.career_seasons|count) }}
   {% if player.position == "QB" or (player.career_pass_att or 0) > 0 %}
@@ -41,7 +41,7 @@
   </tbody>
 </table>
 </div>
-<p class="note">Completed seasons come from CFBD season stats; the current season's line is from box scores to date, which have no PPA, sacks or hurries.
+<p class="note">Completed seasons come from CFBD season stats; the current season's line is from box scores to date, which have no PPA.
   Games and QB starts count FBS-involved games only. Defensive stats start in 2016. Hover a column header for its definition.</p>
 {% elif has_careers %}
 <p class="muted">No recorded stats in any season yet.</p>

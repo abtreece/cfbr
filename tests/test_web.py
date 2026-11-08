@@ -972,7 +972,7 @@ def test_roster_page(roster_client):
     assert r.status_code == 200
     html = " ".join(r.text.split())
     assert 'Texas A&amp;M <span class="muted">2026</span>' in html and 'aria-current="page">Roster</a>' in html
-    assert "Sam Starter" in html and "Returner" in html and "No prior stats" in html
+    assert "Sam Starter" in html and "Returner" in html and "Newcomer" in html and "No prior stats" not in html
     assert 'Transfer from <a href="/team/2025/Hawai%27i">Hawai&#39;i</a>' in html
     assert "&lt;i&gt;Fresh&lt;/i&gt; Man" in html and "<i>Fresh</i>" not in html  # names are escaped
     assert "6-2" in html and ">Sr<" in html and ">Gr<" in html  # height and class labels
