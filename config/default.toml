@@ -40,6 +40,10 @@ alpha_sr = 300.0
 half_life_weeks = 0.0
 # 0 disables the k/(k+games) prior weight; alpha alone controls prior strength.
 prior_k = 0.0
+# FCS games, two-stage fit (DECISIONS "FCS games, two-stage fit"): false = one fit for everything.
+fcs_two_stage = false
+# Stage-1 weight of a play with a pooled FCS side (only used when fcs_two_stage is on).
+fcs_weight = 1.0
 
 [baseline]
 margin_cap = 28

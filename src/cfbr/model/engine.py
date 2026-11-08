@@ -23,7 +23,7 @@ from cfbr.model.calibrate import Calibration, fit_calibration, fit_stage2, predi
 from cfbr.model.massey import fit_massey
 from cfbr.model.prior import (COMPONENTS, fit_prior_models, pooled_priors, predict_priors,
                               season_features)
-from cfbr.model.ridge import fit_efficiency_arrays, home_indicator, recency_weights
+from cfbr.model.ridge import fit_efficiency_arrays, home_indicator, play_weights, recency_weights
 from cfbr.model.roster import roster_features
 from cfbr.model.schemes import training_seasons
 
@@ -129,11 +129,9 @@ class Engine:
             p = {c: pr[c].to_numpy() for c in RATING_COLS}
         else:
             p = {c: None for c in RATING_COLS}
-        w = None
-        if as_of is not None:
-            w = recency_weights(a.kickoff_ns[:k], _ns(as_of), self.cfg.model.half_life_weeks)
-        off, de, h = a.off[:k], a.de[:k], a.home[:k]
         m = self.cfg.model
+        w = play_weights(a, k, None if as_of is None else _ns(as_of), m)
+        off, de, h = a.off[:k], a.de[:k], a.home[:k]
         f_ppa = fit_efficiency_arrays(off, de, h, a.ppa[:k], teams, m.alpha_ppa, p["o_ppa"], p["d_ppa"], w, a.center)
         f_sr = fit_efficiency_arrays(off, de, h, a.success[:k], teams, m.alpha_sr, p["o_sr"], p["d_sr"], w, a.center)
         n = len(teams)

@@ -54,6 +54,10 @@ class Model(BaseModel):
     calibration_v2: bool = False
     # Calibration v3 = v2 plus a pred x |fcs| slope term (DECISIONS "calibration v3"); off until its gate passes.
     calibration_v3: bool = False
+    # FCS games, two-stage fit (DECISIONS "FCS games, two-stage fit"): False = one fit for everything.
+    fcs_two_stage: bool = False
+    # Stage-1 weight of a play with a pooled FCS side; only used when fcs_two_stage is on.
+    fcs_weight: float = Field(1.0, ge=0.0, le=1.0)
 
 
 class Baseline(BaseModel):

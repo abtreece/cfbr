@@ -136,3 +136,16 @@ def recency_weights(kickoff_ns: np.ndarray, as_of_ns: int, half_life_weeks: floa
         return None
     age_weeks = (as_of_ns - kickoff_ns) / (7 * 86400 * 1e9)
     return np.power(0.5, age_weeks / half_life_weeks)
+
+
+def play_weights(a, k: int, as_of_ns: int | None, m) -> np.ndarray | None:
+    """Per-play weights for the first ``k`` plays of season arrays ``a`` (Engine.SeasonArrays):
+    recency decay at ``as_of_ns`` (none when it is None), times ``m.fcs_weight`` for plays with a
+    pooled FCS side when ``m.fcs_two_stage`` is on. ``None`` when nothing applies, so the fit is
+    unweighted. Every fit that should match the published one calls this (engine, uncertainty, matchup)."""
+    w = None if as_of_ns is None else recency_weights(a.kickoff_ns[:k], as_of_ns, m.half_life_weeks)
+    if m.fcs_two_stage and m.fcs_weight != 1.0:
+        fcs = ~a.center[a.off[:k]] | ~a.center[a.de[:k]]
+        factor = np.where(fcs, m.fcs_weight, 1.0)
+        w = factor if w is None else w * factor
+    return w
