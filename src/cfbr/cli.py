@@ -276,6 +276,35 @@ def _default_config(config: Optional[Path]):
     return load_config(config or (tuned if tuned.exists() else None))
 
 
+@app.command("fcs-gate")
+def fcs_gate(
+    gate: Annotated[int, typer.Option(help="1 = 2015–2021, 2 = 2022–2025, 3 = 2026 through week 10")],
+    v2: Annotated[Optional[Path], typer.Option(help="Candidate config (default config/tuned_v2.toml)")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """FCS two-stage gate (DECISIONS "FCS games, two-stage fit"): paired MAE gain of the tuned two-stage
+    candidate over the published config. Gates run in order; each needs the previous one passed.
+    Writes results/<ts>-fcs-gate-N/."""
+    import json
+
+    from cfbr.backtest.fcs_gate import GATES, latest_gate, run_fcs_gate
+    from cfbr.config import REPO_ROOT
+    from cfbr.data import Dataset
+
+    if gate not in GATES:
+        raise typer.BadParameter(f"--gate must be one of {sorted(GATES)}")
+    v1_cfg = load_config(config or REPO_ROOT / "config" / "tuned.toml")
+    v2_cfg = load_config(v2 or REPO_ROOT / "config" / "tuned_v2.toml")
+    if gate > 1:
+        prev = latest_gate(v1_cfg.paths.results_dir, gate - 1)
+        if not prev or not prev["primary"]["passes"]:
+            raise typer.BadParameter(f"gate {gate - 1} has not passed; gates run in order")
+    out = run_fcs_gate(v1_cfg, v2_cfg, Dataset.load(v1_cfg), gate)
+    p = json.loads((out / "gate.json").read_text())["primary"]
+    typer.echo(f"gate {gate}: v1 − v2 paired MAE gain {p['gain']:+.4f} [{p['ci95'][0]:+.4f}, {p['ci95'][1]:+.4f}] "
+               f"over {p['n']} games: {'PASSES' if p['passes'] else 'FAILS'}. {out}")
+
+
 @app.command()
 def rank(
     season: Annotated[int, typer.Option()],
