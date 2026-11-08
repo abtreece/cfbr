@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tomllib
 from copy import deepcopy
 from pathlib import Path
 
@@ -42,6 +43,10 @@ def apply_params(cfg: Config, params: dict) -> Config:
                 base.margin_cap = int(v)
             else:
                 base.alpha = float(v)
+        elif k == "fcs_weight":
+            m.fcs_weight = float(v)
+        elif k == "fcs_two_stage":
+            m.fcs_two_stage = bool(v)
         else:
             raise KeyError(k)
     return cfg
@@ -83,7 +88,22 @@ def suggest(trial: optuna.Trial) -> dict:
     return p
 
 
-def run_search(config_path: str | None, seasons: list[int], n_trials: int, n_jobs: int, seed: int = 0) -> list[dict]:
+def suggest_fcs_two_stage(trial: optuna.Trial) -> dict:
+    """Search space fixed by DECISIONS "FCS games, two-stage fit" (2026-11-08)."""
+    return {
+        "fcs_two_stage": True, "fcs_pooling": "conference", "gt_enabled": False,
+        "fcs_weight": trial.suggest_float("fcs_weight", 0.0, 1.0),
+        "alpha_ppa": trial.suggest_float("alpha_ppa", 20, 3000, log=True),
+        "alpha_sr": trial.suggest_float("alpha_sr", 20, 3000, log=True),
+        "half_life_weeks": trial.suggest_float("half_life_weeks", 2, 26),
+    }
+
+
+SPACES = {"phase6": suggest, "fcs-two-stage": suggest_fcs_two_stage}
+
+
+def run_search(config_path: str | None, seasons: list[int], n_trials: int, n_jobs: int, seed: int = 0,
+               space: str = "phase6") -> list[dict]:
     sampler = optuna.samplers.TPESampler(seed=seed, n_startup_trials=min(48, n_trials // 3), multivariate=True)
     study = optuna.create_study(direction="minimize", sampler=sampler)
     pool = Parallel(n_jobs=n_jobs, backend="loky")
@@ -91,7 +111,7 @@ def run_search(config_path: str | None, seasons: list[int], n_trials: int, n_job
     done = 0
     while done < n_trials:
         batch = [study.ask() for _ in range(min(n_jobs, n_trials - done))]
-        params = [suggest(t) for t in batch]
+        params = [SPACES[space](t) for t in batch]
         outs = pool(delayed(evaluate)(config_path, p, seasons) for p in params)
         for t, out in zip(batch, outs):
             study.tell(t, out["mae"])
@@ -102,11 +122,18 @@ def run_search(config_path: str | None, seasons: list[int], n_trials: int, n_job
     return results
 
 
-def sensitivity(config_path: str | None, best: dict, seasons: list[int], n_jobs: int) -> dict[str, list[dict]]:
-    """One-at-a-time sweeps around the best params."""
+def sensitivity_grids(best: dict, space: str = "phase6") -> dict[str, list]:
+    scale = (0.25, 0.5, 0.75, 1, 1.5, 2, 4)
+    if space == "fcs-two-stage":
+        return {
+            "fcs_weight": [0.0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0],
+            "alpha_ppa": [best["alpha_ppa"] * f for f in scale],
+            "alpha_sr": [best["alpha_sr"] * f for f in scale],
+            "half_life_weeks": [2.0, 3.0, 3.7, 5.0, 8.0, 13.0, 26.0],
+        }
     grids: dict[str, list] = {
-        "alpha_ppa": [best["alpha_ppa"] * f for f in (0.25, 0.5, 0.75, 1, 1.5, 2, 4)],
-        "alpha_sr": [best["alpha_sr"] * f for f in (0.25, 0.5, 0.75, 1, 1.5, 2, 4)],
+        "alpha_ppa": [best["alpha_ppa"] * f for f in scale],
+        "alpha_sr": [best["alpha_sr"] * f for f in scale],
         "half_life_weeks": [0.0, 3, 6, 10, 16, 26],
         "fcs_pooling": ["single", "conference"],
         "gt_enabled": [True, False],
@@ -115,6 +142,13 @@ def sensitivity(config_path: str | None, best: dict, seasons: list[int], n_jobs:
         for q, span in (("q2", 12), ("q3", 10), ("q4", 8)):
             c = best[q]
             grids[q] = sorted({max(7, c + d) for d in range(-span, span + 1, max(1, span // 4))})
+    return grids
+
+
+def sensitivity(config_path: str | None, best: dict, seasons: list[int], n_jobs: int,
+                space: str = "phase6") -> dict[str, list[dict]]:
+    """One-at-a-time sweeps around the best params."""
+    grids = sensitivity_grids(best, space)
     jobs = []
     for name, values in grids.items():
         for v in values:
@@ -141,8 +175,10 @@ def massey_grid(config_path: str | None, best: dict, seasons: list[int], n_jobs:
 
 def to_toml(cfg: Config) -> str:
     """Serialize the tunable sections (paths and ingest come from defaults)."""
-    d = cfg.model_dump(mode="json", exclude={"paths", "source"})
+    return dict_to_toml(cfg.model_dump(mode="json", exclude={"paths", "source"}))
 
+
+def dict_to_toml(d: dict) -> str:
     def fmt(v):
         if isinstance(v, bool):
             return "true" if v else "false"
@@ -174,6 +210,28 @@ def to_toml(cfg: Config) -> str:
 def write_frozen(base_config: str | None, best: dict, path: Path) -> Config:
     cfg = apply_params(load_config(base_config), best)
     path.write_text(to_toml(cfg))
+    return load_config(path)
+
+
+def patch_frozen(base_path: Path, best: dict, path: Path) -> Config:
+    """Copy a frozen config file, changing only the keys in ``best``. Sections the base file doesn't
+    list stay unlisted, so they keep following pydantic defaults exactly as the base config does."""
+    with open(base_path, "rb") as f:
+        d = tomllib.load(f)
+    model, prep = d.setdefault("model", {}), d.setdefault("prep", {})
+    gt = prep.setdefault("garbage_time", {})
+    for k, v in best.items():
+        if k in ("alpha_ppa", "alpha_sr", "half_life_weeks", "fcs_weight"):
+            model[k] = float(v)
+        elif k == "fcs_two_stage":
+            model[k] = bool(v)
+        elif k == "fcs_pooling":
+            prep[k] = v
+        elif k == "gt_enabled":
+            gt["enabled"] = bool(v)
+        else:
+            raise KeyError(k)
+    path.write_text(dict_to_toml(d))
     return load_config(path)
 
 
@@ -222,6 +280,26 @@ def _prior_rows(metrics: dict) -> list[str]:
         rows.append(f"| {r['slot']} | {r['mean_prior_share']:.2f} | {r['mae']:.2f} | {r['prior_only_mae']:.2f} | "
                     f"{r['n_games']} |")
     return rows
+
+
+def write_fcs_report(path: Path, best: dict, metrics: dict, v1_metrics: dict, sens: dict, n_trials: int,
+                     run_dir: Path) -> None:
+    o, v = metrics["overall"], v1_metrics["overall"]
+    lines = [
+        "# FCS two-stage tuning report", "",
+        f"Tuning seasons {', '.join(metrics['by_season'])}; objective = overall MAE of predicted margin. "
+        f"{n_trials} Optuna TPE trials (seed 0), search space fixed by DECISIONS \"FCS games, two-stage fit\". "
+        "Comparator: the published v1 config (`config/tuned.toml`). This is in-sample; the gates decide.", "",
+        "## Best config", "", "| parameter | value |", "|---|---|",
+        *[f"| {k} | {_fmtv(val) if not isinstance(val, float) or val >= 10 else f'{val:.3f}'} |"
+          for k, val in best.items()], "",
+        f"Tuning-season MAE: **{o['mae']:.4f}** v2 vs {v['mae']:.4f} v1.", "",
+        "## Sensitivity (MAE on tuning seasons, one parameter varied at a time)", "",
+        "| parameter | value: MAE | range |", "|---|---|---|", *describe_sensitivity(sens, o["mae"]), "",
+        "## Tuning-season metrics (v2)", "", *_metric_rows(metrics), "",
+        f"Run: `{run_dir}`", "",
+    ]
+    path.write_text("\n".join(lines))
 
 
 def write_report(path: Path, best: dict, metrics: dict, default_metrics: dict, sens: dict, mgrid: list[dict],

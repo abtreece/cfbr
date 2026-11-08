@@ -132,9 +132,13 @@ def backtest(
 def tune(
     trials: Annotated[int, typer.Option()] = 256,
     jobs: Annotated[int, typer.Option()] = 30,
+    space: Annotated[str, typer.Option(
+        help="phase6 (writes tuned.toml) or fcs-two-stage (writes tuned_v2.toml)")] = "phase6",
     config: ConfigOpt = None,
 ) -> None:
-    """Tune on the tuning seasons, write config/tuned.toml and results/tuning_report.md (no holdout)."""
+    """Tune on the tuning seasons, write config/tuned.toml and results/tuning_report.md (no holdout).
+    With --space fcs-two-stage (DECISIONS "FCS games, two-stage fit"), patch the given published
+    config into config/tuned_v2.toml and report under results/tuning-fcs-two-stage/."""
     import json
 
     from cfbr.backtest import tune as T
@@ -145,6 +149,26 @@ def tune(
     t0, t1 = cfg.seasons.tuning
     seasons = list(range(t0, t1 + 1))
     cpath = str(config) if config else None
+    if space == "fcs-two-stage":
+        if config is None:
+            raise typer.BadParameter("--space fcs-two-stage needs --config config/tuned.toml (the published v1 config)")
+        out_dir = cfg.paths.results_dir / "tuning-fcs-two-stage"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        results = T.run_search(cpath, seasons, trials, jobs, space=space)
+        T.summarize_trials(results).write_parquet(out_dir / "trials.parquet")
+        best = min(results, key=lambda r: r["mae"])["params"]
+        sens = T.sensitivity(cpath, best, seasons, jobs, space=space)
+        (out_dir / "search.json").write_text(json.dumps({"best": best, "sensitivity": sens}, indent=2, default=float))
+        tuned_path = REPO_ROOT / "config" / "tuned_v2.toml"
+        tuned = T.patch_frozen(Path(config), best, tuned_path)
+        preds, metrics = run_backtest(tuned, seasons)
+        run_dir = write_results(tuned, seasons, preds, metrics, "tuned-v2-tuning")
+        T.write_fcs_report(out_dir / "tuning_report.md", best, metrics, run_backtest(cfg, seasons)[1], sens, trials,
+                           run_dir)
+        typer.echo(f"frozen: {tuned_path}\nreport: {out_dir / 'tuning_report.md'}")
+        return
+    if space != "phase6":
+        raise typer.BadParameter(f"unknown --space {space!r}")
     out_dir = cfg.paths.results_dir / "tuning"
     out_dir.mkdir(parents=True, exist_ok=True)
 
