@@ -37,7 +37,8 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
 | `cfbr check` | Daily dead-man's switch: alert when no successful `weekly` run is recorded since the last Sunday in season, or the backup is stale |
-| `cfbr anomalies --season 2026` | Advisory data checks for the latest week (A1–A5 ingest integrity, B1–B3 model output): writes `out/{season}/wNN/anomalies.{json,md}`; `weekly` runs them and pushes new items. `--history` runs the database checks over a season; `--baselines` recomputes the tracked `config/anomaly_thresholds.toml` (no API calls; run it in a dev checkout and commit the result, never on the server) |
+| `cfbr anomalies --season 2026` | Advisory data checks for the latest week (A1–A5 ingest integrity, B1–B3 model output): writes `out/{season}/wNN/anomalies.{json,md}`; `weekly` runs them and pushes new items. `--history` runs the database checks over a season; `--baselines` recomputes the tracked `config/anomaly_thresholds.toml` (no API calls; run it in a dev checkout and commit the result, never on the server); `--sample-patterns --seasons 2022-2025` builds the shakedown set in `results/anomaly_shakedown/` from the `--history` output (no API calls) |
+| `cfbr investigate` | Advisory: a Claude agent investigates each pending anomaly (data bug or real?) on a read-only snapshot and writes a grounded verdict into `anomalies.{json,md}`; one ntfy summary per run. Off unless `ANTHROPIC_API_KEY` is set (env or `.keys`); spend is logged to `data/anthropic_calls.jsonl` and runs stop at `[investigate].monthly_budget_usd`. `--dry-run` lists targets without API calls, `--doc PATH` runs on another anomalies file (the shakedown set), `--force ID` re-runs one item (repeatable). A second concurrent run exits quietly ("busy") |
 | `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
 | `cfbr scores` | Fill in final scores on the site for games played since the last `weekly` (one CFBD call, only when a game should be over) and grade the open paper and real bets on them; ratings and new bets wait for Sunday. Cron runs it nightly |
 | `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon, plus weekdays 3× with `--if-games-within 168` for fresher site lines |
@@ -111,6 +112,16 @@ On macOS, `tests/test_backup.py` needs GNU rsync (`brew install rsync`); the sys
 # 9 AM: early rankings + predictions. 3 PM: re-run to pick up the AP/Coaches polls.
 0 14,15 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "09" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
 0 20,21 * * 0  [ "$(TZ=America/Chicago date +\%H)" = "15" ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr weekly >> data/weekly.log 2>&1
+```
+
+### Anomaly investigation (Sunday afternoons)
+
+`cfbr investigate` runs hourly from 10 AM to 6 PM Central on Sundays, after the 9 AM `weekly`. It does nothing unless the latest week's `anomalies.json` has pending items. It holds the weekly lock only while copying `data/cfb.duckdb` to `data/investigations/snapshot.duckdb` (and skips the run while `cfb.duckdb.wal` exists), so a long run never blocks the 3 PM `weekly`. Only one run goes at a time, so an overlapping hourly run exits quietly. Transcripts go to `data/investigations/{season}/wNN/`. More than `[investigate].max_items` pending items in one run are marked `skipped_volume` and get one summary line instead of a dozen separate investigations.
+
+```cron
+# Same UTC double-hour trick as weekly: Chicago 10:20-18:20 on Sunday spans UTC Sunday 15-23 and Monday 0.
+20 15-23 * * 0  [ "$(TZ=America/Chicago date +\%u)" = 7 ] && [ "$(TZ=America/Chicago date +\%H)" -ge 10 ] && [ "$(TZ=America/Chicago date +\%H)" -le 18 ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr investigate >> data/investigate.log 2>&1
+20 0 * * 1  [ "$(TZ=America/Chicago date +\%u)" = 7 ] && [ "$(TZ=America/Chicago date +\%H)" -ge 10 ] && [ "$(TZ=America/Chicago date +\%H)" -le 18 ] && cd /home/abtreece/cfb-ratings && /home/abtreece/.local/bin/uv run cfbr investigate >> data/investigate.log 2>&1
 ```
 
 If CFBD is down (5xx, 429 or timeouts), `weekly` waits and retries its ingest every 10 minutes for up to an hour (`[ingest].outage_retries`, `outage_wait_minutes`) before it gives up and alerts, so a short outage delays the 9 AM run instead of pushing the update to 3 PM.
