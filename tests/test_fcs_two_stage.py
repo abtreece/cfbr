@@ -1,0 +1,150 @@
+"""FCS two-stage fit (DECISIONS "FCS games, two-stage fit"): synthetic checks, no DB."""
+
+import numpy as np
+import pytest
+
+from cfbr.config import Model, load_config
+from cfbr.model.engine import SeasonArrays
+from cfbr.model.ridge import fit_efficiency_arrays, fit_fcs_stage2, play_weights, recency_weights
+
+WEEK_NS = 7 * 86400 * 10**9
+N_FBS = 20
+THIN = 22  # index of the thin FCS group F2
+
+
+def _season(thin_plays=40, seed=11):
+    """20 FBS teams (true O/D ~ N(0, 0.1)); FCS groups F0, F1 (8 games each) and F2 (one short game),
+    all with true O = D = -0.4. Plays sorted by kickoff like Engine.arrays."""
+    rng = np.random.default_rng(seed)
+    teams = [f"T{i}" for i in range(N_FBS)] + ["F0", "F1", "F2"]
+    center = np.array([t.startswith("T") for t in teams])
+    o_true = np.r_[rng.normal(0, 0.1, N_FBS), [-0.4] * 3]
+    d_true = np.r_[rng.normal(0, 0.1, N_FBS), [-0.4] * 3]
+    rows = []  # (offense, defense, home indicator, week, plays)
+    for week in range(10):
+        for a, b in rng.permutation(N_FBS).reshape(-1, 2):
+            rows += [(a, b, 1.0, week, 60), (b, a, -1.0, week, 60)]
+    for g, n_games, per_side in ((20, 8, 60), (21, 8, 60), (THIN, 1, thin_plays // 2)):
+        for week in range(n_games):
+            fbs = int(rng.integers(N_FBS))
+            rows += [(fbs, g, 1.0, week, per_side), (g, fbs, -1.0, week, per_side)]
+    off, de, h, wk = [], [], [], []
+    for o, d, hh, w, c in rows:
+        off += [o] * c
+        de += [d] * c
+        h += [hh] * c
+        wk += [w] * c
+    off, de, h, wk = np.array(off), np.array(de), np.array(h, dtype=float), np.array(wk)
+    ppa = 0.05 + o_true[off] - d_true[de] + 0.02 * h + rng.normal(0, 1.2, off.size)
+    order = np.argsort(wk, kind="stable")
+    return SeasonArrays(teams=teams, center=center, kickoff_ns=(wk[order] * WEEK_NS).astype(np.int64),
+                        off=off[order], de=de[order], home=h[order], ppa=ppa[order],
+                        success=(ppa[order] > 0).astype(float))
+
+
+def _stage1(a, w, alpha=300.0, keep=None):
+    sel = np.ones(a.off.size, dtype=bool) if keep is None else keep
+    return fit_efficiency_arrays(a.off[sel], a.de[sel], a.home[sel], a.ppa[sel], a.teams, alpha, None, None,
+                                 None if w is None else w[sel], a.center)
+
+
+def test_config_files():
+    for path in (None, "config/tuned_v1.toml"):
+        m = load_config(path).model
+        assert m.fcs_two_stage is False and m.fcs_weight == 1.0
+    v1, pub = load_config("config/tuned_v1.toml"), load_config("config/tuned.toml")
+    assert pub.model.fcs_two_stage is True and 0.0 <= pub.model.fcs_weight <= 1.0
+    assert (v1.model.alpha_ppa, v1.model.alpha_sr, v1.model.half_life_weeks) == (303.298, 90.7544, 3.6978)
+    assert pub.baseline == v1.baseline and pub.prep == v1.prep and pub.prior == v1.prior
+    assert pub.bets.verdict_min_bets == v1.bets.verdict_min_bets
+
+
+def test_fcs_weight_must_be_a_fraction():
+    with pytest.raises(ValueError):
+        Model(fcs_weight=1.5)
+
+
+@pytest.mark.parametrize("two_stage,weight", [(False, 0.2), (True, 1.0)])
+def test_play_weights_reduce_to_recency_exactly(two_stage, weight):
+    a = _season()
+    k = a.off.size
+    as_of = int(a.kickoff_ns.max()) + WEEK_NS
+    m = Model(half_life_weeks=3.7, fcs_two_stage=two_stage, fcs_weight=weight)
+    np.testing.assert_array_equal(play_weights(a, k, as_of, m), recency_weights(a.kickoff_ns[:k], as_of, 3.7))
+    assert play_weights(a, k, None, m) is None
+
+
+def test_play_weights_scale_fcs_plays_only():
+    a = _season()
+    k = a.off.size
+    w = play_weights(a, k, None, Model(fcs_two_stage=True, fcs_weight=0.25))
+    fcs = ~a.center[a.off] | ~a.center[a.de]
+    assert set(np.unique(w[fcs])) == {0.25}
+    assert set(np.unique(w[~fcs])) == {1.0}
+
+
+def test_play_weights_respect_the_prefix():
+    a = _season()
+    k = a.off.size // 2
+    w = play_weights(a, k, int(a.kickoff_ns[k]), Model(half_life_weeks=3.7, fcs_two_stage=True, fcs_weight=0.3))
+    assert w.size == k
+
+
+def test_fcs_weight_zero_isolates_fbs_ratings():
+    a = _season()
+    k = a.off.size
+    drop_thin_game = ~((a.off == THIN) | (a.de == THIN))
+    w0 = play_weights(a, k, None, Model(fcs_two_stage=True, fcs_weight=0.0))
+    full, part = _stage1(a, w0), _stage1(a, w0, keep=drop_thin_game)
+    np.testing.assert_allclose(full.o[a.center], part.o[a.center], atol=1e-12)
+    np.testing.assert_allclose(full.d[a.center], part.d[a.center], atol=1e-12)
+    # Control: at full weight the same game does move FBS ratings.
+    w1 = play_weights(a, k, None, Model(fcs_two_stage=True, fcs_weight=1.0))
+    moved = np.abs(_stage1(a, w1).o[a.center] - _stage1(a, w1, keep=drop_thin_game).o[a.center]).max()
+    assert moved > 1e-4
+
+
+def test_stage2_thin_group_shrinks_to_the_fcs_level_not_an_average_fbs_team():
+    a = _season(thin_plays=40)
+    s1 = _stage1(a, None)
+    s2 = fit_fcs_stage2(a.off, a.de, a.home, a.ppa, ~a.center, 300.0, s1)
+    for s1_r, s2_r in ((s1.o, s2.o), (s1.d, s2.d)):
+        level = s2_r[20:22].mean()                 # the two well-sampled groups (true -0.4)
+        assert s1_r[THIN] > -0.15                  # single fit, no prior: pulled toward 0 (an average FBS team)
+        assert abs(s2_r[THIN] - level) < 0.06      # stage 2: pulled toward the FCS level
+        assert s2_r[THIN] < s1_r[THIN] - 0.15
+
+
+def test_stage2_keeps_stage1_fbs_ratings_and_does_not_mutate_stage1():
+    a = _season()
+    s1 = _stage1(a, None)
+    o0, d0 = s1.o.copy(), s1.d.copy()
+    s2 = fit_fcs_stage2(a.off, a.de, a.home, a.ppa, ~a.center, 300.0, s1)
+    np.testing.assert_array_equal(s2.o[a.center], o0[a.center])
+    np.testing.assert_array_equal(s2.d[a.center], d0[a.center])
+    np.testing.assert_array_equal(s1.o, o0)
+    np.testing.assert_array_equal(s1.d, d0)
+    assert (s2.home, s2.intercept) == (s1.home, s1.intercept)
+
+
+def test_stage2_without_fcs_plays_returns_the_prior():
+    a = _season()
+    fbs_only = a.center[a.off] & a.center[a.de]
+    s1 = _stage1(a, None, keep=fbs_only)
+    prior_o = np.r_[np.zeros(N_FBS), [-0.3, -0.5, -0.1]]
+    prior_d = np.r_[np.zeros(N_FBS), [-0.2, -0.6, 0.0]]
+    s2 = fit_fcs_stage2(a.off[fbs_only], a.de[fbs_only], a.home[fbs_only], a.ppa[fbs_only], ~a.center, 300.0,
+                        s1, prior_o, prior_d)
+    np.testing.assert_allclose(s2.o[~a.center], prior_o[~a.center], atol=1e-12)
+    np.testing.assert_allclose(s2.d[~a.center], prior_d[~a.center], atol=1e-12)
+
+
+def test_stage2_ignores_zero_weight_plays():
+    a = _season()
+    s1 = _stage1(a, None)
+    w = np.where(a.off == THIN, 0.0, 1.0) * np.where(a.de == THIN, 0.0, 1.0)
+    keep = w > 0
+    s2_w = fit_fcs_stage2(a.off, a.de, a.home, a.ppa, ~a.center, 300.0, s1, weights=w)
+    s2_k = fit_fcs_stage2(a.off[keep], a.de[keep], a.home[keep], a.ppa[keep], ~a.center, 300.0, s1)
+    np.testing.assert_allclose(s2_w.o, s2_k.o, atol=1e-12)
+    np.testing.assert_allclose(s2_w.d, s2_k.d, atol=1e-12)

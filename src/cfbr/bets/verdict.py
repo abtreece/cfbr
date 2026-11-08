@@ -9,6 +9,7 @@ The status is recomputed every run and is provisional until the decision point.
 from __future__ import annotations
 
 import math
+from datetime import datetime
 
 import polars as pl
 
@@ -39,14 +40,30 @@ def _at_close(ledger: pl.DataFrame, table: PricingTable) -> float:
     return sum(vals) / len(vals) if vals else math.nan
 
 
+def _split(ledger: pl.DataFrame, table: PricingTable, split_at: str) -> dict:
+    """Context only: closing-implied ROI before and after a mid-season model switch, by when each bet
+    was recorded (DECISIONS "FCS games, two-stage fit"). The verdict itself pools all bets."""
+    cut = datetime.fromisoformat(split_at)
+    roi = closing_implied_roi(ledger, table)
+    after = pl.Series([r is not None and datetime.fromisoformat(r) >= cut for r in ledger["recorded_at"]])
+    out: dict = {"at": split_at}
+    for name, sel in (("before", ~after), ("after", after)):
+        v = roi.filter(sel).drop_nulls()
+        out[name] = {"n": v.len(), "mean": float(v.mean()) if v.len() else math.nan}
+    return out
+
+
 def verdict(ledger: pl.DataFrame, cfg: Bets, table: PricingTable | None) -> dict:
     out = {"status": "unavailable", "n": 0, "min_bets": cfg.verdict_min_bets, "mean": math.nan, "sd": math.nan,
-           "ci_low": math.nan, "ci_high": math.nan, "at_close": math.nan, "decision_point": DECISION_POINT.format(n=cfg.verdict_min_bets)}
+           "ci_low": math.nan, "ci_high": math.nan, "at_close": math.nan, "decision_point": DECISION_POINT.format(n=cfg.verdict_min_bets),
+           "split": None}
     if table is None:
         return out
     roi = closing_implied_roi(ledger, table).drop_nulls()
     n = roi.len()
     out["n"] = n
+    if cfg.verdict_split_at:
+        out["split"] = _split(ledger, table, cfg.verdict_split_at)
     if n == 0:
         out["status"] = "too few"
         return out

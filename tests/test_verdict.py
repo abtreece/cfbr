@@ -80,3 +80,18 @@ def test_threshold_is_pre_registered():
 
     assert load_config("config/default.toml").bets.verdict_min_bets == 300
     assert load_config("config/tuned.toml").bets.verdict_min_bets == 300
+
+
+def test_verdict_split_is_context_only():
+    rows = [_row(i, "won", "snapshot", "home", -3.0, -7.0) for i in range(3)]          # +3.5% each
+    rows += [_row(i + 10, "lost", "snapshot", "home", -3.0, -3.0) for i in range(2)]   # -4.5% each
+    for r, ts in zip(rows, ["2026-11-01T15:00:00+00:00"] * 3 + ["2026-11-15T15:00:00+00:00"] * 2):
+        r["recorded_at"] = ts
+    led = _ledger(rows)
+    plain = verdict(led, Bets(pricing_books=[], verdict_min_bets=3), FakeTable())
+    split = verdict(led, Bets(pricing_books=[], verdict_min_bets=3, verdict_split_at="2026-11-09T00:00:00+00:00"),
+                    FakeTable())
+    assert plain["split"] is None
+    assert {k: split[k] for k in ("n", "mean", "status")} == {k: plain[k] for k in ("n", "mean", "status")}
+    assert split["split"]["before"]["n"] == 3 and math.isclose(split["split"]["before"]["mean"], 0.035)
+    assert split["split"]["after"]["n"] == 2 and math.isclose(split["split"]["after"]["mean"], -0.045)

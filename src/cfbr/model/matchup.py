@@ -14,7 +14,7 @@ import numpy as np
 import polars as pl
 
 from cfbr.model.engine import RATING_COLS, Engine, _ns
-from cfbr.model.ridge import fit_efficiency_arrays, recency_weights
+from cfbr.model.ridge import fit_efficiency_arrays, play_weights
 from cfbr.model.schemes import training_seasons
 from cfbr.prep.plays import PASS_TYPES, RUSH_TYPES
 
@@ -41,7 +41,7 @@ class Matchup:
         rush, pas = (x[:k] for x in self.masks(season))
         pr = pl.DataFrame({"team": a.teams}).join(eng.priors(season), on="team", how="left").fill_null(0.0)
         p = {c: pr[c].to_numpy() for c in RATING_COLS}
-        w_all = recency_weights(a.kickoff_ns[:k], _ns(as_of), m.half_life_weeks)
+        w_all = play_weights(a, k, _ns(as_of), m)
         out = {}
         for split, mask in (("rush", rush), ("pass", pas)):
             sel = np.flatnonzero(mask)

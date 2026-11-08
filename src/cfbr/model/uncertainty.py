@@ -28,7 +28,7 @@ from scipy.optimize import minimize
 from scipy.stats import norm
 
 from cfbr.model.engine import RATING_COLS, Engine, _ns
-from cfbr.model.ridge import fit_efficiency_arrays, recency_weights
+from cfbr.model.ridge import fit_efficiency_arrays, play_weights
 from cfbr.model.schemes import training_seasons
 
 
@@ -79,7 +79,7 @@ class Posterior:
         n = len(a.teams)
         pr = pl.DataFrame({"team": a.teams}).join(eng.priors(season), on="team", how="left").fill_null(0.0)
         p = {c: pr[c].to_numpy() for c in RATING_COLS}
-        w = recency_weights(a.kickoff_ns[:k], _ns(as_of), m.half_life_weeks)
+        w = play_weights(a, k, _ns(as_of), m)
         off, de, h = a.off[:k], a.de[:k], a.home[:k]
         f1 = fit_efficiency_arrays(off, de, h, a.ppa[:k], a.teams, m.alpha_ppa, p["o_ppa"], p["d_ppa"], w, a.center,
                                    keep_posterior=True)

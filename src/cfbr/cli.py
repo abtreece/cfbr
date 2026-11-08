@@ -132,9 +132,13 @@ def backtest(
 def tune(
     trials: Annotated[int, typer.Option()] = 256,
     jobs: Annotated[int, typer.Option()] = 30,
+    space: Annotated[str, typer.Option(
+        help="phase6 (writes tuned.toml) or fcs-two-stage (writes tuned_v2.toml)")] = "phase6",
     config: ConfigOpt = None,
 ) -> None:
-    """Tune on the tuning seasons, write config/tuned.toml and results/tuning_report.md (no holdout)."""
+    """Tune on the tuning seasons, write config/tuned.toml and results/tuning_report.md (no holdout).
+    With --space fcs-two-stage (DECISIONS "FCS games, two-stage fit"), patch the given published
+    config into config/tuned_v2.toml and report under results/tuning-fcs-two-stage/."""
     import json
 
     from cfbr.backtest import tune as T
@@ -145,6 +149,26 @@ def tune(
     t0, t1 = cfg.seasons.tuning
     seasons = list(range(t0, t1 + 1))
     cpath = str(config) if config else None
+    if space == "fcs-two-stage":
+        if config is None:
+            raise typer.BadParameter("--space fcs-two-stage needs --config config/tuned.toml (the published v1 config)")
+        out_dir = cfg.paths.results_dir / "tuning-fcs-two-stage"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        results = T.run_search(cpath, seasons, trials, jobs, space=space)
+        T.summarize_trials(results).write_parquet(out_dir / "trials.parquet")
+        best = min(results, key=lambda r: r["mae"])["params"]
+        sens = T.sensitivity(cpath, best, seasons, jobs, space=space)
+        (out_dir / "search.json").write_text(json.dumps({"best": best, "sensitivity": sens}, indent=2, default=float))
+        tuned_path = REPO_ROOT / "config" / "tuned_v2.toml"
+        tuned = T.patch_frozen(Path(config), best, tuned_path)
+        preds, metrics = run_backtest(tuned, seasons)
+        run_dir = write_results(tuned, seasons, preds, metrics, "tuned-v2-tuning")
+        T.write_fcs_report(out_dir / "tuning_report.md", best, metrics, run_backtest(cfg, seasons)[1], sens, trials,
+                           run_dir)
+        typer.echo(f"frozen: {tuned_path}\nreport: {out_dir / 'tuning_report.md'}")
+        return
+    if space != "phase6":
+        raise typer.BadParameter(f"unknown --space {space!r}")
     out_dir = cfg.paths.results_dir / "tuning"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -250,6 +274,36 @@ def _default_config(config: Optional[Path]):
 
     tuned = REPO_ROOT / "config" / "tuned.toml"
     return load_config(config or (tuned if tuned.exists() else None))
+
+
+@app.command("fcs-gate")
+def fcs_gate(
+    gate: Annotated[int, typer.Option(help="1 = 2015–2021, 2 = 2022–2025, 3 = 2026 through week 10")],
+    v2: Annotated[Optional[Path], typer.Option(help="Candidate config (default config/tuned.toml, adopted)")] = None,
+    config: ConfigOpt = None,
+) -> None:
+    """FCS two-stage gate (DECISIONS "FCS games, two-stage fit"): paired MAE gain of the tuned two-stage
+    candidate over the v1 config. Gates run in order; each needs the previous one passed. Since adoption
+    the defaults are v1 = config/tuned_v1.toml and candidate = config/tuned.toml, so the record reproduces.
+    Writes results/<ts>-fcs-gate-N/."""
+    import json
+
+    from cfbr.backtest.fcs_gate import GATES, latest_gate, run_fcs_gate
+    from cfbr.config import REPO_ROOT
+    from cfbr.data import Dataset
+
+    if gate not in GATES:
+        raise typer.BadParameter(f"--gate must be one of {sorted(GATES)}")
+    v1_cfg = load_config(config or REPO_ROOT / "config" / "tuned_v1.toml")
+    v2_cfg = load_config(v2 or REPO_ROOT / "config" / "tuned.toml")
+    if gate > 1:
+        prev = latest_gate(v1_cfg.paths.results_dir, gate - 1)
+        if not prev or not prev["primary"]["passes"]:
+            raise typer.BadParameter(f"gate {gate - 1} has not passed; gates run in order")
+    out = run_fcs_gate(v1_cfg, v2_cfg, Dataset.load(v1_cfg), gate)
+    p = json.loads((out / "gate.json").read_text())["primary"]
+    typer.echo(f"gate {gate}: v1 − v2 paired MAE gain {p['gain']:+.4f} [{p['ci95'][0]:+.4f}, {p['ci95'][1]:+.4f}] "
+               f"over {p['n']} games: {'PASSES' if p['passes'] else 'FAILS'}. {out}")
 
 
 @app.command()
@@ -458,7 +512,29 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     log.info("season-to-date: %s", json.dumps({k: m.get(k) for k in ("n_games", "mae", "line_mae", "model_mae_lined",
                                                                      "ats_win_rate", "massey_mae")}, default=float))
     bets_failed = _bets_step(cfg, ds, season, week)
-    # Shadow prior comparison: also isolated, never affects published output.
+    shadow_failed = _run_shadows(cfg, ds, eng, season)
+    # Season simulation: isolated too.
+    sim_failed = False
+    if cfg.sim.enabled:
+        try:
+            from cfbr.sim.report import run_sim
+
+            run_sim(eng, season, week)
+        except Exception:
+            log.exception("season simulation failed; continuing")
+            sim_failed = True
+    # Last, so a web-data failure can't cost the rankings or the accuracy line.
+    web_out = build_season(eng, season, web_dir(cfg))
+    typer.echo(f"wrote {out}, {acc_path} and {web_out}")
+    if quota_hit:
+        raise typer.Exit(code=3)
+    if bets_failed or shadow_failed or sim_failed:
+        raise typer.Exit(code=6)
+
+
+def _run_shadows(cfg, ds, eng, season: int) -> bool:
+    """Shadow comparisons (prior, portal, totals, calibration v2/v3): each isolated, never affects
+    published output. Returns True if any failed."""
     shadow_failed = False
     plain_shadow_failed = False
     try:
@@ -505,22 +581,32 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     except Exception:
         log.exception("calibration v3 shadow comparison failed; continuing")
         shadow_failed = True
-    # Season simulation: isolated too.
-    sim_failed = False
-    if cfg.sim.enabled:
-        try:
-            from cfbr.sim.report import run_sim
+    return shadow_failed
 
-            run_sim(eng, season, week)
-        except Exception:
-            log.exception("season simulation failed; continuing")
-            sim_failed = True
-    # Last, so a web-data failure can't cost the rankings or the accuracy line.
+
+@app.command()
+def restate(
+    season: Annotated[int, typer.Option()],
+    through_week: Annotated[int, typer.Option(help="Last completed regular-season week")],
+    config: ConfigOpt = None,
+) -> None:
+    """Restate a live season under the published config (DECISIONS "FCS games, two-stage fit"): moves
+    out/{season}/wNN/ and accuracy.csv to out/{season}/_v1/, re-ranks those weeks, rebuilds the accuracy
+    line, season sims, shadows and the web season. Never touches the paper-bet ledger. Server only;
+    makes no API calls. Don't run it while `cfbr weekly` is running."""
+    from cfbr.data import Dataset
+    from cfbr.report.restate import archive_outputs, restate_season
+    from cfbr.web.build import build_season, web_dir
+
+    cfg = _default_config(config)
+    log.info("config: %s", cfg.source)
+    ds = Dataset.load(cfg)
+    weeks = archive_outputs(cfg.paths.out_dir / str(season), through_week)
+    eng = restate_season(cfg, ds, season, weeks)
+    failed = _run_shadows(cfg, ds, eng, season)
     web_out = build_season(eng, season, web_dir(cfg))
-    typer.echo(f"wrote {out}, {acc_path} and {web_out}")
-    if quota_hit:
-        raise typer.Exit(code=3)
-    if bets_failed or shadow_failed or sim_failed:
+    typer.echo(f"restated {season} weeks {weeks}; archive {cfg.paths.out_dir / str(season) / '_v1'}; web {web_out}")
+    if failed:
         raise typer.Exit(code=6)
 
 

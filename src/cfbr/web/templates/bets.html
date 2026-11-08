@@ -122,6 +122,7 @@
 {% else %}
 {% if verdict.n %}<p>Mean closing-implied ROI {{ verdict.mean|pct }} <span class="ci">[{{ verdict.ci_low|pct }}, {{ verdict.ci_high|pct }}]</span> over {{ verdict.n }} bets with a snapshot close.</p>
 {% else %}<p class="muted">No bets with a snapshot close yet (0 of {{ verdict.min_bets }} needed).</p>{% endif %}
+{% if verdict.split %}<p class="muted">Context only, the verdict pools all bets: before the {{ verdict.split.at[:10] }} model switch {{ verdict.split.before.n }} bets, mean {{ verdict.split.before.mean|pct }}; after it {{ verdict.split.after.n }} bets, mean {{ verdict.split.after.mean|pct }}.</p>{% endif %}
 {% endif %}
 <p>Status (provisional until the decision point): <strong>{{ verdict.status }}</strong>{% if verdict.status != "unavailable" %} <span class="muted">· {{ verdict.n }} of {{ verdict.min_bets }} bets</span>{% endif %}</p>
 
