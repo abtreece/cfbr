@@ -4,7 +4,7 @@
 - The connection is read-only, has external access disabled (no read_csv on .keys, no ATTACH, COPY
   or INSTALL), configuration locked (no SET to undo that), an empty temp_directory (so DuckDB's
   automatic allowance for `<db>.tmp/` is gone; `<db>.wal` is refused by the read-only,
-  no-external-access connection) and TimeZone UTC (so TIMESTAMPTZ renders identically everywhere).
+  no-external-access connection), all set at connect time.
 - Before executing, the SQL is checked using only that restricted connection (never module-level
   `duckdb.*`, which uses an unrestricted default connection): it must be exactly one statement of
   type SELECT (DuckDB also classifies DESCRIBE, SHOW and SUMMARIZE as SELECT); it must serialize to
@@ -57,11 +57,11 @@ def _cell(v) -> str:
 class ToolSession:
     def __init__(self, db_path: Path, out_dir: Path, season: int, week: int, cfg: Investigate):
         self.db_path, self.out_dir, self.season, self.week, self.cfg = db_path, out_dir, season, week, cfg
-        self.con = duckdb.connect(str(db_path), read_only=True, config={"temp_directory": ""})
-        # Order matters: TimeZone needs the icu extension autoloaded, which external access forbids.
-        self.con.execute("SET TimeZone = 'UTC'")
-        self.con.execute("SET enable_external_access = false")
-        self.con.execute("SET lock_configuration = true")
+        # Every restriction is applied at connect time, so no agent-reachable moment exists
+        # before the lock. TIMESTAMPTZ renders in the host zone (javelin's clock is UTC).
+        self.con = duckdb.connect(str(db_path), read_only=True,
+                                  config={"enable_external_access": False, "lock_configuration": True,
+                                          "temp_directory": ""})
         self.results: dict[int, str] = {}
         self.log: list[dict] = []
 
