@@ -1,8 +1,11 @@
 import json
+from collections import Counter
 from datetime import UTC, datetime
+from pathlib import Path
 
 import duckdb
 import polars as pl
+import pytest
 
 from cfbr.anomalies import run
 from cfbr.anomalies.baselines import write_thresholds
@@ -111,3 +114,32 @@ def test_weekly_anomaly_step_never_raises_and_alerts(monkeypatch, tmp_path):
     monkeypatch.setattr("cfbr.anomalies.run.run_step", lambda *a, **k: [])
     cli._anomaly_step(Config(), 2026, 9)
     assert sent == []
+
+
+SRC = Path(__file__).resolve().parents[1] / "src" / "cfbr"
+
+
+def test_pipeline_packages_never_import_anomalies():
+    offenders = []
+    for pkg in ("model", "bets", "report", "web"):
+        for f in (SRC / pkg).rglob("*.py"):
+            text = f.read_text()
+            if "cfbr.anomalies" in text or "from cfbr import anomalies" in text:
+                offenders.append(str(f.relative_to(SRC)))
+    assert offenders == []
+
+
+# Measured 2026-11-08 on the dev store (regular season, FBS side): A2 19/11/5/7, A3 10/3/3/4,
+# A4 72/13/12/24 for 2022–2025, A1 0. Bands are wide on purpose: they catch a broken check or a
+# schema change, not normal drift.
+BANDS = {"A1": (0, 0), "A2": (2, 30), "A3": (1, 15), "A4": (5, 100)}
+
+
+@pytest.mark.parametrize("season", [2022, 2023, 2024, 2025])
+def test_history_firing_rates_stay_in_measured_bands(cfg, season):
+    if not cfg.paths.db_path.exists():
+        pytest.skip("no local DuckDB store")
+    counts = Counter(a.check for a in run.run_history(cfg, season))
+    assert "ERR" not in counts
+    for check, (lo, hi) in BANDS.items():
+        assert lo <= counts[check] <= hi, (season, check, counts[check])
