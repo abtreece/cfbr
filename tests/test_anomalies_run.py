@@ -112,6 +112,13 @@ def test_weekly_anomaly_step_never_raises_and_alerts(monkeypatch, tmp_path):
     assert sent == [("cfbr anomalies w09: 1 new", "default")]
 
     sent.clear()
+    monkeypatch.setattr("cfbr.anomalies.run.alert_text", boom)
+    cli._anomaly_step(Config(), 2026, 9)                             # alert formatting failure: no raise
+    assert sent == []
+
+    monkeypatch.undo()
+    sent.clear()
+    monkeypatch.setattr("cfbr.alerts.send", lambda cfg, title, msg, priority="high": sent.append((title, priority)) or True)
     monkeypatch.setattr("cfbr.anomalies.run.run_step", lambda *a, **k: [])
     cli._anomaly_step(Config(), 2026, 9)
     assert sent == []

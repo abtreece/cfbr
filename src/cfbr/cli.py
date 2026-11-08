@@ -468,7 +468,10 @@ def _anomaly_step(cfg, season: int, week: int) -> None:
         send(cfg, "cfbr anomalies: checks failed", f"{type(e).__name__}: {e}"[:300], priority="default")
         return
     if added:
-        send(cfg, f"cfbr anomalies w{week:02d}: {len(added)} new", alert_text(added), priority="default")
+        try:
+            send(cfg, f"cfbr anomalies w{week:02d}: {len(added)} new", alert_text(added), priority="default")
+        except Exception:  # noqa: BLE001 - advisory step
+            log.exception("anomaly alert failed; continuing")
 
 
 def _weekly_run(config: ConfigOpt = None) -> None:
