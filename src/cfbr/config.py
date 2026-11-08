@@ -210,6 +210,8 @@ class Investigate(BaseModel):
     query_timeout_seconds: float = 30
     query_max_rows: int = 200
     query_max_chars: int = 20000
+    query_memory_limit: str = "2GB"  # DuckDB memory_limit in each query's child process
+    query_threads: int = 2  # DuckDB threads in each query's child process
     monthly_budget_usd: float = 50.0  # local guard; the account's monthly credits hard-stop as the backstop
     ledger: Path = Path("data/anthropic_calls.jsonl")
     snapshot: Path = Path("data/investigations/snapshot.duckdb")

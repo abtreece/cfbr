@@ -184,6 +184,10 @@ wall_clock_minutes = 15
 query_timeout_seconds = 30
 query_max_rows = 200
 query_max_chars = 20000
+# Each agent query runs in its own child process, killed at query_timeout_seconds, with these
+# DuckDB limits (on Linux the child's address space is also capped at 2x the memory limit).
+query_memory_limit = "2GB"
+query_threads = 2
 monthly_budget_usd = 50.0
 ledger = "data/anthropic_calls.jsonl"
 snapshot = "data/investigations/snapshot.duckdb"

@@ -1,6 +1,4 @@
-import json
-import subprocess
-import sys
+import time
 
 import duckdb
 import polars as pl
@@ -35,7 +33,6 @@ def test_query_returns_table_with_result_id_and_keeps_it(env):
 def test_query_caps_rows_and_chars(env):
     text, _ = env.query("SELECT * FROM games")
     assert "result_id 1 (200 rows)" in text and "more than 200 rows" in text
-    env.close()  # DuckDB shares one locked instance per file within a process
     small = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_max_chars=50))
     text2, _ = small.query("SELECT * FROM games LIMIT 100")
     assert text2.endswith("… truncated") and len(text2) < 200
@@ -77,29 +74,13 @@ DENIED_IN_CHILD = [
 ]
 
 
-def test_session_mutating_functions_are_refused_without_executing(tmp_path):
-    # These can abort or wedge the process if executed, so they only ever run in a child.
-    db = tmp_path / "snap.duckdb"
-    with duckdb.connect(str(db)) as con:
-        con.execute("CREATE TABLE games AS SELECT 1 AS game_id")
-    code = (
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        "from cfbr.anomalies.tools import ToolSession\n"
-        "from cfbr.config import Investigate\n"
-        "s = ToolSession(Path(sys.argv[1]), Path(sys.argv[2]), 2026, 9, Investigate())\n"
-        "for sql in json.loads(sys.argv[3]):\n"
-        "    print('DENIED ' + s.query(sql)[0].splitlines()[0])\n"
-        "print(s.query('SELECT 1 AS ok')[0].replace(chr(10), ' '))\n"
-        "s.close()\n"
-    )
-    proc = subprocess.run([sys.executable, "-c", code, str(db), str(tmp_path), json.dumps(DENIED_IN_CHILD)],
-                          capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stderr
-    lines = proc.stdout.strip().splitlines()
-    denied = [x for x in lines if x.startswith("DENIED ")]
-    assert len(denied) == len(DENIED_IN_CHILD) and all("refused" in x for x in denied), proc.stdout
-    assert "result_id" in lines[-1] and "ok" in lines[-1] and "refused" not in lines[-1]
+def test_session_mutating_functions_are_refused_without_executing(env):
+    # Executing these can abort or wedge DuckDB; the gate refuses them in the query child first.
+    for i, sql in enumerate(DENIED_IN_CHILD, start=1):
+        text, err = env.query(sql)
+        assert err and text.startswith(f"result_id {i}: error: refused"), text
+    ok_text, ok_err = env.query("SELECT 1 AS ok")
+    assert not ok_err and "ok" in ok_text and "refused" not in ok_text
 
 
 def test_tmp_directory_write_refused_even_when_it_exists(env):
@@ -130,7 +111,6 @@ def test_timestamptz_renders_in_utc(env):
 
 
 def test_query_timeout_interrupts(env):
-    env.close()
     slow = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_timeout_seconds=0.2))
     text, err = slow.query("SELECT count(*) FROM range(10000000000) a")
     assert err and "timed out after 0.2s" in text
@@ -149,3 +129,54 @@ def test_read_output_whitelist_and_shared_ids(env):
     missing, err3 = env.read_output("predictions.csv")
     assert err3 and "not available" in missing
     assert set(OUTPUT_FILES) == {"rankings.csv", "rankings_prev.csv", "predictions.csv", "accuracy.csv"}
+
+
+def test_nested_subqueries_are_killed_at_timeout(env):
+    slow = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_timeout_seconds=1))
+    nested = "SELECT " + "(SELECT " * 40 + "1" + ")" * 40
+    start = time.monotonic()
+    text, err = slow.query(nested)
+    elapsed = time.monotonic() - start
+    assert err and "timed out after 1s" in text
+    assert elapsed < 5
+    ok_text, ok_err = slow.query("SELECT 1 AS ok")
+    assert not ok_err and ok_text.splitlines()[:3] == ["result_id 2 (1 rows)", "ok", "1"]
+
+
+def test_deep_expression_does_not_crash(env):
+    # 600 levels used to overflow the recursive parse-tree walk; the walk is iterative now and
+    # DuckDB evaluates it. Past DuckDB's max_expression_depth (1000) the parser refuses it.
+    text, err = env.query("SELECT " + "abs(" * 600 + "1" + ")" * 600)
+    assert not err and text.splitlines()[0] == "result_id 1 (1 rows)" and text.splitlines()[-1] == "1"
+    text, err = env.query("SELECT " + "abs(" * 1001 + "1" + ")" * 1001)
+    assert err and text.startswith("result_id 2: error: refused") and "expression depth" in text
+
+
+def test_json_serialize_plan_is_refused(env):
+    text, err = env.query("SELECT json_serialize_plan('SELECT 1')")
+    assert err and "refused" in text
+
+
+def test_huge_cells_are_capped(env):
+    capped = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_max_chars=20000))
+    start = time.monotonic()
+    text, err = capped.query("SELECT repeat('x', 5000000) AS s FROM range(201)")
+    assert time.monotonic() - start < 10
+    assert not err, text[:200]
+    assert len(text) <= 20000 + len("\n… truncated")
+
+
+def test_child_connection_has_the_configured_limits(env):
+    limited = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_memory_limit="512MB", query_threads=1))
+    text, err = limited.query(
+        "SELECT current_setting('enable_external_access') AS ext, current_setting('lock_configuration') AS lock, "
+        "current_setting('temp_directory') AS tmp, current_setting('threads') AS th, "
+        "current_setting('memory_limit') AS mem")
+    assert not err, text
+    assert text.splitlines()[2].split("\t") == ["False", "True", "", "1", "488.2 MiB"]
+
+
+def test_child_crash_is_reported(env):
+    tight = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_memory_limit="64MB"))
+    text, err = tight.query("SELECT * FROM range(20000000) ORDER BY random()")
+    assert err and ("OutOfMemory" in text or "exited with code" in text), text
