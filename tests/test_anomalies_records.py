@@ -43,11 +43,13 @@ def test_merge_rerun_keeps_status_and_verdict_and_adds_only_new():
     doc, _ = merge(None, [_a(key="401")], 2026, 9, T0)
     doc["items"][0]["status"] = "investigated"
     doc["items"][0]["verdict"] = {"verdict": "real"}
+    doc["items"][0]["attempts"] = 2
     t1 = T0 + timedelta(hours=6)
     doc2, added = merge(doc, [_a(key="401"), _a(key="402")], 2026, 9, t1)
     by_key = {r["key"]: r for r in doc2["items"]}
     assert by_key["401"]["status"] == "investigated" and by_key["401"]["verdict"] == {"verdict": "real"}
     assert by_key["401"]["first_seen_at"] == T0.isoformat() and by_key["401"]["updated_at"] == t1.isoformat()
+    assert by_key["401"]["attempts"] == 2
     assert [r["key"] for r in added] == ["402"]
 
 
@@ -58,6 +60,16 @@ def test_merge_marks_vanished_items_resolved_and_restores_on_refire():
     assert added == []
     doc3, added3 = merge(doc2, [_a(key="401")], 2026, 9, T0)
     assert doc3["items"][0]["status"] == "pending" and added3 == []
+
+
+def test_merge_resolved_and_still_absent_stays_resolved_unchanged():
+    doc, _ = merge(None, [_a(key="401")], 2026, 9, T0)
+    doc2, _ = merge(doc, [], 2026, 9, T0)
+    t2 = T0 + timedelta(hours=6)
+    doc3, added = merge(doc2, [], 2026, 9, t2)
+    assert added == []
+    assert doc3["items"][0]["status"] == "resolved"
+    assert doc3["items"][0]["updated_at"] == T0.isoformat()
 
 
 def test_write_doc_is_atomic_and_round_trips(tmp_path):

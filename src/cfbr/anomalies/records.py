@@ -56,14 +56,15 @@ def merge(existing: dict | None, fresh: list[Anomaly], season: int, week: int,
     seen: set[str] = set()
     for a in fresh:
         seen.add(a.id)
-        row = {"id": a.id, **asdict(a), "updated_at": stamp}
         prev = old.get(a.id)
         if prev is None:
-            row.update(status=initial_status(a), first_seen_at=stamp, verdict=None)
+            row = {"id": a.id, **asdict(a), "updated_at": stamp,
+                   "status": initial_status(a), "first_seen_at": stamp, "verdict": None}
             added.append(row)
         else:
             status = prev.get("resolved_from", initial_status(a)) if prev["status"] == "resolved" else prev["status"]
-            row.update(status=status, first_seen_at=prev["first_seen_at"], verdict=prev.get("verdict"))
+            base = {k: v for k, v in prev.items() if k != "resolved_from"}
+            row = {**base, "id": a.id, **asdict(a), "updated_at": stamp, "status": status}
         items.append(row)
     for row_id, prev in old.items():
         if row_id in seen:
