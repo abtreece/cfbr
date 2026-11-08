@@ -40,6 +40,13 @@ or defense is a pooled FCS entity, else 1). Everything else is the existing
 ridge: same priors, alpha, home term and intercept. The FBS ratings come from
 Stage 1. Stage 1's FCS entity ratings are thrown away.
 
+Per-play weights are computed by a single helper,
+`play_weights(arrays, k, as_of, cfg)` in `model/ridge.py`. `Engine._fit`,
+`model/uncertainty.py` and `model/matchup.py` all call it. Today the last two
+call `recency_weights` themselves, so without this change they would silently
+ignore `fcs_weight` and stop matching the published fit. Neither is published
+(both models were rejected), but they stay consistent diagnostics.
+
 ### Stage 2: FCS ratings (new function in `model/ridge.py`)
 
 - **Input:** only plays with a pooled FCS side that kicked off before the same
@@ -121,8 +128,10 @@ prior fit within 2015–2021).
 ## If the gate passes: adopt mid-2026 and restate
 
 1. **Config:** `tuned.toml` → `config/tuned_v1.toml`; `tuned_v2.toml` →
-   `config/tuned.toml`. Priors, calibration, season sim and uncertainty σ
-   refit automatically from the new config.
+   `config/tuned.toml`. Priors and calibration (including σ) refit from the
+   new config. The season sim's `tau` stays 6.0, the value chosen under v1
+   (DECISIONS.md, "Sim calibration"). It's a separate setting and not part of
+   this rule.
 2. **Restate 2026** (on javelin, after deploy, which is a stop-and-ask step):
    move `out/2026/w01…wNN/` to `out/2026/_v1/`, rerun `cfbr rank` for every
    completed 2026 week, rebuild `accuracy.csv`, then `cfbr web build`. The
@@ -154,12 +163,19 @@ prior fit within 2015–2021).
 - Stage 2 → the FBS offsets it sees are exactly Stage 1's ratings, and they
   are unchanged afterward.
 
-**Existing invariants:**
+**Existing invariants:** the `cfg` fixture (`tests/conftest.py`) loads
+`config/default.toml`, which has two-stage off and `half_life_weeks = 0.0`. So
+the existing dataset tests never exercise the published config. Add a
+`cfg_two_stage` fixture: `default.toml` plus `fcs_two_stage = true`,
+`fcs_weight = 0.3`, `half_life_weeks = 3.7`. Then run these tests under both
+fixtures:
 
-- `tests/test_leakage.py`: max-kickoff assertion and canary future game also
-  run with two-stage on.
-- `tests/test_web.py`: site-matches-rank runs on the published config,
-  unchanged.
+- `tests/test_leakage.py`: the max-kickoff assertion, the canary future game,
+  and `test_engine_prefix_fit_matches_explicit_slice`. That last test checks
+  the engine against an explicit `fit_efficiency` call with no weights. Under
+  two-stage, its reference fit gets the same `play_weights`, and it checks the
+  FBS rows against Stage 1 and the FCS rows against Stage 2.
+- `tests/test_web.py`: `test_web_ratings_match_rank_output`.
 - `tuned_v1.toml` still loads, and the `default.toml` defaults don't change
   behavior.
 
