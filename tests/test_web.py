@@ -1004,6 +1004,102 @@ def test_roster_page_departure_reasons(web_cfg):
     assert "2 drafted · 1 now on another roster" in html
 
 
+def _table(html: str, table_id: str) -> str:
+    start = html.index(f'id="{table_id}"')
+    return html[start:html.index("</table>", start)]
+
+
+def test_roster_page_splits_by_side_of_ball(web_cfg):
+    """QBs, offense, defense and special teams each get their own table and stat columns, so
+    a receiver's special-teams tackles no longer sit next to a linebacker's."""
+    season_dir = _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
+    _write_roster(season_dir)
+    n = 7
+    stats = {c: [None] * n for c in ("prev_pass_cmp", "prev_pass_att", "prev_pass_yds", "prev_pass_td", "prev_pass_int",
+                                     "prev_rush_car", "prev_rush_yds", "prev_rush_td", "prev_rec", "prev_rec_yds",
+                                     "prev_rec_td", "prev_tfl", "prev_sacks", "prev_pd", "prev_ints", "prev_fgm",
+                                     "prev_fga", "prev_fg_long", "prev_xpm", "prev_xpa", "prev_punts", "prev_punt_yds",
+                                     "prev_punt_in20")}
+
+    def put(i, **kv):
+        for k, v in kv.items():
+            stats[k][i] = v
+    put(0, prev_pass_cmp=250.0, prev_pass_att=380.0, prev_pass_yds=3100.0, prev_pass_td=24.0, prev_pass_int=7.0)
+    put(1, prev_rec=60.0, prev_rec_yds=845.0, prev_rec_td=6.0, prev_rush_td=1.0)
+    put(3, prev_tfl=9.5, prev_sacks=4.0)
+    put(5, prev_fgm=20.0, prev_fga=24.0, prev_fg_long=51.0, prev_xpm=40.0, prev_xpa=41.0)
+    pl.DataFrame({
+        "season": [SEASON] * n, "team": ["Texas A&M"] * n, "player_id": [str(i) for i in range(1, n + 1)],
+        "name": ["Sam Starter", "Willie Wideout", "Larry Lineman", "Lenny Linebacker", "Rex Reroute", "Kip Kicker",
+                 "Teddy Twoway"],
+        "jersey": [7, 1, 70, 44, 21, 99, 2], "position": ["QB", "WR", "OL", "LB", "DB", "PK", "WR"],
+        "class_year": [4] * n, "height": [74] * n, "weight": [215] * n, "home_city": [None] * n, "home_state": [None] * n,
+        "status": ["returner"] * n, "from_team": [None] * n,
+        "prev_position": ["QB", "WR", "OL", "LB", "RB", "PK", "WR"],
+        "prev_plays": [412.0, 61.0, None, None, 40.0, None, 25.0], "prev_ppa_total": [130.5, 30.0, None, None, 5.0, None, 4.0],
+        "prev_ppa_avg": [0.317, 0.49, None, None, 0.125, None, 0.16], "prev_pass_plays": [380.0, None, None, None, None, None, None],
+        "prev_pass_ppa_total": [120.0, None, None, None, None, None, None],
+        "prev_pass_ppa_avg": [0.316, None, None, None, None, None, None],
+        "prev_tackles": [None, 3.0, None, 71.0, None, 1.0, 14.0], "prev_havoc": [None, 0.0, None, 12.0, None, 0.0, 2.0],
+        "career_seasons": [3, 2, 1, 3, 2, 2, 2], "career_pass_att": [1184.0] + [0.0] * 6,
+        "career_qb_starts": [31.0] + [0.0] * 6, **stats,
+    }, schema_overrides={"season": pl.Int32, "jersey": pl.Int32, "class_year": pl.Int32, "height": pl.Int32,
+                         "weight": pl.Int32}).write_parquet(season_dir / "roster_players.parquet")
+    html = " ".join(TestClient(create_app(web_cfg)).get("/roster/2026/Texas%20A%26M").text.split())
+
+    qb, off, de, st = (_table(html, f"roster-{k}") for k in ("qb", "offense", "defense", "special"))
+    assert "Sam Starter" in qb and ">Cmp%<" in qb and ">65.8%<" in qb and ">3,100<" in qb
+    assert "Willie Wideout" in off and ">845<" in off and ">7<" in off      # rec yds; TD = 6 rec + 1 rush
+    assert ">Tkl<" not in off and ">Havoc<" not in off                       # no defensive columns on offense
+    assert "Larry Lineman" in off and "CFBD records no individual stats for offensive linemen." in html
+    assert "Lenny Linebacker" in de and ">Rush yds<" not in de and ">9.5<" in de and ">71<" in de
+    assert "Kip Kicker" in st and ">20/24<" in st and ">40/41<" in st
+    # Notes only where position no longer explains the numbers: a side switch, or 10+ on the other side.
+    assert "Rex Reroute</a> <span class=\"muted\">· moved from RB · 40 offensive plays last season" in de
+    assert "Teddy Twoway</a> <span class=\"muted\">· 14 tackles last season" in off
+    assert "Willie Wideout</a></td>" in off                                  # 3 special-teams tackles: no note
+    # One status filter drives every section; each section has its own position filter.
+    assert 'data-row-filter="roster-qb roster-offense roster-defense roster-special" data-attr="status"' in html
+    assert 'data-row-filter="roster-offense" data-attr="pos"' in html and 'data-row-filter="roster-qb"' not in html
+
+    # Departures split too, by last season's position (fixture: an RB and a LB).
+    assert "Gone Pro" in _table(html, "departures-offense") and "Left Town" in _table(html, "departures-defense")
+    assert 'data-row-filter="departures-offense departures-defense" data-attr="reason"' not in html  # no reasons in fixture
+
+
+def test_roster_sections_and_notes():
+    from cfbr.web.roster import other_side_note, section_of, stat_cell
+
+    assert [section_of({"position": p}) for p in ("QB", "TE", "EDGE", "LS")] == ["qb", "offense", "defense", "special"]
+    # ATH / unknown: wherever last season's production was.
+    assert section_of({"position": "ATH", "prev_plays": 3, "prev_tackles": 30}) == "defense"
+    assert section_of({"position": None, "prev_punts": 40}) == "special"
+    assert section_of({"position": "ATH"}) == "offense"
+    assert other_side_note({"position": "S", "prev_position": "S", "prev_plays": 9}, "defense") is None
+    assert other_side_note({"position": "S", "prev_position": "CB"}, "defense") is None    # same side
+    assert other_side_note({"position": "TE", "prev_position": "DL", "prev_tackles": 3}, "offense") == "moved from DL"
+    assert stat_cell("made_att", (None, 0)) == ("—", -1.0) and stat_cell("pct", 0.6578)[0] == "65.8%"
+    assert stat_cell("avg", -0.05)[0] == "−0.05" and stat_cell("count", None) == ("—", -999.0)
+
+
+def test_player_career_hides_other_side_noise():
+    from cfbr.web.roster import career_view
+
+    careers = pl.DataFrame({
+        "player_id": ["wr"] * 2 + ["db"] * 2, "career_season": [2024, 2025] * 2,
+        "plays": [30.0, 55.0, 12.0, None], "rec": [25.0, 50.0, 12.0, None], "rec_yds": [300.0, 700.0, 150.0, None],
+        "tackles": [2.0, 4.0, 20.0, 55.0], "tfl": [0.0, 0.0, 1.0, 3.0], "fgm": [None] * 4,
+        "pass_att": [None] * 4, "pass_ppa_avg": [0.4, 0.5, None, None],     # a receiver's targets, not passes
+    }, schema_overrides={"career_season": pl.Int32})
+    _, wr = career_view(careers, "wr", {"position": "WR"})
+    assert {c["group"] for c in wr} == {"Receiving", "Offense"}                # 2-4 special-teams tackles hidden
+    # A DB who played real offense the year before keeps that history.
+    _, db = career_view(careers, "db", {"position": "DB"})
+    assert {c["group"] for c in db} == {"Defense", "Receiving", "Offense"}
+    # No roster row: the side with more career production.
+    assert {c["group"] for c in career_view(careers, "db")[1]} == {"Defense", "Receiving", "Offense"}
+
+
 def test_team_page_shows_roster_line(roster_client):
     html = " ".join(roster_client.get("/team/2026/Texas%20A%26M").text.split())
     assert '<a href="/roster/2026/Texas%20A%26M">Full roster' in html
