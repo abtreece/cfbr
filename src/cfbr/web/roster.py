@@ -280,7 +280,8 @@ def player_rows(players: pl.DataFrame) -> list[dict]:
     return sorted(rows, key=lambda r: (r["pos_order"], r["jersey"] if r["jersey"] is not None else 999, r["name"] or ""))
 
 
-REASON_ORDER = {"drafted": 0, "transfer": 1, "portal_transfer": 2, "portal_no_school": 3, "unknown": 4}
+REASON_ORDER = {"drafted": 0, "transfer": 1, "portal_transfer": 2, "portal_no_school": 3, "eligibility": 4,
+                "unknown": 5}
 
 
 def departure_rows(departures: pl.DataFrame) -> list[dict]:
@@ -322,6 +323,7 @@ def roster_card(roster: Roster | None, team: str) -> dict | None:
     return {"size": p.height, "returners": counts.get("returner", 0), "transfers_in": counts.get("transfer_in", 0),
             "newcomers": counts.get("new", 0), "departures": d.height, "transfers_out": d["to_team"].is_not_null().sum(),
             "drafted": int((d["reason"] == "drafted").sum()) if "reason" in d.columns else None,
+            "out_of_eligibility": int((d["reason"] == "eligibility").sum()) if "reason" in d.columns else 0,
             "ret_offense": feature_value("off_ret_share", s.get("off_ret_share")) if s else "—",
             "last_qb": last_qb(p, d, s),
             "as_of": s.get("roster_as_of") if s else None}

@@ -31,8 +31,9 @@ Columns (null = unknown):
                      for this season; null before 2021, when CFBD's portal data
                      starts), portal_destination (school listed in the portal, which
                      may be non-FBS), prev_plays, prev_ppa_total, prev_pass_plays,
-                     prev_tackles, prev_havoc, prev_{stat} as above. Players with no
-                     stats last season appear only if drafted. Portal records are linked by name + school (no id).
+                     prev_tackles, prev_havoc, prev_{stat} as above (null for players
+                     with no stats last season, who come from last season's roster).
+                     Portal records are linked by name + school (no id).
   roster_careers     one row per player per season of history, for players on this season's
                      roster: season (display season), team (current team), player_id,
                      career_season, career_team, source ("season stats" for completed
@@ -147,10 +148,14 @@ STATS_ONLY = [c for c in PLAYER_STATS_COLS if c not in {"pass_att", "rush_car", 
 # roster_departures.reason, first match wins in this order.
 DEPARTURE_REASONS: dict[str, str] = {
     "drafted": "Selected in the NFL draft held before this season",
-    "transfer": "On another FBS roster this season",
-    "portal_transfer": "Entered the transfer portal with a new school listed, but is not on an FBS roster here (often a non-FBS school)",
+    "transfer": "On another FBS or FCS roster this season",
+    "portal_transfer": "Entered the transfer portal with a new school listed, but is on no FBS or FCS roster this season (often a lower-division school)",
     "portal_no_school": "Entered the transfer portal; no new school listed",
-    "unknown": "No record: graduation, undrafted, left football, or missing from CFBD's rosters",
+    # CFBD's class year tops out at 4 (Sr) from 2024, so a few of these are 4th-years who had a year left.
+    "eligibility": "Senior last season, not drafted, not in the portal and on no roster: out of eligibility "
+                   "(graduated, or went undrafted)",
+    "unknown": "Underclassman (or class unknown) last season, not drafted, not in the portal and on no roster: "
+               "left football, or missing from CFBD's rosters",
 }
 
 PLAYER_COLS = ["player_id", "name", "jersey", "position", "class_year", "height", "weight", "home_city", "home_state"]
@@ -196,9 +201,10 @@ def _name_key(col: str) -> pl.Expr:
 
 
 def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame) -> pl.DataFrame:
-    """Last season's players not on their team's roster now, with why they left
-    when CFBD records it: the NFL draft (linked by player id) or the transfer portal
-    (linked by name + school, as portal records carry no id)."""
+    """Last season's players (with stats, or on last season's roster) not on their team's
+    roster now, with why they left: the NFL draft (linked by player id), another roster,
+    the transfer portal (linked by name + school, as portal records carry no id), or,
+    with none of those, out of eligibility when he was a senior last season."""
     prev_ros = (ds.roster.filter(pl.col("season") == season - 1).unique("player_id", keep="first")
                 .select("player_id", "name", "position", prev_class_year="class_year", roster_team="team"))
     draft = getattr(ds, "draft_picks", None)
@@ -212,11 +218,13 @@ def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame)
                                                            "draft_round": pl.Int32, "draft_overall": pl.Int32,
                                                            "draft_nfl_team": pl.Utf8,
                                                            "draft_nfl_team_name": pl.Utf8}))
-    # Drafted players with no stats last season (mostly offensive linemen) are
-    # departures too; place them on last season's roster team.
-    no_stats = (draft.join(prev.select("player_id"), on="player_id", how="anti")
-                .join(prev_ros.select("player_id", "roster_team"), on="player_id", how="left")
-                .select("player_id", prev_team=pl.coalesce("roster_team", "draft_college_team")))
+    # Players with no stats last season (most offensive linemen and backups) are departures
+    # too, on last season's roster team; a drafted player on neither goes on his draft college.
+    listed = pl.concat([prev.select("player_id"), prev_ros.select("player_id")]).unique()
+    no_stats = pl.concat([
+        prev_ros.join(prev, on="player_id", how="anti").select("player_id", prev_team="roster_team"),
+        draft.join(listed, on="player_id", how="anti").select("player_id", prev_team="draft_college_team"),
+    ])
     base = pl.concat([prev, no_stats], how="diagonal_relaxed")
     out = (base.join(ros.select("player_id", to_team="team"), on="player_id", how="left")
            .filter(pl.col("to_team").is_null() | (pl.col("to_team") != pl.col("prev_team")))
@@ -238,6 +246,7 @@ def _departures(ds: Dataset, season: int, prev: pl.DataFrame, ros: pl.DataFrame)
               .when(pl.col("to_team").is_not_null()).then(pl.lit("transfer"))
               .when(pl.col("portal_destination").is_not_null()).then(pl.lit("portal_transfer"))
               .when(pl.col("in_portal")).then(pl.lit("portal_no_school"))
+              .when(pl.col("prev_class_year") >= 4).then(pl.lit("eligibility"))
               .otherwise(pl.lit("unknown")))
     return out.select(pl.lit(season, pl.Int32).alias("season"), pl.col("prev_team").alias("team"), "player_id",
                       "name", "position", "prev_class_year", "to_team", reason.alias("reason"), "draft_round",
