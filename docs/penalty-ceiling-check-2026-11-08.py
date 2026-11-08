@@ -84,7 +84,7 @@ def attach_features(predictions: pl.DataFrame, team_games: pl.DataFrame) -> pl.D
     (pl.col('margin') - pl.col('pred_margin')).alias('resid'),
     (pl.col('f1_h') - pl.col('f1_a')).alias('d_f1'),
     (pl.col('f2_h') - pl.col('f2_a')).alias('d_f2'),
-  )
+  ).filter(pl.col('resid').is_not_null())  # unplayed games, as in M4
 
 
 def ols_fit_predict(train: pl.DataFrame, test: pl.DataFrame, cols: list[str]) -> np.ndarray:
