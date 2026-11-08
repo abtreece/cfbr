@@ -393,6 +393,46 @@ def check(config: ConfigOpt = None) -> None:
     typer.echo("ok")
 
 
+@app.command()
+def anomalies(
+    season: Annotated[int, typer.Option()],
+    week: Annotated[Optional[int], typer.Option(help="Regular-season week (default: latest out/{season}/wNN)")] = None,
+    history: Annotated[bool, typer.Option(help="Database checks over every completed week; "
+                                               "writes results/anomalies_history_{season}.json")] = False,
+    baselines: Annotated[bool, typer.Option(help="Recompute the B1/B3 thresholds file from history "
+                                                 "(no API calls; several minutes)")] = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Advisory data-anomaly checks. Without flags: run all checks for one week, update
+    anomalies.{json,md} and print them (no alert is sent; `cfbr weekly` sends those)."""
+    import json
+    from collections import Counter
+    from dataclasses import asdict
+
+    from cfbr.anomalies import run as arun
+    from cfbr.anomalies.records import read_doc, render_md
+
+    cfg = _default_config(config)
+    if baselines:
+        from cfbr.anomalies.baselines import compute_baselines
+
+        typer.echo(f"wrote {compute_baselines(cfg, arun.thresholds_path(cfg))}")
+        return
+    if history:
+        items = arun.run_history(cfg, season)
+        out = cfg.paths.results_dir / f"anomalies_history_{season}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps([{"id": a.id, **asdict(a)} for a in items], indent=2) + "\n")
+        counts = Counter(a.check for a in items)
+        typer.echo(" ".join(f"{c}={counts[c]}" for c in sorted(counts)) or "no anomalies")
+        typer.echo(f"wrote {out}")
+        return
+    week = week or arun.latest_week(cfg, season)
+    added = arun.run_step(cfg, season, week)
+    typer.echo(render_md(read_doc(arun.week_dir(cfg, season, week) / "anomalies.json")))
+    typer.echo(f"{len(added)} new alertable item(s)")
+
+
 def _bets_step(cfg, ds, season: int, week: int) -> bool:
     """Weekly betting step; True if any part failed. Each part is isolated so a failure can't
     block the web refresh: paper bets (only when ``[bets].enabled``), then the owner's real
@@ -412,6 +452,23 @@ def _bets_step(cfg, ds, season: int, week: int) -> bool:
         log.exception("real-bet settlement failed; continuing")
         failed = True
     return failed
+
+
+def _anomaly_step(cfg, season: int, week: int) -> None:
+    """Advisory data checks (cfbr/anomalies): write out/{season}/wNN/anomalies.{json,md} and push
+    items new in this run. Never raises and never changes the exit code."""
+    from cfbr.alerts import send
+
+    try:
+        from cfbr.anomalies.run import alert_text, run_step
+
+        added = run_step(cfg, season, week)
+    except Exception as e:  # noqa: BLE001 - advisory step
+        log.exception("anomaly checks failed; continuing")
+        send(cfg, "cfbr anomalies: checks failed", f"{type(e).__name__}: {e}"[:300], priority="default")
+        return
+    if added:
+        send(cfg, f"cfbr anomalies w{week:02d}: {len(added)} new", alert_text(added), priority="default")
 
 
 def _weekly_run(config: ConfigOpt = None) -> None:
@@ -511,6 +568,8 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     append_accuracy(acc_path, season, week, m)
     log.info("season-to-date: %s", json.dumps({k: m.get(k) for k in ("n_games", "mae", "line_mae", "model_mae_lined",
                                                                      "ats_win_rate", "massey_mae")}, default=float))
+    if cfg.anomalies.enabled:
+        _anomaly_step(cfg, season, week)
     bets_failed = _bets_step(cfg, ds, season, week)
     shadow_failed = _run_shadows(cfg, ds, eng, season)
     # Season simulation: isolated too.
