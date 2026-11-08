@@ -46,7 +46,11 @@ games with at least one FBS team, 2022–2026 week 8: 4,225 games.
 | A2 | Score gap: \|PBP max home score − final\| + \|PBP max away score − final\| | > 8 in 46 games | > 8 | investigate |
 | A3 | Play count per game outside the historical range | p1 ≈ 140, p50 ≈ 177, p99 ≈ 225; < 100 in 11 games | < 110 or > 250 | investigate |
 | A4 | Duplicate plays: same game, period, clock, down, distance, yards to goal, play text (Timeout/End-of-period rows excluded) | 134–282 games/season 2022–2025; 7 in 2026 | > 3 duplicate rows in one game | investigate |
-| A5 | Team identity: a team name absent from `team_status`, or a team FBS in `team_status` carrying a non-FBS class in this week's `games` | not measured | any | plain |
+| A5 | FBS status change: a team whose first game of the season is this week and whose FBS status differs from last season's `team_status` (or that is FBS with no row last season) | 1–2 per season (JMU 2022 … NDSU, Sacramento State 2026) | any | plain |
+
+A5 originally checked for team names absent from `team_status`; that can
+never fire, because `team_status` is derived from `games` (`ingest/store.py`).
+The status change is the event that matters: it changes FCS pooling.
 
 A2 uses the maximum score in the PBP, not the last play's: ordered by numeric
 `play_id`, the last play's score misses the final in 5–10% of games (late-game
@@ -58,7 +62,7 @@ play order is unreliable), while the maximum matches in 95.7%.
 |---|---|---|---|
 | B1 | \|Δ rating\| week over week, per team | > p99.5 for the week bucket (weeks 1–3, 4–7, 8+) | investigate |
 | B2 | Single-game offensive PPA/play outside the season distribution (2026: p0.5 −0.53, p99.5 +0.70) | outside p0.25–p99.75 | context for B1 only, not alerted on its own |
-| B3 | \|model margin − current consensus spread\| on next week's games | > p99.5 of backtest \|model − opener\| (2021+) | investigate |
+| B3 | \|model margin − current consensus spread\| on next week's games, from `predictions.csv` (`pred_margin + closing_spread`) | > p99.5 of backtest \|model − opener\| (2021+) | investigate |
 
 B1 and B3 thresholds are computed by `baselines.py` from the frozen backtest
 runs under the current production config (including the FCS two-stage fit,
@@ -92,13 +96,19 @@ A1–A4 thresholds are constants in `config/default.toml` under `[anomalies]`;
 ### Entry points
 
 - `cfbr weekly`: after `rank` and the accuracy line, before bets, calls
-  `checks.run` inside the `_guarded` pattern. Writes
-  `out/{season}/wNN/anomalies.{json,md}` and appends A1/A5 lines to the run's
-  ntfy. A crash here is alerted and never changes the exit code.
+  `run.run_step`; each check is guarded. Writes
+  `out/{season}/wNN/anomalies.{json,md}` and sends one ntfy (priority
+  `default`) listing the items new in this run — all of them until PR 2, then
+  plain items immediately and investigate items marked "investigating". A
+  same-week re-run does not re-alert items already seen. B2 rows are stored
+  with status `context` and never alerted. A crash here is alerted and never
+  changes the exit code.
 - `cfbr investigate`: cron, hourly Sunday 10:00–18:00 Central. No-op unless
   the latest `anomalies.json` has `pending` items.
-- `cfbr anomalies --season S [--week W] [--investigate] [--sample-patterns]
-  [--force ID] [--eval]`: manual runs, the shakedown and the eval.
+- `cfbr anomalies --season S [--week W] [--history] [--baselines]`
+  (PR 1; `--history` runs the database checks over every completed week for
+  the shakedown's first step) and later `[--investigate] [--sample-patterns]
+  [--force ID] [--eval]` (PR 2–3).
 
 ### Isolation
 
