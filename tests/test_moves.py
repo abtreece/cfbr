@@ -120,3 +120,24 @@ def test_game_efficiency_actuals_and_point_in_time_expectation(eng):
 def test_csv_frame_rounds_and_joins(week7):
     c = moves_csv_frame(week7)
     assert c.schema["passed_by"] == pl.Utf8 and c["move_own"].round(2).equals(c["move_own"])
+
+
+def test_rank_csv_matches_web_rows(eng, tmp_path):
+    from datetime import UTC, datetime
+
+    from cfbr.report.rank import run_rank
+    from cfbr.web.build import season_ratings
+
+    cfg = eng.cfg.model_copy(deep=True)
+    cfg.paths.out_dir = tmp_path
+    out = run_rank(cfg, SEASON, 7, last_completed=2025, ds=eng.ds)
+    csv = pl.read_csv(out / "moves.csv")
+    web = (season_ratings(eng, SEASON, datetime.now(UTC), moves=True)
+           .filter((pl.col("week") == 7) & pl.col("fbs"))
+           .select("team", "move_decay", "move_own", "move_others", "passed_by", "passed"))
+    web = moves_csv_frame(web)
+    m = csv.join(web, on="team", suffix="_web")
+    assert m.height == csv.height
+    for c in ("move_decay", "move_own", "move_others"):
+        assert (m[c] - m[f"{c}_web"]).abs().max() < 0.006
+    assert (m["passed_by"].fill_null("") == m["passed_by_web"].fill_null("")).all()

@@ -371,8 +371,12 @@ def game_row(g: dict, now: datetime | None = None, live: bool = True, threshold:
 # Model output: anything here, for any game or week of a season in progress, can be
 # turned back into the picks (see cfbr.web.access). Free viewers get these as nulls.
 MODEL_RATING_COLS = ["rank", "rating", "offense", "defense", "prior_share", "rating_change", "rank_change",
-                     "o_ppa", "d_ppa", "o_sr", "d_sr"]
-MODEL_GAME_COLS = ["pred_margin", "win_prob", "prior_pred", "massey_pred", "sigma", "prior_share_h", "prior_share_a"]
+                     "o_ppa", "d_ppa", "o_sr", "d_sr",
+                     "move_decay", "move_own", "move_others", "passed_by", "passed", "n_passed_by", "n_passed"]
+# Actual per-play stats (home_ppa, away_sr, ...) are public play-by-play facts; only the model's
+# expected edges are locked.
+MODEL_GAME_COLS = ["pred_margin", "win_prob", "prior_pred", "massey_pred", "sigma", "prior_share_h", "prior_share_a",
+                   "exp_ppa_edge", "exp_sr_edge"]
 
 
 def _null_out(df: pl.DataFrame, cols: list[str]) -> pl.DataFrame:

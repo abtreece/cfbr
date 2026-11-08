@@ -862,6 +862,10 @@ def test_free_api_withholds_live_model_output(free_client):
         assert any(g["spread"] is not None for g in games)  # lines are public
     assert free_client.get("/api/rankings?season=2025").json()["teams"][0]["rating"] == 21.0
     assert free_client.get("/bets").status_code == 402 and free_client.get("/api/bets").status_code == 402
+    from cfbr.web.app import MODEL_GAME_COLS, MODEL_RATING_COLS
+
+    assert {"move_own", "move_decay", "move_others", "passed_by", "passed"} <= set(MODEL_RATING_COLS)
+    assert {"exp_ppa_edge", "exp_sr_edge"} <= set(MODEL_GAME_COLS)
 
 
 def test_accuracy_stays_free_and_aggregate(free_client):
