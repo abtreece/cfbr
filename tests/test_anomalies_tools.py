@@ -180,3 +180,71 @@ def test_child_crash_is_reported(env):
     tight = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_memory_limit="64MB"))
     text, err = tight.query("SELECT * FROM range(20000000) ORDER BY random()")
     assert err and ("OutOfMemory" in text or "exited with code" in text), text
+
+
+def test_child_killed_mid_query_is_an_error(env):
+    import multiprocessing
+    import threading
+
+    def killer():
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            children = multiprocessing.active_children()
+            if children:
+                time.sleep(0.5)
+                for child in multiprocessing.active_children():
+                    child.kill()
+                return
+            time.sleep(0.01)
+
+    slow = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_timeout_seconds=30))
+    thread = threading.Thread(target=killer)
+    thread.start()
+    text, err = slow.query("SELECT count(*) FROM range(100000000000) a")
+    thread.join()
+    assert err and "exited with code" in text, text
+    assert slow.log[0]["ok"] is False
+    ok_text, ok_err = slow.query("SELECT 1 AS ok")
+    assert not ok_err and ok_text.splitlines()[:3] == ["result_id 2 (1 rows)", "ok", "1"]
+
+
+def test_recv_failure_is_an_error(env, monkeypatch):
+    import multiprocessing
+
+    real_get_context = multiprocessing.get_context
+
+    class BrokenRecv:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def recv(self):
+            raise OSError("got end of file during message")
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    class Ctx:
+        def __init__(self, inner):
+            self.inner = inner
+            self.Process = inner.Process
+
+        def Pipe(self, duplex=True):
+            receiver, sender = self.inner.Pipe(duplex=duplex)
+            return BrokenRecv(receiver), sender
+
+    monkeypatch.setattr(multiprocessing, "get_context", lambda method=None: Ctx(real_get_context(method)))
+    text, err = env.query("SELECT 1 AS ok")
+    assert err and "exited with code" in text, text
+    assert env.log[0]["ok"] is False
+
+
+def test_start_failure_is_an_error(env, monkeypatch):
+    from multiprocessing.context import SpawnProcess
+
+    def fail(self):
+        raise OSError(24, "Too many open files")
+
+    monkeypatch.setattr(SpawnProcess, "start", fail)
+    text, err = env.query("SELECT 1 AS ok")
+    assert err and "Too many open files" in text, text
+    assert env.log[0]["ok"] is False

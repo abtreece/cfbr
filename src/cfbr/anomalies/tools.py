@@ -5,7 +5,13 @@
   is multithreaded). The parent holds no DuckDB connection. The child is killed at
   query_timeout_seconds, which also stops work DuckDB's interrupt can't reach (the optimizer on
   deeply nested subqueries). A child that dies without answering (abort, out-of-memory kill,
-  rlimit) is reported as a tool error, never raised.
+  rlimit) is reported as a tool error, never raised; so is any failure to create the pipe, start the
+  child or read its message.
+- Memory: the parent's is bounded by the row/char caps. The child's is bounded by DuckDB's
+  memory_limit for DuckDB itself and, on Linux, by RLIMIT_AS at 2x that; Python conversion of a
+  fetched batch in the child is not separately bounded. The parent's `__main__` must be guarded by
+  `if __name__ == "__main__"` (spawn re-imports it; the cfbr console script and `python -m cfbr.cli`
+  are guarded).
 - The child's connection is read-only, has external access disabled (no read_csv on .keys, no
   ATTACH, COPY or INSTALL), configuration locked (no SET to undo any of this), an empty
   temp_directory (so DuckDB's automatic allowance for `<db>.tmp/` is gone; `<db>.wal` is refused by
@@ -198,24 +204,32 @@ class ToolSession:
     def _run_child(self, sql: str) -> tuple:
         settings = {"max_rows": self.cfg.query_max_rows, "max_chars": self.cfg.query_max_chars,
                     "memory_limit": self.cfg.query_memory_limit, "threads": self.cfg.query_threads}
-        ctx = multiprocessing.get_context("spawn")
-        receiver, sender = ctx.Pipe(duplex=False)
-        proc = ctx.Process(target=_query_child, args=(sender, str(self.db_path), sql, settings), daemon=True)
+        receiver = sender = proc = None
         message = None
         try:
+            ctx = multiprocessing.get_context("spawn")
+            receiver, sender = ctx.Pipe(duplex=False)
+            proc = ctx.Process(target=_query_child, args=(sender, str(self.db_path), sql, settings), daemon=True)
             proc.start()
             sender.close()  # only the child writes; EOF on the receiver then means the child is gone
             if not receiver.poll(self.cfg.query_timeout_seconds):
                 return ("error", f"timed out after {self.cfg.query_timeout_seconds:g}s")
             try:
                 message = receiver.recv()
-            except EOFError:
-                message = None
+            except (EOFError, OSError):
+                message = None  # child died before or while sending (a partial message raises OSError)
+        except Exception as e:
+            return ("error", f"query process failed: {type(e).__name__}: {e}"[:2000])
         finally:
-            proc.kill()
-            proc.join()
-            sender.close()
-            receiver.close()
+            if proc is not None and proc.pid is not None:
+                proc.kill()
+                proc.join()
+            for end in (sender, receiver):
+                if end is not None:
+                    try:
+                        end.close()
+                    except OSError:
+                        pass
         if message is None:
             return ("error", f"query process exited with code {proc.exitcode}")
         return message
