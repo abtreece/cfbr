@@ -9,7 +9,7 @@ each team toward its prior instead of toward zero. The system is small
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import polars as pl
@@ -128,6 +128,64 @@ def fit_efficiency_arrays(
     if keep_posterior:
         return EffFit(teams, o, d, home, intercept, n_off, n_def, precision=A, reg=reg, resid=resid)
     return EffFit(teams, o, d, home, intercept, n_off, n_def)
+
+
+FCS_LEVEL_PENALTY = 1e-6  # x alpha: keeps the shared FCS levels defined before any FCS play
+
+
+def fit_fcs_stage2(
+    off: np.ndarray,
+    de: np.ndarray,
+    h: np.ndarray,
+    y: np.ndarray,
+    fcs: np.ndarray,
+    alpha: float,
+    stage1: EffFit,
+    prior_o: np.ndarray | None = None,
+    prior_d: np.ndarray | None = None,
+    weights: np.ndarray | None = None,
+) -> EffFit:
+    """Stage 2 of the FCS two-stage fit (DECISIONS "FCS games, two-stage fit").
+
+    Rates pooled FCS entities (``fcs`` mask over teams) from plays with an FCS side, holding
+    Stage 1's FBS ratings, home coefficient and intercept fixed:
+        FCS offense:  y = c + H h + O[g] - D1[fbs]
+        FCS defense:  y = c + H h + O1[fbs] - D[g]
+    with O[g] = prior_o[g] + dL_o + dev_o[g] (same for D). dL (shared by all FCS groups) has a
+    negligible penalty; dev has ``alpha``. With no prior (final()), groups shrink toward the FCS
+    average, not toward an average FBS team. Returns a copy of ``stage1`` with FCS rows replaced."""
+    n = len(stage1.teams)
+    groups = np.flatnonzero(fcs)
+    o, d = stage1.o.copy(), stage1.d.copy()
+    if groups.size == 0:
+        return replace(stage1, o=o, d=d)
+    p_o = np.zeros(n) if prior_o is None else np.asarray(prior_o, dtype=float)
+    p_d = np.zeros(n) if prior_d is None else np.asarray(prior_d, dtype=float)
+    g = groups.size
+    pos = np.full(n, -1)
+    pos[groups] = np.arange(g)
+    w = np.ones(len(y)) if weights is None else np.asarray(weights, dtype=float)
+    so = np.flatnonzero(fcs[off] & ~fcs[de])   # FCS on offense
+    sd = np.flatnonzero(fcs[de] & ~fcs[off])   # FCS on defense
+    c, hh = stage1.intercept, stage1.home
+    target = np.concatenate([
+        y[so] - (c + hh * h[so] - stage1.d[de[so]]) - p_o[off[so]],
+        y[sd] - (c + hh * h[sd] + stage1.o[off[sd]]) + p_d[de[sd]],
+    ])
+    # Columns: [dL_o, dL_d, dev_o (g), dev_d (g)]
+    X = np.zeros((so.size + sd.size, 2 + 2 * g))
+    X[:so.size, 0] = 1.0
+    X[np.arange(so.size), 2 + pos[off[so]]] = 1.0
+    X[so.size:, 1] = -1.0
+    X[so.size + np.arange(sd.size), 2 + g + pos[de[sd]]] = -1.0
+    ww = np.concatenate([w[so], w[sd]])
+    A = X.T @ (X * ww[:, None])
+    b = X.T @ (ww * target)
+    A[np.diag_indices_from(A)] += np.r_[[FCS_LEVEL_PENALTY * alpha] * 2, np.full(2 * g, alpha)]
+    coef = np.linalg.solve(A, b)
+    o[groups] = p_o[groups] + coef[0] + coef[2:2 + g]
+    d[groups] = p_d[groups] + coef[1] + coef[2 + g:]
+    return replace(stage1, o=o, d=d)
 
 
 def recency_weights(kickoff_ns: np.ndarray, as_of_ns: int, half_life_weeks: float) -> np.ndarray | None:
