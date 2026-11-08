@@ -1,6 +1,5 @@
 import duckdb
 import polars as pl
-import pytest
 
 from cfbr.anomalies import checks
 from cfbr.config import Anomalies
@@ -61,6 +60,16 @@ def test_a2_score_gap_over_threshold_only(tmp_path):
     out = checks.a2_score_gap(con, 2026, 9, CFG)
     assert [(a.key, a.value, a.investigate) for a in out] == [("3", 19.0, True)]
     assert out[0].message == "Ohio @ Iowa: PBP max score 7-14 vs final 10-30 (gap 19)"
+
+
+def test_a2_flags_game_whose_plays_carry_no_scores(tmp_path):
+    con = _db(tmp_path / "x.duckdb")
+    _game(con, 5, home="Army", away="Navy", hp=28, ap=14)
+    _plays(con, 5, 170, home="Army", away="Navy")
+    con.execute("UPDATE plays_raw SET offense_score = NULL, defense_score = NULL WHERE game_id = 5")
+    out = checks.a2_score_gap(con, 2026, 9, CFG)
+    assert [(a.key, a.value, a.investigate) for a in out] == [("5", None, True)]
+    assert out[0].message == "Navy @ Army: play-by-play has no scores (final 14-28)"
 
 
 def test_a3_play_count_outside_range(tmp_path):

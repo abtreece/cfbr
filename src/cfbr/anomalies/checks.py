@@ -50,12 +50,20 @@ def a2_score_gap(con: duckdb.DuckDBPyConnection, season: int, week: int, cfg: An
             SELECT g.game_id, g.home_team, g.away_team, g.home_points, g.away_points, m.hs, m.as_,
                    abs(m.hs - g.home_points) + abs(m.as_ - g.away_points) AS gap
             FROM ({_WEEK_GAMES}) g JOIN m USING (game_id))
-        SELECT * FROM d WHERE gap > ? ORDER BY game_id""",
+        SELECT * FROM d WHERE gap > ? OR hs IS NULL OR as_ IS NULL ORDER BY game_id""",
         [season, week, season, week, cfg.a2_max_score_gap]).fetchall()
-    return [Anomaly("A2", season, week, str(gid),
-                    f"{_label(h, a)}: PBP max score {as_}-{hs} vs final {ap}-{hp} (gap {gap})",
-                    value=float(gap), threshold=float(cfg.a2_max_score_gap), investigate=True, game_id=gid)
-            for gid, h, a, hp, ap, hs, as_, gap in rows]
+    out = []
+    for gid, h, a, hp, ap, hs, as_, gap in rows:
+        if gap is None:
+            out.append(Anomaly("A2", season, week, str(gid),
+                               f"{_label(h, a)}: play-by-play has no scores (final {ap}-{hp})",
+                               value=None, threshold=float(cfg.a2_max_score_gap), investigate=True, game_id=gid))
+        else:
+            out.append(Anomaly("A2", season, week, str(gid),
+                               f"{_label(h, a)}: PBP max score {as_}-{hs} vs final {ap}-{hp} (gap {gap})",
+                               value=float(gap), threshold=float(cfg.a2_max_score_gap), investigate=True,
+                               game_id=gid))
+    return out
 
 
 def a3_play_count(con: duckdb.DuckDBPyConnection, season: int, week: int, cfg: Anomalies) -> list[Anomaly]:
