@@ -64,9 +64,13 @@ play order is unreliable), while the maximum matches in 95.7%.
 | B2 | Single-game offensive PPA/play outside the season distribution (2026: p0.5 −0.53, p99.5 +0.70) | outside p0.25–p99.75 | context for B1 only, not alerted on its own |
 | B3 | \|model margin − current consensus spread\| on next week's games, from `predictions.csv` (`pred_margin + closing_spread`) | > p99.5 of backtest \|model − opener\| (2021+) | investigate |
 
-B1 and B3 thresholds are computed by `baselines.py` from the frozen backtest
-runs under the current production config (including the FCS two-stage fit,
-PR #43) and frozen to `config/anomaly_thresholds.toml`, like `tuned.toml`.
+B1 and B3 thresholds are recomputed by `cfbr anomalies --baselines`
+(`baselines.py`) with the Engine under the production config (`tuned.toml`,
+including the FCS two-stage fit, PR #43): B1 from `build_rankings` over 2015
+to the last completed season, B3 from point-in-time predictions vs the opener
+(2021+). They are frozen to `config/anomaly_thresholds.toml`, like `tuned.toml`.
+`weekly` checks only the latest completed week (`--history` covers the rest),
+and A5 fires only in the team's first scheduled week.
 B3 is calibrated against the opener because Sunday's lines are early-week
 numbers, not closes. B3 reads lines only to compare; nothing it produces is
 read by the model or bets (see Isolation).

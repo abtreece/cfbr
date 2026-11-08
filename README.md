@@ -32,12 +32,12 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr fcs-gate --gate N` | FCS two-stage gates 1–3 (2015–2021, 2022–2025, 2026 through week 10), `config/tuned_v1.toml` vs `config/tuned.toml`; each needs the previous one passed; writes `results/{ts}-fcs-gate-N/` |
 | `cfbr restate --season 2026 --through-week 10` | Server only, after a published-model change: archives `out/{season}/wNN/` and `accuracy.csv` to `out/{season}/_v1/`, re-ranks those weeks, rebuilds sims, shadows and web data; never touches the ledger; don't run during `cfbr weekly` |
 | `cfbr rank --season 2026 --week 6` | Write `out/2026/w06/` rankings and next-week predictions |
-| `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line → web data for the season |
+| `cfbr weekly` | Cron entry point: ingest → prep → rank → season-to-date accuracy line → advisory anomaly checks → paper bets → web data for the season |
 | `cfbr web build` | Precompute week-by-week ratings and game predictions for the web app into `out/web/` (about 30 s for all seasons) |
 | `cfbr web serve` | Run the local web app on http://127.0.0.1:8000 |
 | `cfbr quota` | Show API usage this month (CFBD and The Odds API) |
 | `cfbr check` | Daily dead-man's switch: alert when no successful `weekly` run is recorded since the last Sunday in season, or the backup is stale |
-| `cfbr anomalies --season 2026` | Advisory data checks for the latest week (A1–A5 ingest integrity, B1–B3 model output): writes `out/{season}/wNN/anomalies.{json,md}`; `weekly` runs them and pushes new items. `--history` runs the database checks over a season; `--baselines` recomputes `config/anomaly_thresholds.toml` (no API calls) |
+| `cfbr anomalies --season 2026` | Advisory data checks for the latest week (A1–A5 ingest integrity, B1–B3 model output): writes `out/{season}/wNN/anomalies.{json,md}`; `weekly` runs them and pushes new items. `--history` runs the database checks over a season; `--baselines` recomputes the tracked `config/anomaly_thresholds.toml` (no API calls; run it in a dev checkout and commit the result, never on the server) |
 | `cfbr backup` | Copy the raw cache, news archive and paper-bet ledgers (with hash chains and history) to `[backup].target`; cron runs it nightly |
 | `cfbr scores` | Fill in final scores on the site for games played since the last `weekly` (one CFBD call, only when a game should be over) and grade the open paper and real bets on them; ratings and new bets wait for Sunday. Cron runs it nightly |
 | `cfbr odds-snapshot` | Pull an Odds API snapshot when a game kicks off within 6 h (the closing lines for paper-bet CLV); cron runs it Tue–Mon, plus weekdays 3× with `--if-games-within 168` for fresher site lines |

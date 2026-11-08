@@ -404,7 +404,8 @@ def anomalies(
     config: ConfigOpt = None,
 ) -> None:
     """Advisory data-anomaly checks. Without flags: run all checks for one week, update
-    anomalies.{json,md} and print them (no alert is sent; `cfbr weekly` sends those)."""
+    anomalies.{json,md} and print them (no alert is sent; items recorded by a manual run count as already seen,
+    so a later `cfbr weekly` won't push them)."""
     import json
     from collections import Counter
     from dataclasses import asdict
