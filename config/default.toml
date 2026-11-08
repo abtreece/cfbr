@@ -169,3 +169,26 @@ b2_quantiles = [0.0025, 0.9975]
 # B1/B3 thresholds are this quantile of history, frozen in `thresholds` by `cfbr anomalies --baselines`.
 baseline_quantile = 0.995
 thresholds = "config/anomaly_thresholds.toml"
+
+[investigate]
+# LLM investigation of pending anomalies (`cfbr investigate`). Off unless ANTHROPIC_API_KEY is set
+# (environment or .keys). Spend is logged to `ledger`; runs stop at monthly_budget_usd.
+model = "claude-opus-5-5"
+effort = "xhigh"
+max_tokens = 32000
+task_budget_tokens = 60000
+max_turns = 40
+max_items = 12
+max_attempts = 3
+wall_clock_minutes = 15
+query_timeout_seconds = 30
+query_max_rows = 200
+query_max_chars = 20000
+# Each agent query runs in its own child process, killed at query_timeout_seconds, with these
+# DuckDB limits (on Linux the child's address space is also capped at 2x the memory limit).
+query_memory_limit = "2GB"
+query_threads = 2
+monthly_budget_usd = 50.0
+ledger = "data/anthropic_calls.jsonl"
+snapshot = "data/investigations/snapshot.duckdb"
+transcripts = "data/investigations"

@@ -139,7 +139,7 @@ cfbr investigate (hourly Sun 10–18 CT)
   for item in pending (severity order: A2, A3, A4, B1, B3), at most max_items:
       verdict = agent.investigate(item)
       write verdict into anomalies.json (atomic rename, after each item)
-      transcript → data/investigations/{S}/wNN/{id}.jsonl
+      transcript → data/investigations/{S}/wNN/{id}.json
   render anomalies.md; send one ntfy
 ```
 
@@ -176,6 +176,10 @@ overwritten.
 - `submit_verdict(...)`: `strict: true`; ends the loop. Forced `tool_choice`
   is rejected by Opus 5.5, so the prompt instructs the agent to finish with
   this call.
+
+As built, each `query` runs in its own child process (killed at the timeout)
+behind a parse-tree gate that allows exactly one SELECT; see DECISIONS.md
+(Ops, anomalies) for the full hardening.
 
 ### System prompt
 
@@ -286,7 +290,7 @@ environment variable only (never a repo `.keys`), with the user's approval.
 1. PR 1: `checks.py`, `baselines.py`, thresholds file, `weekly` integration,
    `cfbr anomalies` (deterministic). Useful on its own.
 2. PR 2: `tools.py`, `prompt.py`, `agent.py`, `ledger.py`, `run.py`,
-   `cfbr investigate`, tests. Adds the `anthropic` dependency (1.x, which
+   `cfbr investigate`, tests. Adds the `anthropic` dependency (2.x, which
    brings `httpx2`); DECISIONS line explaining the exception to "HTTP through
    httpx directly".
 3. Shakedown (above).

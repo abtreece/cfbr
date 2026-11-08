@@ -196,6 +196,28 @@ class Anomalies(BaseModel):
     thresholds: Path = Path("config/anomaly_thresholds.toml")
 
 
+class Investigate(BaseModel):
+    """LLM investigation of pending anomalies (`cfbr investigate`, cfbr/anomalies/agent.py).
+    Off unless ANTHROPIC_API_KEY is set in the environment or .keys."""
+    model: str = "claude-opus-5-5"
+    effort: str = "xhigh"
+    max_tokens: int = 32000
+    task_budget_tokens: int = 60000  # advisory per-investigation budget (beta); 0 disables
+    max_turns: int = 40
+    max_items: int = 12  # per run; pending items beyond this are marked skipped_volume
+    max_attempts: int = 3  # transient API failures before an item becomes "error"
+    wall_clock_minutes: float = 15
+    query_timeout_seconds: float = 30
+    query_max_rows: int = 200
+    query_max_chars: int = 20000
+    query_memory_limit: str = "2GB"  # DuckDB memory_limit in each query's child process
+    query_threads: int = 2  # DuckDB threads in each query's child process
+    monthly_budget_usd: float = 50.0  # local guard; the account's monthly credits hard-stop as the backstop
+    ledger: Path = Path("data/anthropic_calls.jsonl")
+    snapshot: Path = Path("data/investigations/snapshot.duckdb")
+    transcripts: Path = Path("data/investigations")
+
+
 class Config(BaseModel):
     paths: Paths = Paths()
     ingest: Ingest = Ingest()
@@ -212,6 +234,7 @@ class Config(BaseModel):
     backup: Backup = Backup()
     sim: Sim = Sim()
     anomalies: Anomalies = Anomalies()
+    investigate: Investigate = Investigate()
     source: str | None = Field(default=None, exclude=True)
 
 
@@ -221,19 +244,30 @@ def load_config(path: Path | str | None = None) -> Config:
         data = tomllib.load(f)
     cfg = Config(**data)
     cfg.paths = cfg.paths.resolve(REPO_ROOT)
+    for name in ("ledger", "snapshot", "transcripts"):
+        setattr(cfg.investigate, name, REPO_ROOT / getattr(cfg.investigate, name))
     cfg.source = str(path)
     return cfg
 
 
-def api_key() -> str:
-    """CFBD key from the environment, falling back to the gitignored .keys file."""
-    key = os.environ.get("CFBD_API_KEY")
-    if key:
-        return key
+def _keys_file_value(name: str) -> str | None:
     keys_file = REPO_ROOT / ".keys"
     if keys_file.exists():
         for line in keys_file.read_text().splitlines():
-            name, _, value = line.partition("=")
-            if name.strip() == "CFBD_API_KEY" and value.strip():
+            key, _, value = line.partition("=")
+            if key.strip() == name and value.strip():
                 return value.strip().strip('"').strip("'")
+    return None
+
+
+def api_key() -> str:
+    """CFBD key from the environment, falling back to the gitignored .keys file."""
+    key = os.environ.get("CFBD_API_KEY") or _keys_file_value("CFBD_API_KEY")
+    if key:
+        return key
     raise RuntimeError("CFBD_API_KEY not set (env var or .keys file)")
+
+
+def anthropic_api_key() -> str | None:
+    """Anthropic key for `cfbr investigate`; None means investigation is off."""
+    return os.environ.get("ANTHROPIC_API_KEY") or _keys_file_value("ANTHROPIC_API_KEY")
