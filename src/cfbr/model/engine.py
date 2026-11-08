@@ -23,7 +23,7 @@ from cfbr.model.calibrate import Calibration, fit_calibration, fit_stage2, predi
 from cfbr.model.massey import fit_massey
 from cfbr.model.prior import (COMPONENTS, fit_prior_models, pooled_priors, predict_priors,
                               season_features)
-from cfbr.model.ridge import fit_efficiency_arrays, home_indicator, play_weights, recency_weights
+from cfbr.model.ridge import fit_efficiency_arrays, fit_fcs_stage2, home_indicator, play_weights, recency_weights
 from cfbr.model.roster import roster_features
 from cfbr.model.schemes import training_seasons
 
@@ -134,6 +134,13 @@ class Engine:
         off, de, h = a.off[:k], a.de[:k], a.home[:k]
         f_ppa = fit_efficiency_arrays(off, de, h, a.ppa[:k], teams, m.alpha_ppa, p["o_ppa"], p["d_ppa"], w, a.center)
         f_sr = fit_efficiency_arrays(off, de, h, a.success[:k], teams, m.alpha_sr, p["o_sr"], p["d_sr"], w, a.center)
+        if m.fcs_two_stage:
+            # Stage 2 (DECISIONS "FCS games, two-stage fit"): FCS rows from FCS plays at full recency
+            # weight, Stage 1 FBS ratings held fixed. w_off/w_def below stay the Stage 1 weights.
+            rec = None if as_of is None else recency_weights(a.kickoff_ns[:k], _ns(as_of), m.half_life_weeks)
+            fcs = ~a.center
+            f_ppa = fit_fcs_stage2(off, de, h, a.ppa[:k], fcs, m.alpha_ppa, f_ppa, p["o_ppa"], p["d_ppa"], rec)
+            f_sr = fit_fcs_stage2(off, de, h, a.success[:k], fcs, m.alpha_sr, f_sr, p["o_sr"], p["d_sr"], rec)
         n = len(teams)
         w_off = np.bincount(off, weights=w, minlength=n).astype(float)
         w_def = np.bincount(de, weights=w, minlength=n).astype(float)

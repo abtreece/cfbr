@@ -465,9 +465,19 @@ def engine(cfg, dataset):
     return Engine(dataset, cfg, last_completed=current_season() - 1)
 
 
-def test_web_ratings_match_rank_output(engine, tmp_path):
+@pytest.fixture(scope="module")
+def engine_two_stage(cfg_two_stage, dataset):
+    from cfbr.ingest.fetch import current_season
+    from cfbr.model.engine import Engine
+
+    return Engine(dataset, cfg_two_stage, last_completed=current_season() - 1)
+
+
+@pytest.mark.parametrize("engine_name", ["engine", "engine_two_stage"])
+def test_web_ratings_match_rank_output(engine_name, request, tmp_path):
     from cfbr.report.rank import build_rankings
 
+    engine = request.getfixturevalue(engine_name)
     season, week = 2023, 7
     build_season(engine, season, tmp_path, now=datetime.now(UTC))
     web = pl.read_parquet(tmp_path / str(season) / "ratings.parquet").filter(

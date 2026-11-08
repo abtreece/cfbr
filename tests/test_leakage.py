@@ -4,15 +4,22 @@ import dataclasses
 import random
 from datetime import timedelta
 
+import numpy as np
 import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
 from cfbr.data import training_slice
-from cfbr.model.engine import Engine
+from cfbr.model.engine import Engine, _ns
+from cfbr.model.ridge import fit_efficiency, fit_fcs_stage2, home_indicator
 from cfbr.model.schemes import training_seasons
 
 ALL = range(2015, 2026)
+
+
+@pytest.fixture(params=["default", "two_stage"])
+def model_cfg(request, cfg, cfg_two_stage):
+    return cfg if request.param == "default" else cfg_two_stage
 
 
 # -- cross-season fit schemes -----------------------------------------------------
@@ -45,20 +52,38 @@ def test_training_rows_precede_as_of(cfg, dataset):
             assert games["kickoff_ts"].max() < r["as_of"]
 
 
-def test_engine_prefix_fit_matches_explicit_slice(cfg, dataset):
-    """The engine's fast prefix slicing must equal fitting on training_slice rows."""
-    from cfbr.model.ridge import fit_efficiency
-
-    eng = Engine(dataset, cfg, last_completed=2025)
+def test_engine_prefix_fit_matches_explicit_slice(model_cfg, dataset):
+    """The engine's fast prefix slicing must equal fitting on training_slice rows, with the weights
+    rebuilt from the plays frame (recency x FCS factor) and, under two-stage, Stage 2 on the same slice."""
+    m = model_cfg.model
+    eng = Engine(dataset, model_cfg, last_completed=2025)
     season = 2018
+    teams, fbs = eng.entities(season), eng.fbs(season)
+    fcs_mask = ~np.isin(np.array(teams, dtype=object), fbs)
+    idx = {t: i for i, t in enumerate(teams)}
     for slot in ("r01", "r05", "r12", "p1"):
         as_of = eng.slot_as_of(season, slot)
         snap = eng.snapshot(season, as_of)
         plays = training_slice(eng.plays, season, as_of)
         assert eng.arrays(season).n_before(as_of) == plays.height
-        pr = pl.DataFrame({"team": eng.entities(season)}).join(eng.priors(season), on="team", how="left").fill_null(0.0)
-        ref = fit_efficiency(plays, "ppa", cfg.model.alpha_ppa, eng.entities(season),
-                             pr["o_ppa"].to_numpy(), pr["d_ppa"].to_numpy(), center_on=eng.fbs(season))
+        pr = pl.DataFrame({"team": teams}).join(eng.priors(season), on="team", how="left").fill_null(0.0)
+        rec = None
+        if m.half_life_weeks > 0 and plays.height:
+            kick = plays["kickoff_ts"].dt.cast_time_unit("ns").dt.epoch("ns").to_numpy()
+            rec = np.power(0.5, (_ns(as_of) - kick) / (7 * 86400 * 1e9) / m.half_life_weeks)
+        w = rec
+        if m.fcs_two_stage:
+            is_fcs = ~(plays["offense"].is_in(fbs) & plays["defense"].is_in(fbs)).to_numpy()
+            factor = np.where(is_fcs, m.fcs_weight, 1.0)
+            w = factor if w is None else w * factor
+        ref = fit_efficiency(plays, "ppa", m.alpha_ppa, teams, pr["o_ppa"].to_numpy(), pr["d_ppa"].to_numpy(),
+                             weights=w, center_on=fbs)
+        if m.fcs_two_stage:
+            off = plays["offense"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+            de = plays["defense"].replace_strict(idx, return_dtype=pl.Int64).to_numpy()
+            h = home_indicator(plays["offense"], plays["defense"], plays["home_team"], plays["neutral_site"])
+            ref = fit_fcs_stage2(off, de, h, plays["ppa"].cast(pl.Float64).to_numpy(), fcs_mask, m.alpha_ppa, ref,
+                                 pr["o_ppa"].to_numpy(), pr["d_ppa"].to_numpy(), rec)
         assert abs(snap["o_ppa"].to_numpy() - ref.o).max() < 1e-9
         assert abs(snap["d_ppa"].to_numpy() - ref.d).max() < 1e-9
 
@@ -106,9 +131,9 @@ def _with_canary(ds, eng):
     return dataclasses.replace(ds, scrimmage=pl.concat([ds.scrimmage, plays]), games=pl.concat([ds.games, game]))
 
 
-def test_canary_future_game_does_not_change_earlier_ratings(cfg, dataset):
-    clean = Engine(dataset, cfg, last_completed=2025)
-    dirty = Engine(_with_canary(dataset, clean), cfg, last_completed=2025)
+def test_canary_future_game_does_not_change_earlier_ratings(model_cfg, dataset):
+    clean = Engine(dataset, model_cfg, last_completed=2025)
+    dirty = Engine(_with_canary(dataset, clean), model_cfg, last_completed=2025)
 
     # The slot's as-of time is unchanged by the canary (it kicks off later).
     assert_frame_equal(clean.season_slots(CANARY_SEASON), dirty.season_slots(CANARY_SEASON))
