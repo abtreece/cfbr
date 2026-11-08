@@ -303,3 +303,11 @@ def test_cli_investigate_dry_run_lists_targets_without_a_key(env, monkeypatch):
     assert result.exit_code == 0
     assert "A2 Navy @ Army: gap 19" in result.output and "A3 Ohio @ Iowa: 105 plays" in result.output
     assert "would investigate 2" in result.output
+
+
+def test_load_config_resolves_investigate_paths_against_repo_root(monkeypatch, tmp_path):
+    from cfbr.config import REPO_ROOT, load_config
+    monkeypatch.chdir(tmp_path)
+    i = load_config().investigate
+    for p in (i.ledger, i.snapshot, i.transcripts):
+        assert p.is_absolute() and p.is_relative_to(REPO_ROOT)

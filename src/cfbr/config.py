@@ -244,6 +244,8 @@ def load_config(path: Path | str | None = None) -> Config:
         data = tomllib.load(f)
     cfg = Config(**data)
     cfg.paths = cfg.paths.resolve(REPO_ROOT)
+    for name in ("ledger", "snapshot", "transcripts"):
+        setattr(cfg.investigate, name, REPO_ROOT / getattr(cfg.investigate, name))
     cfg.source = str(path)
     return cfg
 
