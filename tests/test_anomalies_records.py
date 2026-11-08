@@ -1,7 +1,8 @@
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
-from cfbr.anomalies.records import Anomaly, anomaly_id, initial_status, merge, read_doc, render_md, write_doc
+from cfbr.anomalies.records import Anomaly, anomaly_id, initial_status, merge, read_doc, render_md, update_doc, write_doc
 from cfbr.config import Config
 
 T0 = datetime(2026, 11, 8, 15, 0, tzinfo=UTC)
@@ -90,3 +91,26 @@ def test_render_md_lists_items_and_says_when_empty():
     assert "No anomalies." in render_md(empty)
     multi, _ = merge(None, [_a(msg="Binder Error:\n\nbad column", check="ERR")], 2026, 9, T0)
     assert "Binder Error: bad column" in render_md(multi)
+
+
+def test_update_doc_serializes_concurrent_writers(tmp_path):
+    p = tmp_path / "w09" / "anomalies.json"
+
+    def bump(doc):
+        doc = doc or {"n": 0}
+        doc["n"] += 1
+        return doc
+
+    threads = [threading.Thread(target=lambda: [update_doc(p, bump) for _ in range(25)]) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert read_doc(p)["n"] == 100
+    assert not list(p.parent.glob("*.tmp"))
+
+
+def test_render_md_uses_title_when_present():
+    doc, _ = merge(None, [_a()], 2026, 9, T0)
+    doc["title"] = "Shakedown 2022–2025"
+    assert render_md(doc).startswith("# Data anomalies — Shakedown 2022–2025")

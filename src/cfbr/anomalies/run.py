@@ -11,7 +11,7 @@ from pathlib import Path
 import duckdb
 
 from cfbr.anomalies.checks import run_checks, run_db_checks
-from cfbr.anomalies.records import Anomaly, merge, read_doc, render_md, write_doc
+from cfbr.anomalies.records import Anomaly, merge, read_doc, render_md, update_doc
 from cfbr.config import REPO_ROOT, Config
 
 
@@ -37,8 +37,14 @@ def run_step(cfg: Config, season: int, week: int, now: datetime | None = None) -
     wd = week_dir(cfg, season, week)
     found = run_checks(cfg.paths.db_path, wd, thresholds_path(cfg), season, week, cfg.anomalies)
     path = wd / "anomalies.json"
-    doc, added = merge(read_doc(path), found, season, week, now)
-    write_doc(path, doc)
+    added: list[dict] = []
+
+    def apply(existing: dict | None) -> dict:
+        doc, new = merge(existing, found, season, week, now)
+        added.extend(new)
+        return doc
+
+    doc = update_doc(path, apply)
     (wd / "anomalies.md").write_text(render_md(doc))
     return [row for row in added if row["alert"]]
 

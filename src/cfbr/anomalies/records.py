@@ -7,9 +7,13 @@ and ids that no longer fire are marked resolved.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+import tempfile
+from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -82,16 +86,34 @@ def read_doc(path: Path) -> dict | None:
 
 
 def write_doc(path: Path, doc: dict) -> None:
-    """Atomic: write a temp file next to the target, then rename over it."""
+    """Atomic: write a uniquely named temp file next to the target, then rename over it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(doc, indent=2, default=str) + "\n")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(doc, indent=2, default=str) + "\n")
     os.replace(tmp, path)
 
 
+@contextmanager
+def _doc_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+def update_doc(path: Path, fn: Callable[[dict | None], dict]) -> dict:
+    """Read-modify-write under a sidecar lock, so `cfbr weekly` and `cfbr investigate` never
+    lose each other's writes to the same anomalies.json."""
+    with _doc_lock(path):
+        doc = fn(read_doc(path))
+        write_doc(path, doc)
+        return doc
+
+
 def render_md(doc: dict) -> str:
-    lines = [f"# Data anomalies — {doc['season']} week {doc['week']}", "",
-             f"Generated {doc['generated_at']}.", ""]
+    title = doc.get("title") or f"{doc['season']} week {doc['week']}"
+    lines = [f"# Data anomalies — {title}", "", f"Generated {doc['generated_at']}.", ""]
     if not doc["items"]:
         return "\n".join(lines + ["No anomalies.", ""])
     lines += ["| Status | Check | Detail |", "|---|---|---|"]
