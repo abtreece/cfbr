@@ -208,7 +208,8 @@ def roster_as_of(cfg: Config, season: int, ds: Dataset | None = None) -> datetim
     if latest is not None and "as_of" in latest.columns:
         r = latest.filter(pl.col("season") == season)
         if r.height:
-            return r["as_of"][0]
+            # DuckDB hands TIMESTAMPTZ back in the session (machine) time zone; the web data is UTC.
+            return r["as_of"][0].astimezone(UTC)
     p = cfg.paths.raw_dir / "roster" / str(season) / "season.json"
     return datetime.fromtimestamp(p.stat().st_mtime, UTC) if p.exists() else None
 
