@@ -1,3 +1,4 @@
+import ast
 import json
 from collections import Counter
 from datetime import UTC, datetime
@@ -116,17 +117,70 @@ def test_weekly_anomaly_step_never_raises_and_alerts(monkeypatch, tmp_path):
     assert sent == []
 
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "cfbr"
+SRC = Path(__file__).resolve().parents[1] / "src"
+PIPELINE_PACKAGES = ("model", "bets", "report", "web")
 
 
-def test_pipeline_packages_never_import_anomalies():
-    offenders = []
-    for pkg in ("model", "bets", "report", "web"):
-        for f in (SRC / pkg).rglob("*.py"):
-            text = f.read_text()
-            if "cfbr.anomalies" in text or "from cfbr import anomalies" in text:
-                offenders.append(str(f.relative_to(SRC)))
-    assert offenders == []
+def _is_anomalies(module: str) -> bool:
+    return module == "cfbr.anomalies" or module.startswith("cfbr.anomalies.")
+
+
+def _anomaly_imports(src_root: Path, pkg: str) -> tuple[int, list[str]]:
+    """Return (files scanned, files importing cfbr.anomalies) for src_root/cfbr/<pkg>."""
+    scanned, offenders = 0, []
+    for f in sorted((src_root / "cfbr" / pkg).rglob("*.py")):
+        scanned += 1
+        rel = f.relative_to(src_root)
+        package = list(rel.parent.parts)
+        hit = False
+        for node in ast.walk(ast.parse(f.read_text())):
+            if isinstance(node, ast.Import):
+                hit |= any(_is_anomalies(a.name) for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if node.level:
+                    base = package[: len(package) - (node.level - 1)]
+                    module = ".".join(base + ([node.module] if node.module else []))
+                hit |= _is_anomalies(module) or (
+                    module == "cfbr" and any(a.name == "anomalies" for a in node.names)
+                )
+            elif isinstance(node, ast.Call):
+                name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+                if name in ("import_module", "__import__") and node.args:
+                    arg = node.args[0]
+                    hit |= isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "anomalies" in arg.value
+        if hit:
+            offenders.append(str(rel))
+    return scanned, offenders
+
+
+@pytest.mark.parametrize("pkg", PIPELINE_PACKAGES)
+def test_pipeline_packages_never_import_anomalies(pkg):
+    scanned, offenders = _anomaly_imports(SRC, pkg)
+    assert scanned > 0, f"no files scanned under cfbr/{pkg}"
+    assert offenders == [], f"cfbr.anomalies imported by: {offenders}"
+
+
+def test_anomaly_import_scan_catches_every_import_form(tmp_path):
+    cases = {
+        "a.py": "import cfbr.anomalies.run\n",
+        "b.py": "from cfbr.anomalies import run\n",
+        "c.py": "from cfbr import config, anomalies\n",
+        "d.py": "from cfbr import (\n    anomalies,\n)\n",
+        "e.py": "from ..anomalies import run\n",
+        "f.py": "from .. import anomalies\n",
+        "g.py": 'import importlib\nimportlib.import_module("cfbr.anomalies")\n',
+        "h.py": 'x = __import__("cfbr.anomalies")\n',
+        "ok_comment.py": "# cfbr.anomalies\nimport os\n",
+        "ok_doc.py": '"""Never imports cfbr.anomalies, see from cfbr import anomalies."""\n',
+    }
+    pkg_dir = tmp_path / "cfbr" / "model"
+    pkg_dir.mkdir(parents=True)
+    for name, body in cases.items():
+        (pkg_dir / name).write_text(body)
+    scanned, offenders = _anomaly_imports(tmp_path, "model")
+    assert scanned == len(cases)
+    assert sorted(offenders) == sorted(f"cfbr/model/{n}" for n in cases if not n.startswith("ok_"))
 
 
 # Measured 2026-11-08 on the dev store (regular season, FBS side): A2 19/11/5/7, A3 10/3/3/4,
