@@ -7,7 +7,9 @@ from __future__ import annotations
 import fcntl
 import json
 import re
+import os
 import shutil
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -118,8 +120,11 @@ def _patch(doc_path: Path, ids: list[str], patch: dict) -> None:
             if row["id"] in ids:
                 status = patch.get("status")
                 row.update({k: v for k, v in patch.items() if k != "status"})
-                if status and row["status"] != "resolved":
-                    row["status"] = status
+                if status:
+                    if row["status"] == "resolved":
+                        row["resolved_from"] = status
+                    else:
+                        row["status"] = status
         return doc
     update_doc(doc_path, apply)
 
@@ -135,8 +140,30 @@ def _label(doc: dict) -> str:
     return doc.get("title") or f"w{int(doc['week']):02d}"
 
 
+def _ledger_total(path: Path) -> float:
+    if not path.exists():
+        return 0.0
+    return sum(json.loads(line)["cost_usd"] for line in path.read_text().splitlines() if line.strip())
+
+
 def investigate_doc(cfg: Config, doc_path: Path, client, *, now: datetime | None = None,
                     force_ids: tuple[str, ...] = (), clock=time.monotonic) -> dict:
+    """One run at a time: a run can last hours and two would investigate the same items and
+    replace the snapshot under each other's query children."""
+    lock_path = cfg.investigate.snapshot.parent / ".investigate.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = try_lock(lock_path)
+    if lock is None:
+        return {"status": "busy", "items": [], "skipped_volume": 0, "skipped_budget": 0, "errors": 0,
+                "stopped": None, "cost_usd": 0.0, "label": ""}
+    try:
+        return _investigate_locked(cfg, doc_path, client, now=now, force_ids=force_ids, clock=clock)
+    finally:
+        lock.close()
+
+
+def _investigate_locked(cfg: Config, doc_path: Path, client, *, now: datetime | None,
+                        force_ids: tuple[str, ...], clock) -> dict:
     from cfbr.anomalies import ledger
     from cfbr.anomalies.agent import investigate
     from cfbr.anomalies.prompt import build_system, schema_text
@@ -159,8 +186,16 @@ def investigate_doc(cfg: Config, doc_path: Path, client, *, now: datetime | None
     if lock is None:
         return {**summary, "status": "locked"}
     try:
-        icfg.snapshot.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(cfg.paths.db_path, icfg.snapshot)
+        if cfg.paths.db_path.with_name(cfg.paths.db_path.name + ".wal").exists():
+            return {**summary, "status": "locked"}
+        fd, tmp = tempfile.mkstemp(dir=icfg.snapshot.parent, suffix=".tmp")
+        os.close(fd)
+        try:
+            shutil.copyfile(cfg.paths.db_path, tmp)
+            os.replace(tmp, icfg.snapshot)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
     finally:
         lock.close()
     if overflow:
@@ -168,6 +203,7 @@ def investigate_doc(cfg: Config, doc_path: Path, client, *, now: datetime | None
         summary["skipped_volume"] = len(overflow)
     system = build_system(schema_text(icfg.snapshot))
     summary["status"] = "done"
+    ledger_before = _ledger_total(icfg.ledger)
     for i, row in enumerate(todo):
         if ledger.month_to_date(icfg.ledger, now) >= icfg.monthly_budget_usd:
             rest = [r["id"] for r in todo[i:]]
@@ -181,7 +217,6 @@ def investigate_doc(cfg: Config, doc_path: Path, client, *, now: datetime | None
             outcome = investigate(client, row, _context(doc, row), session, system, icfg, icfg.ledger, clock)
             _patch(doc_path, [row["id"]], {"status": "investigated", "verdict": outcome,
                                            "investigated_at": now.isoformat()})
-            summary["cost_usd"] += outcome["meta"]["cost_usd"]
             summary["items"].append({"id": row["id"], "check": row["check"], "message": row["message"],
                                      **{k: outcome[k] for k in ("verdict", "confidence", "summary",
                                                                 "model_impact", "reason")}})
@@ -211,7 +246,7 @@ def investigate_doc(cfg: Config, doc_path: Path, client, *, now: datetime | None
                                              indent=2, default=str) + "\n")
             session.close()
     doc_path.with_suffix(".md").write_text(render_md(read_doc(doc_path)))
-    summary["cost_usd"] = round(summary["cost_usd"], 2)
+    summary["cost_usd"] = round(_ledger_total(icfg.ledger) - ledger_before, 2)
     return summary
 
 
@@ -223,6 +258,11 @@ def investigate_alert(summary: dict) -> tuple[str, str, str] | None:
                 "or wait for next month.", "default")
     if status != "done":
         return None
+    if summary.get("stopped") == "auth":
+        body = [f"Anthropic key rejected: {summary.get('auth_error', '')}"]
+        body += [f"• {i['check']} {i['message']}: {i['verdict']}/{i['confidence']} — {i['summary']}; {i['model_impact']}"
+                 for i in summary["items"]]
+        return "cfbr investigate: Anthropic key rejected", "\n".join(body), "high"
     items = summary["items"]
     counts = {v: sum(1 for i in items if i["verdict"] == v) for v in ("data_bug", "real", "inconclusive")}
     title = (f"cfbr anomalies {summary['label']} — {counts['data_bug']} data bug, {counts['real']} real, "

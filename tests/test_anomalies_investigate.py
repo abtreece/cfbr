@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import duckdb
 import pytest
 
+from cfbr.anomalies import ledger
 from cfbr.anomalies.records import Anomaly, merge, read_doc, update_doc, write_doc
 from cfbr.anomalies.run import classify_error, investigate_alert, investigate_doc, plan_targets
 from cfbr.config import Config, Paths, anthropic_api_key
@@ -166,3 +167,74 @@ def test_investigate_alert_text():
     assert body.splitlines()[0] == "• A4 Rice–UTSA dup: data_bug/high — drive 14 duplicated; material"
     assert priority == "high"
     assert investigate_alert({"status": "nothing"}) is None and investigate_alert({"status": "locked"}) is None
+
+
+def _hold(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "w")
+    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fh
+
+
+def test_overlapping_run_is_busy(env):
+    cfg, path = env
+    client = FakeClient([])
+    with _hold(cfg.investigate.snapshot.parent / ".investigate.lock"):
+        summary = investigate_doc(cfg, path, client, now=NOW)
+    assert summary["status"] == "busy" and client.calls == []
+    assert _status(path)["A2"] == "pending" and investigate_alert(summary) is None
+
+
+def test_snapshot_is_replaced_atomically(env):
+    cfg, path = env
+    investigate_doc(cfg, path, FakeClient(_ok_script() + _ok_script()), now=NOW)
+    assert cfg.investigate.snapshot.exists()
+    assert list(cfg.investigate.snapshot.parent.glob("*.tmp")) == []
+
+
+def test_wal_present_skips(env):
+    cfg, path = env
+    cfg.paths.db_path.with_name(cfg.paths.db_path.name + ".wal").write_text("")
+    client = FakeClient([])
+    summary = investigate_doc(cfg, path, client, now=NOW)
+    assert summary["status"] == "locked" and client.calls == [] and _status(path)["A2"] == "pending"
+    assert list(cfg.investigate.snapshot.parent.glob("*.tmp")) == []
+
+
+def test_resolved_during_investigation_restores_investigated(env):
+    cfg, path = env
+
+    def resolve_then_query(kw):
+        def apply(d):
+            for r in d["items"]:
+                if r["check"] == "A2":
+                    r["status"] = "resolved"
+            return d
+        update_doc(path, apply)
+        return message([tool_use("query", {"sql": "SELECT 'Rush for 4 yards' AS play_text"}, "q")])
+
+    investigate_doc(cfg, path, FakeClient([resolve_then_query, message([tool_use("submit_verdict", GOOD, "v")])]
+                                          + _ok_script()), now=NOW)
+    row = next(r for r in read_doc(path)["items"] if r["check"] == "A2")
+    assert row["status"] == "resolved" and row["resolved_from"] == "investigated" and row["verdict"]["verdict"] == "real"
+
+
+def test_alert_cost_includes_errored_items(env):
+    cfg, path = env
+
+    def spend_then_fail(kw):
+        ledger.record(cfg.investigate.ledger, model="claude-opus-5-5", usage=message([]).usage,
+                      purpose="investigate", request_id="r", now=NOW)
+        raise FakeAPIError(500)
+
+    summary = investigate_doc(cfg, path, FakeClient(_ok_script() + [spend_then_fail]), now=NOW)
+    total = sum(json.loads(line)["cost_usd"] for line in cfg.investigate.ledger.read_text().splitlines())
+    assert len(summary["items"]) == 1 and summary["cost_usd"] == round(total, 2) and total > 0
+
+
+def test_auth_alert():
+    s = {"status": "done", "label": "w09", "cost_usd": 0.0, "skipped_volume": 0, "skipped_budget": 0,
+         "errors": 0, "stopped": "auth", "auth_error": "FakeAPIError: HTTP 401", "items": []}
+    title, body, priority = investigate_alert(s)
+    assert title == "cfbr investigate: Anthropic key rejected" and priority == "high"
+    assert "HTTP 401" in body
