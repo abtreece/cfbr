@@ -7,7 +7,8 @@ from cfbr.anomalies.agent import BETAS, grounded, investigate
 from cfbr.anomalies.prompt import TOOLS, VERDICT_SCHEMA, build_system, item_message, schema_text
 from cfbr.anomalies.tools import ToolSession
 from cfbr.config import Investigate
-from tests.anomaly_fakes import FakeAPIError, FakeClient, message, text_block, tool_use
+from tests.anomaly_fakes import (FakeAPIError, FakeClient, fallback_block, message, text_block, thinking_block,
+                                 tool_use, usage)
 
 
 def _strict_ok(schema):
@@ -60,7 +61,7 @@ ROW = {"id": "abc123", "check": "A4", "season": 2026, "week": 9, "key": "1", "me
 
 def _verdict(**over):
     v = {"verdict": "data_bug", "confidence": "high", "summary": "Drive 7 is listed twice.",
-         "evidence": [{"claim": "four extra rows", "query_id": 1, "excerpt": "extra\n4"}],
+         "evidence": [{"claim": "four extra rows", "query_id": 1, "excerpt": "Rush for 4 yards"}],
          "affected": {"game_ids": [1], "teams": ["Rice"]}, "model_impact": "small",
          "suggested_action": "Re-fetch the game's plays."}
     v.update(over)
@@ -71,7 +72,7 @@ def _verdict(**over):
 def session(tmp_path):
     db = tmp_path / "s.duckdb"
     with duckdb.connect(str(db)) as con:
-        con.execute("CREATE TABLE t AS SELECT 4 AS extra")
+        con.execute("CREATE TABLE t AS SELECT 4 AS extra, 'Rush for 4 yards' AS play_text")
     s = ToolSession(db, tmp_path / "out", 2026, 9, Investigate())
     yield s
     s.close()
@@ -83,7 +84,7 @@ def _run(client, session, tmp_path, cfg=None, clock=None):
 
 
 def test_grounded_verdict_is_kept_and_request_shape_is_right(session, tmp_path):
-    client = FakeClient([message([tool_use("query", {"sql": "SELECT extra FROM t"}, "tu1")]),
+    client = FakeClient([message([tool_use("query", {"sql": "SELECT extra, play_text FROM t"}, "tu1")]),
                          message([tool_use("submit_verdict", _verdict(), "tu2")])])
     out = _run(client, session, tmp_path)
     assert out["verdict"] == "data_bug" and out["reason"] is None
@@ -100,7 +101,7 @@ def test_grounded_verdict_is_kept_and_request_shape_is_right(session, tmp_path):
 
 def test_ungrounded_excerpt_downgrades_to_inconclusive(session, tmp_path):
     bad = _verdict(evidence=[{"claim": "x", "query_id": 1, "excerpt": "38 duplicate rows"}])
-    client = FakeClient([message([tool_use("query", {"sql": "SELECT extra FROM t"}, "tu1")]),
+    client = FakeClient([message([tool_use("query", {"sql": "SELECT extra, play_text FROM t"}, "tu1")]),
                          message([tool_use("submit_verdict", bad, "tu2")])])
     out = _run(client, session, tmp_path)
     assert (out["verdict"], out["confidence"], out["reason"]) == ("inconclusive", "low", "ungrounded")
@@ -108,13 +109,16 @@ def test_ungrounded_excerpt_downgrades_to_inconclusive(session, tmp_path):
 
 
 def test_grounded_rules():
-    results = {1: "result_id 1 (1 rows)\nextra\n4"}
+    results = {1: "result_id 1 (1 rows)\nextra,play_text\n4,Rush for 4 yards"}
     assert grounded(_verdict(), results)
     assert not grounded(_verdict(evidence=[]), results)                       # data_bug needs evidence
     assert grounded(_verdict(verdict="inconclusive", evidence=[]), results)
     assert not grounded(_verdict(evidence=[{"claim": "c", "query_id": 9, "excerpt": "4"}]), results)
     assert not grounded(_verdict(evidence=[{"claim": "c", "query_id": 1, "excerpt": "  "}]), results)
-    assert grounded(_verdict(evidence=[{"claim": "c", "query_id": 1, "excerpt": "extra   4"}]), results)
+    assert grounded(_verdict(evidence=[{"claim": "c", "query_id": 1, "excerpt": "Rush  for\n4 yards"}]), results)
+    assert not grounded(_verdict(evidence=[{"claim": "c", "query_id": 1, "excerpt": "1"}]), results)
+    assert not grounded(_verdict(evidence=[{"claim": "c", "query_id": 1, "excerpt": "result_id 1"}]), results)
+    assert not grounded(_verdict(evidence=[{"claim": "c", "query_id": 1, "excerpt": "result_id 1 (1 rows)"}]), results)
 
 
 def test_turn_cap_gives_inconclusive_budget(session, tmp_path):
@@ -158,3 +162,65 @@ def test_query_errors_go_back_as_tool_errors_and_long_fields_are_clipped(session
 def test_api_errors_propagate(session, tmp_path):
     with pytest.raises(FakeAPIError):
         _run(FakeClient([FakeAPIError(529, "overloaded_error")]), session, tmp_path)
+
+
+def test_max_tokens_turn_is_not_trusted_and_its_calls_are_answered_with_errors(session, tmp_path):
+    cut = {k: v for k, v in _verdict().items() if k not in ("affected", "model_impact")}
+    client = FakeClient([message([tool_use("query", {"sql": "SELECT extra, play_text FROM t"}, "tu1")]),
+                         message([tool_use("submit_verdict", cut, "tu2")], stop="max_tokens"),
+                         message([tool_use("submit_verdict", _verdict(), "tu3")])])
+    out = _run(client, session, tmp_path)
+    assert out["verdict"] == "data_bug" and out["reason"] is None and out["model_impact"] == "small"
+    after_cut = client.calls[2]["messages"][-1]
+    assert after_cut["role"] == "user" and after_cut["content"] == [
+        {"type": "tool_result", "tool_use_id": "tu2", "is_error": True,
+         "content": "Cut off at max_tokens before this call finished; call it again, shorter."}]
+
+
+def test_max_tokens_text_only_turn_gets_a_nudge(session, tmp_path):
+    client = FakeClient([message([text_block("Let me")], stop="max_tokens"),
+                         message([tool_use("submit_verdict", _verdict(verdict="inconclusive", evidence=[]), "tu1")])])
+    out = _run(client, session, tmp_path)
+    assert out["reason"] is None
+    assert client.calls[1]["messages"][-1] == {"role": "user", "content": "Finish by calling submit_verdict."}
+
+
+def test_incomplete_submit_on_end_turn_is_no_verdict(session, tmp_path):
+    partial = {k: v for k, v in _verdict(verdict="inconclusive", evidence=[]).items() if k != "model_impact"}
+    client = FakeClient([message([tool_use("submit_verdict", partial, "tu1")], stop="end_turn")])
+    out = _run(client, session, tmp_path)
+    assert (out["verdict"], out["reason"]) == ("inconclusive", "no_verdict")
+
+
+def test_fallback_turn_echoes_only_text_before_the_boundary_and_acts_after_it(session, tmp_path):
+    fb, txt = fallback_block(), text_block("Taking over.")
+    post = tool_use("query", {"sql": "SELECT extra, play_text FROM t"}, "post")
+    content = [thinking_block(), tool_use("query", {"sql": "SELECT 1"}, "pre"), fb, txt, post]
+    client = FakeClient([message(content, model="claude-opus-4-8"),
+                         message([tool_use("submit_verdict", _verdict(), "tu2")])])
+    out = _run(client, session, tmp_path)
+    assert out["verdict"] == "data_bug" and out["meta"]["queries"] == 1
+    history = client.calls[1]["messages"]
+    assert history[1]["content"] == [fb, txt, post]
+    assert [r["tool_use_id"] for r in history[2]["content"]] == ["post"]
+
+
+def test_request_id_comes_from_the_stream(session, tmp_path):
+    client = FakeClient([message([tool_use("submit_verdict", _verdict(verdict="inconclusive", evidence=[]), "tu1")])])
+    out = _run(client, session, tmp_path)
+    assert out["meta"]["request_ids"] == ["req_stream"]
+    assert json.loads((tmp_path / "calls.jsonl").read_text())["request_id"] == "req_stream"
+
+
+def test_each_fallback_iteration_gets_a_ledger_row(session, tmp_path):
+    from types import SimpleNamespace as NS
+    its = [NS(type="fallback_message", model="claude-opus-5-5", **vars(usage(500, 10))),
+           NS(type="message", model="claude-opus-4-8", **vars(usage(900, 150)))]
+    u = NS(**vars(usage(900, 150)), iterations=its)
+    client = FakeClient([message([tool_use("submit_verdict", _verdict(verdict="inconclusive", evidence=[]), "tu1")],
+                                 model="claude-opus-4-8", usage_=u)])
+    out = _run(client, session, tmp_path)
+    rows = [json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()]
+    assert [r["model"] for r in rows] == ["claude-opus-5-5", "claude-opus-4-8"]
+    assert [r["input_tokens"] for r in rows] == [500, 900]
+    assert out["meta"]["cost_usd"] == round(sum(r["cost_usd"] for r in rows), 4)

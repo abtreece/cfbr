@@ -15,11 +15,22 @@ def text_block(t):
     return NS(type="text", text=t)
 
 
-def message(content, stop="tool_use", model="claude-opus-5-5", details=None):
-    return NS(content=content, stop_reason=stop, model=model, usage=usage(), _request_id="req_1", stop_details=details)
+def thinking_block(t="pondering"):
+    return NS(type="thinking", thinking=t, signature="sig")
+
+
+def fallback_block():
+    return NS(type="fallback", trigger="refusal")
+
+
+def message(content, stop="tool_use", model="claude-opus-5-5", details=None, usage_=None):
+    return NS(content=content, stop_reason=stop, model=model, usage=usage_ or usage(), _request_id="req_1",
+              stop_details=details)
 
 
 class _Stream:
+    request_id = "req_stream"
+
     def __init__(self, msg):
         self.msg = msg
 
