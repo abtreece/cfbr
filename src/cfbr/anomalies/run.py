@@ -4,14 +4,18 @@ catches everything)."""
 
 from __future__ import annotations
 
+import fcntl
+import json
 import re
+import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import duckdb
 
 from cfbr.anomalies.checks import run_checks, run_db_checks
-from cfbr.anomalies.records import Anomaly, merge, read_doc, render_md, update_doc
+from cfbr.anomalies.records import SEVERITY, Anomaly, merge, read_doc, render_md, update_doc
 from cfbr.config import REPO_ROOT, Config
 
 
@@ -65,3 +69,174 @@ def alert_text(rows: list[dict], limit: int = 15) -> str:
     if len(rows) > limit:
         lines.append(f"… and {len(rows) - limit} more (see anomalies.md)")
     return "\n".join(lines)
+
+
+TRANSIENT_STATUSES = {408, 409, 429}
+
+
+def plan_targets(doc: dict, force_ids: tuple[str, ...], max_items: int) -> tuple[list[dict], list[dict]]:
+    if force_ids:
+        rows = [r for r in doc["items"] if r["id"] in force_ids]
+    else:
+        rows = [r for r in doc["items"] if r["status"] == "pending"]
+    rows.sort(key=lambda r: (SEVERITY.get(r["check"], 99), str(r["key"])))
+    return rows[:max_items], rows[max_items:]
+
+
+def classify_error(e: BaseException) -> str:
+    """transient: retry on a later run; auth: stop, the key is wrong; budget: credits or spend
+    limit exhausted; item: this request is bad (record it, move on). anthropic.APIConnectionError
+    and APITimeoutError carry no status_code; their class names contain Connection/Timeout."""
+    status = getattr(e, "status_code", None)
+    kind = getattr(e, "type", None)
+    if status is None:
+        name = type(e).__name__
+        transient = isinstance(e, (ConnectionError, TimeoutError)) or "Connection" in name or "Timeout" in name
+        return "transient" if transient else "item"
+    if status in (401, 403):
+        return "auth"
+    if status == 402 or kind == "billing_error" or type(e).__name__ == "EnforcedSpendLimitReachedError":
+        return "budget"
+    if status in TRANSIENT_STATUSES or status >= 500:
+        return "transient"
+    return "item"
+
+
+def try_lock(path: Path):
+    fh = open(path, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    return fh
+
+
+def _patch(doc_path: Path, ids: list[str], patch: dict) -> None:
+    def apply(doc: dict | None) -> dict:
+        for row in (doc or {"items": []})["items"]:
+            if row["id"] in ids:
+                status = patch.get("status")
+                row.update({k: v for k, v in patch.items() if k != "status"})
+                if status and row["status"] != "resolved":
+                    row["status"] = status
+        return doc
+    update_doc(doc_path, apply)
+
+
+def _context(doc: dict, row: dict) -> list[dict]:
+    def related(r: dict) -> bool:
+        return r["check"] == "B2" and ((row.get("team") and r.get("team") == row["team"])
+                                       or (row.get("game_id") and r.get("game_id") == row["game_id"]))
+    return [r for r in doc["items"] if related(r)]
+
+
+def _label(doc: dict) -> str:
+    return doc.get("title") or f"w{int(doc['week']):02d}"
+
+
+def investigate_doc(cfg: Config, doc_path: Path, client, *, now: datetime | None = None,
+                    force_ids: tuple[str, ...] = (), clock=time.monotonic) -> dict:
+    from cfbr.anomalies import ledger
+    from cfbr.anomalies.agent import investigate
+    from cfbr.anomalies.prompt import build_system, schema_text
+    from cfbr.anomalies.tools import ToolSession
+
+    now = now or datetime.now(UTC)
+    icfg = cfg.investigate
+    doc = read_doc(doc_path)
+    summary = {"status": "nothing", "items": [], "skipped_volume": 0, "skipped_budget": 0, "errors": 0,
+               "stopped": None, "cost_usd": 0.0, "label": _label(doc) if doc else ""}
+    if doc is None:
+        return {**summary, "status": "no_doc"}
+    todo, overflow = plan_targets(doc, force_ids, icfg.max_items)
+    if not todo:
+        return summary
+    if ledger.month_to_date(icfg.ledger, now) >= icfg.monthly_budget_usd:
+        _patch(doc_path, [r["id"] for r in todo + overflow], {"status": "skipped_budget"})
+        return {**summary, "status": "budget", "skipped_budget": len(todo) + len(overflow)}
+    lock = try_lock(cfg.paths.db_path.parent / ".weekly.lock")
+    if lock is None:
+        return {**summary, "status": "locked"}
+    try:
+        icfg.snapshot.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(cfg.paths.db_path, icfg.snapshot)
+    finally:
+        lock.close()
+    if overflow:
+        _patch(doc_path, [r["id"] for r in overflow], {"status": "skipped_volume"})
+        summary["skipped_volume"] = len(overflow)
+    system = build_system(schema_text(icfg.snapshot))
+    summary["status"] = "done"
+    for i, row in enumerate(todo):
+        if ledger.month_to_date(icfg.ledger, now) >= icfg.monthly_budget_usd:
+            rest = [r["id"] for r in todo[i:]]
+            _patch(doc_path, rest, {"status": "skipped_budget"})
+            summary["skipped_budget"] += len(rest)
+            summary["stopped"] = "budget"
+            break
+        session = ToolSession(icfg.snapshot, cfg.paths.out_dir, int(row["season"]), int(row["week"]), icfg)
+        outcome = None
+        try:
+            outcome = investigate(client, row, _context(doc, row), session, system, icfg, icfg.ledger, clock)
+            _patch(doc_path, [row["id"]], {"status": "investigated", "verdict": outcome,
+                                           "investigated_at": now.isoformat()})
+            summary["cost_usd"] += outcome["meta"]["cost_usd"]
+            summary["items"].append({"id": row["id"], "check": row["check"], "message": row["message"],
+                                     **{k: outcome[k] for k in ("verdict", "confidence", "summary",
+                                                                "model_impact", "reason")}})
+        except Exception as e:  # noqa: BLE001 - classified below; one item never stops the others unless auth/budget
+            kind = classify_error(e)
+            error = f"{type(e).__name__}: {e}"[:300]
+            if kind == "auth":
+                summary["stopped"] = "auth"
+                summary["auth_error"] = error
+                break
+            if kind == "budget":
+                rest = [r["id"] for r in todo[i:]]
+                _patch(doc_path, rest, {"status": "skipped_budget", "last_error": error})
+                summary["skipped_budget"] += len(rest)
+                summary["stopped"] = "budget"
+                break
+            attempts = int(row.get("attempts", 0)) + 1
+            if kind == "transient" and attempts < icfg.max_attempts:
+                _patch(doc_path, [row["id"]], {"attempts": attempts, "last_error": error})
+            else:
+                _patch(doc_path, [row["id"]], {"status": "error", "attempts": attempts, "last_error": error})
+                summary["errors"] += 1
+        finally:
+            transcript = icfg.transcripts / str(row["season"]) / f"w{int(row['week']):02d}" / f"{row['id']}.json"
+            transcript.parent.mkdir(parents=True, exist_ok=True)
+            transcript.write_text(json.dumps({"row": row, "queries": session.log, "outcome": outcome},
+                                             indent=2, default=str) + "\n")
+            session.close()
+    doc_path.with_suffix(".md").write_text(render_md(read_doc(doc_path)))
+    summary["cost_usd"] = round(summary["cost_usd"], 2)
+    return summary
+
+
+def investigate_alert(summary: dict) -> tuple[str, str, str] | None:
+    status = summary.get("status")
+    if status == "budget":
+        return ("cfbr investigate: monthly budget reached",
+                f"{summary['skipped_budget']} item(s) marked skipped_budget; raise [investigate].monthly_budget_usd "
+                "or wait for next month.", "default")
+    if status != "done":
+        return None
+    items = summary["items"]
+    counts = {v: sum(1 for i in items if i["verdict"] == v) for v in ("data_bug", "real", "inconclusive")}
+    title = (f"cfbr anomalies {summary['label']} — {counts['data_bug']} data bug, {counts['real']} real, "
+             f"{counts['inconclusive']} inconclusive (${summary['cost_usd']:.2f})")
+    lines = [f"• {i['check']} {i['message']}: {i['verdict']}/{i['confidence']} — {i['summary']}; {i['model_impact']}"
+             for i in items]
+    for key, text in (("skipped_volume", "not investigated (volume)"), ("skipped_budget", "skipped (budget)"),
+                      ("errors", "failed after retries")):
+        if summary.get(key):
+            lines.append(f"{summary[key]} {text}")
+    if summary.get("stopped") == "auth":
+        lines.append(f"Stopped: Anthropic key rejected ({summary.get('auth_error', '')})")
+    material = any(i["verdict"] == "data_bug" and i["model_impact"] == "material" for i in items)
+    priority = "high" if material or summary.get("stopped") == "auth" else "default"
+    if not lines:
+        return None
+    return title, "\n".join(lines), priority
