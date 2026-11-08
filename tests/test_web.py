@@ -993,18 +993,19 @@ def test_roster_page_departure_reasons(web_cfg):
     season_dir = _write_season(web_dir(web_cfg), datetime.now(UTC), live=True, polls=True)
     _write_roster(season_dir)
     pl.DataFrame({
-        "season": [SEASON] * 5, "team": ["Texas A&M"] * 5, "player_id": ["8", "9", "10", "11", "12"],
-        "name": ["Gone Pro", "Left Town", "Big Tackle", "Portal Guy", "Old Man"],
-        "position": ["RB", "LB", "OL", "WR", "S"], "prev_class_year": [3, 2, 4, 2, 4],
-        "to_team": [None, "Ohio State", None, None, None],
-        "reason": ["drafted", "transfer", "drafted", "portal_transfer", "unknown"],
-        "draft_round": [1, None, 4, None, None], "draft_overall": [12, None, 120, None, None],
-        "draft_nfl_team": ["Chicago", None, "Dallas", None, None],
+        "season": [SEASON] * 6, "team": ["Texas A&M"] * 6, "player_id": ["8", "9", "10", "11", "12", "13"],
+        "name": ["Gone Pro", "Left Town", "Big Tackle", "Portal Guy", "Old Man", "Young Guard"],
+        "position": ["RB", "LB", "OL", "WR", "S", "OL"], "prev_class_year": [3, 2, 4, 2, 4, 1],
+        "to_team": [None, "Ohio State", None, None, None, None],
+        "reason": ["drafted", "transfer", "drafted", "portal_transfer", "eligibility", "unknown"],
+        "draft_round": [1, None, 4, None, None, None], "draft_overall": [12, None, 120, None, None, None],
+        "draft_nfl_team": ["Chicago", None, "Dallas", None, None, None],
         # Full name known for one pick only: the other falls back to the city.
-        "draft_nfl_team_name": ["Chicago Bears", None, None, None, None],
-        "in_portal": [False, True, False, True, False], "portal_destination": [None, "Ohio State", None, "Montana", None],
-        "prev_plays": [190, None, None, 20, None], "prev_ppa_total": [22.0, None, None, 1.0, None],
-        "prev_tackles": [None, 61.0, None, None, 30.0], "prev_havoc": [None, 7.5, None, None, 1.0],
+        "draft_nfl_team_name": ["Chicago Bears", None, None, None, None, None],
+        "in_portal": [False, True, False, True, False, False],
+        "portal_destination": [None, "Ohio State", None, "Montana", None, None],
+        "prev_plays": [190, None, None, 20, None, None], "prev_ppa_total": [22.0, None, None, 1.0, None, None],
+        "prev_tackles": [None, 61.0, None, None, 30.0, None], "prev_havoc": [None, 7.5, None, None, 1.0, None],
     }, schema_overrides={"season": pl.Int32, "prev_class_year": pl.Int32, "draft_round": pl.Int32,
                          "draft_overall": pl.Int32, "prev_plays": pl.Int64}).write_parquet(
         season_dir / "roster_departures.parquet")
@@ -1013,9 +1014,12 @@ def test_roster_page_departure_reasons(web_cfg):
     assert "Drafted</span> <span class=\"muted\">Rd 1 · #12 overall · Chicago Bears" in html
     assert "Big Tackle" in html and "Rd 4 · #120 overall · Dallas" in html
     assert "Montana <span class=\"muted\">(portal)</span>" in html
-    assert "not on a roster · senior last season" in html
+    assert "out of eligibility" in _table(html, "departures-defense")             # Old Man (senior)
+    assert "Young Guard" in _table(html, "departures-offense")                   # no stats, still listed
+    assert '<tr data-reason="unknown">' in html and "not on a roster" in html
+    assert '<option value="eligibility">Out of eligibility</option>' in html
     assert '<option value="portal_transfer">' in html
-    assert "2 drafted · 1 now on another roster" in html
+    assert "2 drafted · 1 now on another roster · 1 out of eligibility" in html
 
 
 def _table(html: str, table_id: str) -> str:

@@ -245,9 +245,14 @@ def test_departure_reasons_from_draft_and_portal():
     from cfbr.report.roster_web import DEPARTURE_REASONS, roster_tables
 
     roster, ppa, d, status = _data()
-    prev = pl.DataFrame({"season": [2025] * 4, "player_id": ["qbA", "cbA", "olA", "wrA"], "team": ["A"] * 4,
-                         "position": ["QB", "CB", "OL", "WR"], "class_year": [3, 4, 4, 2]})
-    roster = pl.concat([roster, prev], how="diagonal_relaxed").with_columns(
+    # No stats last season: olS (senior, on no roster now), olU (freshman, on no roster), olT (on B now),
+    # olR (still on A).
+    prev = pl.DataFrame({"season": [2025] * 8, "player_id": ["qbA", "cbA", "olA", "wrA", "olS", "olU", "olT", "olR"],
+                         "team": ["A"] * 8, "position": ["QB", "CB", "OL", "WR", "OL", "OL", "OL", "OL"],
+                         "class_year": [3, 4, 4, 2, 4, 1, 2, 3]})
+    now = pl.DataFrame({"season": [2026] * 2, "player_id": ["olT", "olR"], "team": ["B", "A"], "position": ["OL"] * 2,
+                        "class_year": [3, 4]})
+    roster = pl.concat([roster, prev, now], how="diagonal_relaxed").with_columns(
         name=pl.col("player_id").replace({"cbA": "Cee Bee Jr.", "wrA": "Dub Arr"}),
         jersey=pl.lit(None, pl.Int32), height=pl.lit(None, pl.Int32), weight=pl.lit(None, pl.Int32),
         home_city=pl.lit(None, pl.Utf8), home_state=pl.lit(None, pl.Utf8))
@@ -272,6 +277,12 @@ def test_departure_reasons_from_draft_and_portal():
     assert dep["cbA"]["reason"] == "portal_transfer" and dep["cbA"]["portal_destination"] == "Montana"  # "Jr." ignored
     assert dep["wrA"]["reason"] == "transfer" and dep["wrA"]["in_portal"] is True   # roster beats portal
     assert dep["qbB"]["in_portal"] is False                                 # B had no portal entries
+    # Players with no stats last season are departures too.
+    assert dep["olS"]["reason"] == "eligibility" and dep["olS"]["team"] == "A" and dep["olS"]["prev_plays"] is None
+    assert dep["olU"]["reason"] == "unknown"                                # underclassman: no reason to assume
+    assert dep["olT"]["reason"] == "transfer" and dep["olT"]["to_team"] == "B"
+    assert "olR" not in dep
+    assert dep["cbA"]["prev_class_year"] == 4                               # a senior in the portal stays a portal row
     assert {r["reason"] for r in dep.values()} <= set(DEPARTURE_REASONS)
 
 

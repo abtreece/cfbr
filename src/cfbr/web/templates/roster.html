@@ -33,7 +33,7 @@
 {% if card %}
 <div class="tiles">
   {{ tile("Players", card.size, card.returners ~ " returners · " ~ card.transfers_in ~ " transfers in · " ~ card.newcomers ~ " newcomers") }}
-  {{ tile("Departures", card.departures, (card.drafted ~ " drafted · " if card.drafted is not none else "") ~ card.transfers_out ~ " now on another roster") }}
+  {{ tile("Departures", card.departures, (card.drafted ~ " drafted · " if card.drafted is not none else "") ~ card.transfers_out ~ " now on another roster" ~ (" · " ~ card.out_of_eligibility ~ " out of eligibility" if card.out_of_eligibility else "")) }}
   {{ tile("Last season's starting QB", card.last_qb.name, card.last_qb.detail) }}
   {% if in_qb %}{{ tile("Incoming transfer QB", in_qb.name, in_qb.detail) }}{% endif %}
 </div>
@@ -117,9 +117,10 @@
     <select data-row-filter="{% for sec in departure_sections %}departures-{{ sec.key }}{{ ' ' if not loop.last }}{% endfor %}" data-attr="reason">
       <option value="">All</option>
       <option value="drafted">Drafted</option>
-      <option value="transfer">On another FBS roster</option>
+      <option value="transfer">On another roster</option>
       {% if portal_data %}<option value="portal_transfer">Portal, other school</option>
       <option value="portal_no_school">Portal, no school listed</option>{% endif %}
+      <option value="eligibility">Out of eligibility</option>
       <option value="unknown">No record</option>
     </select>
   </label>
@@ -143,7 +144,8 @@
         {%- elif r.reason == "transfer" %}{{ team_link(r.to_team, season, fbs_teams) }}
         {%- elif r.reason == "portal_transfer" %}{{ team_link(r.portal_destination, season, fbs_teams) }} <span class="muted">(portal)</span>
         {%- elif r.reason == "portal_no_school" %}<span class="muted">in portal, no school listed</span>
-        {%- else %}<span class="muted">not on a roster{% if (r.prev_class_year or 0) >= 4 %} · senior last season{% endif %}</span>{% endif -%}
+        {%- elif r.reason == "eligibility" %}<span class="muted">out of eligibility</span>
+        {%- else %}<span class="muted">not on a roster</span>{% endif -%}
       </td>
       {{ stat_cells(sec, r) }}
     </tr>
