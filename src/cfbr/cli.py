@@ -512,7 +512,29 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     log.info("season-to-date: %s", json.dumps({k: m.get(k) for k in ("n_games", "mae", "line_mae", "model_mae_lined",
                                                                      "ats_win_rate", "massey_mae")}, default=float))
     bets_failed = _bets_step(cfg, ds, season, week)
-    # Shadow prior comparison: also isolated, never affects published output.
+    shadow_failed = _run_shadows(cfg, ds, eng, season)
+    # Season simulation: isolated too.
+    sim_failed = False
+    if cfg.sim.enabled:
+        try:
+            from cfbr.sim.report import run_sim
+
+            run_sim(eng, season, week)
+        except Exception:
+            log.exception("season simulation failed; continuing")
+            sim_failed = True
+    # Last, so a web-data failure can't cost the rankings or the accuracy line.
+    web_out = build_season(eng, season, web_dir(cfg))
+    typer.echo(f"wrote {out}, {acc_path} and {web_out}")
+    if quota_hit:
+        raise typer.Exit(code=3)
+    if bets_failed or shadow_failed or sim_failed:
+        raise typer.Exit(code=6)
+
+
+def _run_shadows(cfg, ds, eng, season: int) -> bool:
+    """Shadow comparisons (prior, portal, totals, calibration v2/v3): each isolated, never affects
+    published output. Returns True if any failed."""
     shadow_failed = False
     plain_shadow_failed = False
     try:
@@ -559,22 +581,32 @@ def _weekly_run(config: ConfigOpt = None) -> None:
     except Exception:
         log.exception("calibration v3 shadow comparison failed; continuing")
         shadow_failed = True
-    # Season simulation: isolated too.
-    sim_failed = False
-    if cfg.sim.enabled:
-        try:
-            from cfbr.sim.report import run_sim
+    return shadow_failed
 
-            run_sim(eng, season, week)
-        except Exception:
-            log.exception("season simulation failed; continuing")
-            sim_failed = True
-    # Last, so a web-data failure can't cost the rankings or the accuracy line.
+
+@app.command()
+def restate(
+    season: Annotated[int, typer.Option()],
+    through_week: Annotated[int, typer.Option(help="Last completed regular-season week")],
+    config: ConfigOpt = None,
+) -> None:
+    """Restate a live season under the published config (DECISIONS "FCS games, two-stage fit"): moves
+    out/{season}/wNN/ and accuracy.csv to out/{season}/_v1/, re-ranks those weeks, rebuilds the accuracy
+    line, season sims, shadows and the web season. Never touches the paper-bet ledger. Server only;
+    makes no API calls. Don't run it while `cfbr weekly` is running."""
+    from cfbr.data import Dataset
+    from cfbr.report.restate import archive_outputs, restate_season
+    from cfbr.web.build import build_season, web_dir
+
+    cfg = _default_config(config)
+    log.info("config: %s", cfg.source)
+    ds = Dataset.load(cfg)
+    weeks = archive_outputs(cfg.paths.out_dir / str(season), through_week)
+    eng = restate_season(cfg, ds, season, weeks)
+    failed = _run_shadows(cfg, ds, eng, season)
     web_out = build_season(eng, season, web_dir(cfg))
-    typer.echo(f"wrote {out}, {acc_path} and {web_out}")
-    if quota_hit:
-        raise typer.Exit(code=3)
-    if bets_failed or shadow_failed or sim_failed:
+    typer.echo(f"restated {season} weeks {weeks}; archive {cfg.paths.out_dir / str(season) / '_v1'}; web {web_out}")
+    if failed:
         raise typer.Exit(code=6)
 
 
