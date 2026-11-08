@@ -5,14 +5,18 @@ document.querySelectorAll("select[data-autosubmit]").forEach((sel) => {
   sel.addEventListener("change", () => sel.form.requestSubmit());
 });
 
-// -- row filters: <select data-row-filter="tableId" data-attr="pos"> hides rows whose data-pos differs --
+// -- row filters: <select data-row-filter="tableId" data-attr="pos"> hides rows whose data-pos differs.
+//    data-row-filter may list several table ids (space-separated); each table applies every
+//    select that names it, so a page-wide filter and a per-table one combine. --
+const filterTargets = (sel) => sel.dataset.rowFilter.split(/\s+/).filter(Boolean);
 document.querySelectorAll("select[data-row-filter]").forEach((sel) => {
   sel.addEventListener("change", () => {
-    const id = sel.dataset.rowFilter;
-    const active = Array.from(document.querySelectorAll(`select[data-row-filter="${id}"]`))
-      .filter((s) => s.value).map((s) => [s.dataset.attr, s.value]);
-    document.querySelectorAll(`#${id} tbody tr`).forEach((tr) => {
-      tr.hidden = !active.every(([attr, value]) => tr.dataset[attr] === value);
+    filterTargets(sel).forEach((id) => {
+      const active = Array.from(document.querySelectorAll("select[data-row-filter]"))
+        .filter((s) => s.value && filterTargets(s).includes(id)).map((s) => [s.dataset.attr, s.value]);
+      document.querySelectorAll(`#${id} tbody tr`).forEach((tr) => {
+        tr.hidden = !active.every(([attr, value]) => tr.dataset[attr] === value);
+      });
     });
   });
 });

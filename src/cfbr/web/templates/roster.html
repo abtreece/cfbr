@@ -1,13 +1,19 @@
 {% extends "base.html" %}
 {% from "macros.html" import tile, team_link, tabs, col_legend  %}
 {% block title %}{{ team }} {{ season }} roster · CFB Ratings{% endblock %}
-{% set col_defs = [
-  ("Plays", "Plays with a recorded result last season, at any school"),
-  ("PPA/play", "Expected points added per play last season"),
-  ("Tkl", "Tackles last season, at any school"),
-  ("Havoc", "Tackles for loss + passes defended + interceptions last season"),
-  ("Career", "Prior seasons with recorded stats; for QBs, prior-season starts (games leading his team in pass attempts, 5+)"),
-  ("Class", "Class last season")] %}{% set col = dict(col_defs) %}
+{% set career_def = "Prior seasons with recorded stats; for QBs, prior-season starts (games leading his team in pass attempts, 5+)" %}
+{# Sections (QB / offense / defense / special teams) share the bio columns; each brings its own
+   stat columns from cfbr.web.roster.SECTIONS as (key, label, definition, format, phone class). #}
+{% macro stat_heads(sec) -%}
+  {% for key, label, definition, fmt, cls in sec.cols %}<th data-sort="num" class="num {{ cls }}" title="{{ definition }}">{{ label }}</th>{% endfor %}
+{%- endmacro %}
+{% macro stat_cells(sec, r) -%}
+  {% for text, v in r.cells %}<td class="num {{ sec.cols[loop.index0][4] }}" data-v="{{ v }}">{{ text }}</td>{% endfor %}
+{%- endmacro %}
+{% macro name_cell(r, link) -%}
+  <td class="team strong">{% if link %}<a href="/player/{{ season }}/{{ r.player_id|q }}">{{ r.name }}</a>{% else %}{{ r.name or "—" }}{% endif %}
+    {%- if r.note %} <span class="muted">· {{ r.note }}</span>{% endif %}</td>
+{%- endmacro %}
 {% block content %}
 <form class="filters" method="get" onsubmit="location.href='/roster/'+this.season.value+'/{{ team|q }}'; return false;">
   {% if roster_seasons|length > 1 %}
@@ -49,14 +55,8 @@
 
 <h2>Roster</h2>
 <form class="filters" onsubmit="return false;">
-  <label>Position
-    <select data-row-filter="roster" data-attr="pos">
-      <option value="">All</option>
-      {% for p in positions %}<option>{{ p }}</option>{% endfor %}
-    </select>
-  </label>
   <label>Status
-    <select data-row-filter="roster" data-attr="status">
+    <select data-row-filter="{% for sec in sections %}roster-{{ sec.key }}{{ ' ' if not loop.last }}{% endfor %}" data-attr="status">
       <option value="">All</option>
       <option value="returner">Returners</option>
       <option value="transfer_in">Transfers in</option>
@@ -64,23 +64,32 @@
     </select>
   </label>
 </form>
+{% for sec in sections %}
+<h3 id="{{ sec.key }}">{{ sec.heading }} <span class="muted">{{ sec.rows|length }}</span></h3>
+{% if sec.positions|length > 1 %}
+<form class="filters" onsubmit="return false;">
+  <label>Position
+    <select data-row-filter="roster-{{ sec.key }}" data-attr="pos">
+      <option value="">All</option>
+      {% for p in sec.positions %}<option>{{ p }}</option>{% endfor %}
+    </select>
+  </label>
+</form>
+{% endif %}
 <div class="table-wrap">
-<table class="data sortable" id="roster">
+<table class="data sortable" id="roster-{{ sec.key }}">
   <thead><tr>
-    <th data-sort="num" class="num opt">#</th><th data-sort="text">Name</th><th data-sort="text">Pos</th>
+    <th data-sort="num" class="num opt">#</th><th data-sort="text">Name</th><th data-sort="num">Pos</th>
     <th data-sort="num" data-first="asc" class="num opt">Class</th><th data-sort="num" class="num opt">Ht</th><th data-sort="num" class="num opt">Wt</th>
     <th data-sort="text" class="opt">Hometown</th><th data-sort="text">Status</th>
-    <th data-sort="num" class="num" title="{{ col["Plays"] }}">Plays</th>
-    <th data-sort="num" class="num opt" title="{{ col["PPA/play"] }}">PPA/play</th>
-    <th data-sort="num" class="num opt-xs" title="{{ col["Tkl"] }}">Tkl</th>
-    <th data-sort="num" class="num opt" title="{{ col["Havoc"] }}">Havoc</th>
-    <th data-sort="num" class="opt" title="{{ col["Career"] }}">Career</th>
+    {{ stat_heads(sec) }}
+    <th data-sort="num" class="opt" title="{{ career_def }}">Career</th>
   </tr></thead>
   <tbody>
-  {% for r in rows %}
+  {% for r in sec.rows %}
     <tr data-pos="{{ r.position or '' }}" data-status="{{ r.status }}">
       <td class="num opt" data-v="{{ r.jersey if r.jersey is not none else 999 }}">{{ r.jersey if r.jersey is not none else "—" }}</td>
-      <td class="team strong"><a href="/player/{{ season }}/{{ r.player_id|q }}">{{ r.name }}</a></td>
+      {{ name_cell(r, true) }}
       <td data-v="{{ r.pos_order }}">{{ r.position or "—" }}</td>
       <td class="num opt" data-v="{{ r.class_year or 9 }}">{{ r.class_label }}</td>
       <td class="num opt" data-v="{{ r.height or 0 }}">{{ r.height_label }}</td>
@@ -88,25 +97,24 @@
       <td class="opt wrap">{{ r.hometown }}</td>
       <td class="team wrap">{% if r.status == "transfer_in" %}Transfer{% if r.from_team %} from {{ team_link(r.from_team, season - 1, fbs_teams) }}{% endif %}
           {% elif r.status == "returner" %}Returner{% else %}<span class="muted">Newcomer</span>{% endif %}</td>
-      <td class="num" data-v="{{ r.prev_plays or 0 }}">{{ r.prev_plays|count }}</td>
-      <td class="num opt" data-v="{{ r.prev_ppa_avg if r.prev_ppa_avg is not none else -99 }}">{{ r.prev_ppa_avg|signed(2) }}</td>
-      <td class="num opt-xs" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
-      <td class="num opt" data-v="{{ r.prev_havoc or 0 }}">{{ r.prev_havoc|count }}</td>
+      {{ stat_cells(sec, r) }}
       <td class="opt" data-v="{{ (r.career_seasons or 0) * 1000 + (r.career_qb_starts or 0) }}">{% if r.career_seasons %}{{ r.career_seasons|count }} season{{ "s" if r.career_seasons != 1 }}{% if r.career_qb_starts %} · {{ r.career_qb_starts|count }} starts{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-{{ col_legend(col_defs) }}
-<p class="note">Last-season numbers are at whatever school the player was on. <a href="/method#rosters">More</a></p>
+{% if sec.has_linemen %}<p class="note">CFBD records no individual stats for offensive linemen.</p>{% endif %}
+{{ col_legend([("Career", career_def)] + sec.legend) }}
+{% endfor %}
+<p class="note">Last-season numbers are at whatever school the player was on. Players are grouped by this season's position; a note after a name flags a move from the other side of the ball, or real production there last season. <a href="/method#rosters">More</a></p>
 
 <h2>Departures</h2>
-{% if departures %}
+{% if departure_sections %}
 {% if has_reasons %}
 <form class="filters" onsubmit="return false;">
   <label>Why
-    <select data-row-filter="departures" data-attr="reason">
+    <select data-row-filter="{% for sec in departure_sections %}departures-{{ sec.key }}{{ ' ' if not loop.last }}{% endfor %}" data-attr="reason">
       <option value="">All</option>
       <option value="drafted">Drafted</option>
       <option value="transfer">On another FBS roster</option>
@@ -117,17 +125,18 @@
   </label>
 </form>
 {% endif %}
+{% for sec in departure_sections %}
+<h3>{{ sec.heading }} <span class="muted">{{ sec.rows|length }}</span></h3>
 <div class="table-wrap">
-<table class="data sortable" id="departures">
+<table class="data sortable" id="departures-{{ sec.key }}">
   <thead><tr><th data-sort="text">Name</th><th data-sort="text">Pos</th>
-    <th data-sort="num" data-first="asc" class="num opt" title="{{ col["Class"] }}">Class</th>
+    <th data-sort="num" data-first="asc" class="num opt" title="Class last season">Class</th>
     <th data-sort="num" data-first="asc">Why / now at</th>
-    <th data-sort="num" class="num">Plays</th><th data-sort="num" class="num opt">PPA total</th>
-    <th data-sort="num" class="num opt-xs">Tkl</th><th data-sort="num" class="num opt">Havoc</th></tr></thead>
+    {{ stat_heads(sec) }}</tr></thead>
   <tbody>
-  {% for r in departures %}
+  {% for r in sec.rows %}
     <tr data-reason="{{ r.reason }}">
-      <td class="team strong">{{ r.name or "—" }}</td><td>{{ r.position or "—" }}</td>
+      {{ name_cell(r, false) }}<td>{{ r.position or "—" }}</td>
       <td class="num opt" data-v="{{ r.prev_class_year or 9 }}">{{ r.prev_class_label }}</td>
       <td class="team" data-v="{{ r.reason_order * 1000 + (r.draft_overall or 0) }}">
         {%- if r.reason == "drafted" %}<span class="strong">Drafted</span> <span class="muted">{{ r.draft_label }}</span>
@@ -136,16 +145,14 @@
         {%- elif r.reason == "portal_no_school" %}<span class="muted">in portal, no school listed</span>
         {%- else %}<span class="muted">not on a roster{% if (r.prev_class_year or 0) >= 4 %} · senior last season{% endif %}</span>{% endif -%}
       </td>
-      <td class="num" data-v="{{ r.prev_plays or 0 }}">{{ r.prev_plays|count }}</td>
-      <td class="num opt" data-v="{{ r.prev_ppa_total if r.prev_ppa_total is not none else -999 }}">{{ r.prev_ppa_total|signed(0) }}</td>
-      <td class="num opt-xs" data-v="{{ r.prev_tackles or 0 }}">{{ r.prev_tackles|count }}</td>
-      <td class="num opt" data-v="{{ r.prev_havoc or 0 }}">{{ r.prev_havoc|count }}</td>
+      {{ stat_cells(sec, r) }}
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-<p class="note">Players from last season who are not on this roster.{% if not has_reasons %} "Not on a roster" covers graduation, the draft, leaving football, and players CFBD's roster misses.{% endif %} <a href="/method#rosters">More</a></p>
+{% endfor %}
+<p class="note">Players from last season who are not on this roster, grouped by last season's position, most production first.{% if not has_reasons %} "Not on a roster" covers graduation, the draft, leaving football, and players CFBD's roster misses.{% endif %} <a href="/method#rosters">More</a></p>
 {% else %}
 <p class="muted">No departures recorded.</p>
 {% endif %}

@@ -15,7 +15,7 @@
   {{ tile("Status", "Transfer" if player.status == "transfer_in" else "Returner" if player.status == "returner" else "Newcomer",
           ("from " ~ player.from_team) if player.status == "transfer_in" and player.from_team else "") }}
   {{ tile(extra_labels.career_seasons[0], player.career_seasons|count) }}
-  {% if player.position == "QB" or (player.career_pass_att or 0) > 0 %}
+  {% if player.section == "qb" or (player.career_qb_starts or 0) > 0 %}
   {{ tile(extra_labels.career_pass_att[0], player.career_pass_att|count) }}
   {{ tile(extra_labels.career_qb_starts[0], player.career_qb_starts|count, "games leading his team in pass attempts (5+)") }}
   {% endif %}

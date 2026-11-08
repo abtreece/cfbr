@@ -14,7 +14,8 @@ Columns (null = unknown):
                      position, class_year (1-5), height (inches), weight (lbs), home_city,
                      home_state, status ("returner" | "transfer_in" | "new": where he was
                      last season, from production first, else last season's roster; "new"
-                     = in neither), from_team (transfer_in only), prev_plays, prev_ppa_total, prev_ppa_avg (per play),
+                     = in neither), from_team (transfer_in only), prev_position (on last
+                     season's roster, any school; null if not on one), prev_plays, prev_ppa_total, prev_ppa_avg (per play),
                      prev_pass_plays, prev_pass_ppa_total, prev_pass_ppa_avg, prev_tackles,
                      prev_havoc (TFL + passes defended + interceptions), and prev_{stat} for
                      every PREV_STATS stat (box-score season stats: yards, TDs, sacks,
@@ -285,14 +286,15 @@ def roster_tables(ds: Dataset, season: int, as_of: datetime | None = None) -> di
     # Where he was last season: the team he produced for, else last season's roster.
     # Stats alone miss most offensive linemen and backups, who'd look brand new.
     prev_ros = (ds.roster.filter(pl.col("season") == season - 1).unique("player_id", keep="first")
-                .select("player_id", prev_roster_team="team"))
+                .select("player_id", prev_roster_team="team", prev_position="position"))
     was_on = pl.coalesce("prev_team", "prev_roster_team")
     players = (ros.join(prev, on="player_id", how="left").join(prev_ros, on="player_id", how="left")
                .with_columns(status=pl.when(was_on.is_null()).then(pl.lit("new"))
                              .when(was_on == pl.col("team")).then(pl.lit("returner"))
                              .otherwise(pl.lit("transfer_in")))
                .with_columns(from_team=pl.when(pl.col("status") == "transfer_in").then(was_on))
-               .select("season", "team", *PLAYER_COLS, "status", "from_team", "prev_plays", "prev_ppa_total",
+               .select("season", "team", *PLAYER_COLS, "status", "from_team", "prev_position", "prev_plays",
+                       "prev_ppa_total",
                        "prev_ppa_avg", "prev_pass_plays", "prev_pass_ppa_total", "prev_pass_ppa_avg",
                        "prev_tackles", "prev_havoc", *[f"prev_{c}" for c in PREV_STATS])
                .filter(pl.col("team").is_in(fbs)).sort("team", "position", "name"))
