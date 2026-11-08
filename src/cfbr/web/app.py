@@ -39,7 +39,7 @@ from cfbr.web.odds import prob
 from cfbr.web.roster import count_str, roster_card
 from cfbr.web.roster import make_router as roster_router
 from cfbr.web.lines import older_line
-from cfbr.web.store import Season, Store
+from cfbr.web.store import Season, Store, _ensure
 
 HERE = Path(__file__).parent
 DISPLAY_TZ = ZoneInfo("America/Chicago")
@@ -289,9 +289,15 @@ def resume(s: Season, team: str, week: int) -> dict | None:
 def team_games(s: Season, team: str) -> pl.DataFrame:
     """Games for ``team`` from its own perspective (positive = team favored / won)."""
     g = s.games.filter((pl.col("home_team") == team) | (pl.col("away_team") == team))
+    g = _ensure(g, EFFICIENCY_COLS)  # web data built before what-moved
     home = pl.col("home_team") == team
     vegas_home = -pl.col("spread")
     return g.with_columns(
+        t_ppa=pl.when(home).then(pl.col("home_ppa")).otherwise(pl.col("away_ppa")),
+        opp_ppa=pl.when(home).then(pl.col("away_ppa")).otherwise(pl.col("home_ppa")),
+        t_sr=pl.when(home).then(pl.col("home_sr")).otherwise(pl.col("away_sr")),
+        opp_sr=pl.when(home).then(pl.col("away_sr")).otherwise(pl.col("home_sr")),
+        t_exp_ppa_edge=pl.when(home).then(pl.col("exp_ppa_edge")).otherwise(-pl.col("exp_ppa_edge")),
         is_home=home,
         opponent=pl.when(home).then(pl.col("away_team")).otherwise(pl.col("home_team")),
         opp_entity=pl.when(home).then(pl.col("away")).otherwise(pl.col("home")),
@@ -303,6 +309,23 @@ def team_games(s: Season, team: str) -> pl.DataFrame:
         t_vegas=pl.when(home).then(vegas_home).otherwise(-vegas_home),
         t_margin=pl.when(home).then(pl.col("margin")).otherwise(-pl.col("margin")),
     ).sort("kickoff_ts")
+
+
+EFFICIENCY_COLS = ["home_ppa", "away_ppa", "home_sr", "away_sr", "exp_ppa_edge", "exp_sr_edge"]
+
+
+def what_moved(hist: list[dict], tgames: list[dict]) -> dict | None:
+    """The latest week's rating-change breakdown for the team page (spec 2026-11-08-what-moved).
+    None before any week has move data (preseason, finished seasons, withheld for free viewers)."""
+    if len(hist) < 2 or hist[-1].get("move_own") is None:
+        return None
+    cur, prev = hist[-1], hist[-2]
+    games = [g for g in tgames if g.get("completed") and prev["as_of"] <= g["kickoff_ts"] < cur["as_of"]]
+    return {"label": cur["label"], "prev_rank": prev.get("rank"), "rank": cur.get("rank"),
+            "rank_change": cur.get("rank_change"), "prev_rating": prev["rating"], "rating": cur["rating"],
+            "rating_change": cur["rating_change"], "own": cur["move_own"], "decay": cur["move_decay"],
+            "others": cur["move_others"], "passed_by": cur.get("passed_by") or [], "passed": cur.get("passed") or [],
+            "n_passed_by": cur.get("n_passed_by") or 0, "n_passed": cur.get("n_passed") or 0, "games": games}
 
 
 def game_status(g: dict, now: datetime | None, live: bool) -> str:
@@ -656,7 +679,8 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
             raise HTTPException(404, f"No team named {team!r} in {season}.")
         fbs_teams = set(s.ratings.filter(pl.col("fbs"))["team"].to_list())
         now, live = datetime.now(UTC), bool(s.meta.get("live"))
-        games = [game_row(g, now, live, cfg.bets.threshold) for g in team_games(s, team).to_dicts()]
+        games_raw = team_games(s, team).to_dicts()
+        games = [game_row(g, now, live, cfg.bets.threshold) for g in games_raw]
         team_seasons = [y for y in store.seasons()
                         if (other := store.season(y)) is not None and other.ratings["team"].is_in([team]).any()]
         last_week = hist["week"][-1]
@@ -673,6 +697,7 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                       explain=[] if locked else explain_rating(s, team, last_week),
                       resume=None if locked or team not in fbs_teams else resume(s, team, last_week),
                       roster=roster_card(store.roster(season), team),
+                      moved=None if locked else what_moved(hist.to_dicts(), games_raw),
                       projection=None if locked else team_projection(store, season, team))
         return private(resp, s)
 
@@ -864,7 +889,8 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
             raise HTTPException(404, f"No team named {team!r} in {season}.")
         games = team_games(s, team).select(
             "game_id", "kickoff_ts", "slot", "completed", "is_home", "neutral_site", "opponent", "opp_ap_rank", "team_points",
-            "opp_points", "t_pred", "t_win_prob", "t_vegas", "t_margin")
+            "opp_points", "t_pred", "t_win_prob", "t_vegas", "t_margin", "t_ppa", "opp_ppa", "t_sr", "opp_sr",
+            "t_exp_ppa_edge")
         return clean({"season": season, "team": team, "weeks": hist.to_dicts(), "games": games.to_dicts()})
 
     @app.get("/api/games")

@@ -37,6 +37,28 @@
 </div>
 {% if is_fbs and polls %}<p class="note poll-note">{{ polls|poll_line }}</p>{% endif %}
 
+{% if moved %}
+<h2 id="moved">What moved <span class="muted">{{ moved.label|lower }}</span></h2>
+<p class="note">Rank {{ moved.prev_rank }} → {{ moved.rank }}{% if moved.rank_change %} ({{ delta(moved.rank_change, 0) }}){% endif %} · rating {{ moved.prev_rating|signed(2) }} → {{ moved.rating|signed(2) }} ({{ delta(moved.rating_change, 2) }}). Ratings come from per-play efficiency against what was expected, not from wins and losses. <a href="/method#moves">How this is split</a></p>
+<div class="table-wrap">
+<table class="data moved">
+  <tbody>
+    <tr><th scope="row">Own game</th><td class="num strong">{{ moved.own|signed(2) }}</td>
+      <td>{% for g in moved.games %}
+        {%- set result = "Beat" if g.team_points > g.opp_points else ("Lost to" if g.team_points < g.opp_points else "Tied") -%}
+        {{ result }} {{ g.opponent }} {{ g.team_points }}–{{ g.opp_points }}{% if g.t_pred is not none %} · expected to {{ "win" if g.t_pred > 0 else "lose" }} by {{ "%.1f"|format(g.t_pred|abs) }}{% endif %}
+        {%- if g.t_ppa is not none %}<br><span class="muted">per play: PPA {{ g.t_ppa|signed(3) }} vs {{ g.opp_ppa|signed(3) }}{% if g.t_exp_ppa_edge is not none %} (edge {{ (g.t_ppa - g.opp_ppa)|signed(3) }}, expected {{ g.t_exp_ppa_edge|signed(3) }}){% endif %} · success {{ "%.1f"|format(100 * g.t_sr) }}% vs {{ "%.1f"|format(100 * g.opp_sr) }}%</span>{% endif %}
+        {%- if not loop.last %}<br>{% endif %}
+      {%- else %}No game this week{% endfor %}</td></tr>
+    <tr><th scope="row">Older plays fading</th><td class="num">{{ moved.decay|signed(2) }}</td><td class="muted">earlier plays count a little less each week</td></tr>
+    <tr><th scope="row">Other games</th><td class="num">{{ moved.others|signed(2) }}</td><td class="muted">other results re-rating this team's opponents</td></tr>
+    {% if moved.passed_by %}<tr><th scope="row">Passed by</th><td></td><td>{{ moved.passed_by|join(", ") }}{% if moved.n_passed_by > moved.passed_by|length %} and {{ moved.n_passed_by - moved.passed_by|length }} more{% endif %}</td></tr>{% endif %}
+    {% if moved.passed %}<tr><th scope="row">Passed</th><td></td><td>{{ moved.passed|join(", ") }}{% if moved.n_passed > moved.passed|length %} and {{ moved.n_passed - moved.passed|length }} more{% endif %}</td></tr>{% endif %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
 {% if explain %}
 <h2>Explain the rating</h2>
 <p class="note">Opponent-adjusted, against the FBS average; higher is better on both sides. <a href="/method#rating">More</a></p>
@@ -76,7 +98,9 @@
   <div class="table-wrap">
   <table class="data">
     <thead><tr><th>Through</th><th class="num">Rk</th><th class="num">±</th><th class="num">Rating</th><th class="num">Off</th>
-      <th class="num">Def</th><th class="num">Δ Rating</th><th class="num">Record</th><th class="num">Prior</th>
+      <th class="num">Def</th><th class="num">Δ Rating</th><th class="num" title="Own game">Own</th>
+      <th class="num" title="Older plays fading">Fade</th><th class="num" title="Other games">Others</th>
+      <th class="num">Record</th><th class="num">Prior</th>
       <th class="num">AP</th><th class="num">Coaches</th>{% if show_cfp %}<th class="num">CFP</th>{% endif %}</tr></thead>
     <tbody>
     {% for h in hist %}
@@ -84,6 +108,8 @@
         <td class="num">{{ h.rank if h.rank is not none else "—" }}</td><td class="num">{{ delta(h.rank_change, 0) }}</td>
         <td class="num strong">{{ h.rating|signed }}</td><td class="num">{{ h.offense|signed }}</td>
         <td class="num">{{ h.defense|signed }}</td><td class="num">{{ delta(h.rating_change) }}</td>
+        <td class="num">{{ h.move_own|signed(2) }}</td><td class="num">{{ h.move_decay|signed(2) }}</td>
+        <td class="num">{{ h.move_others|signed(2) }}</td>
         <td class="num">{{ h.w }}–{{ h.l }}</td><td class="num">{{ h.prior_share|pct(0) }}</td>
         {{ poll_cell(h.ap_rank) }}{{ poll_cell(h.coaches_rank) }}{% if show_cfp %}{{ poll_cell(h.cfp_rank) }}{% endif %}</tr>
     {% endfor %}
