@@ -114,6 +114,9 @@ def test_query_timeout_interrupts(env):
     slow = ToolSession(env.db_path, env.out_dir, 2026, 9, Investigate(query_timeout_seconds=0.2))
     text, err = slow.query("SELECT count(*) FROM range(10000000000) a")
     assert err and "timed out after 0.2s" in text
+    # The recovery query also starts a fresh child, and on javelin child startup alone can
+    # exceed 0.2s, so only the query meant to time out gets the tight limit.
+    slow.cfg.query_timeout_seconds = 30
     ok_text, ok_err = slow.query("SELECT 1 AS ok")
     assert not ok_err and ok_text.splitlines()[:3] == ["result_id 2 (1 rows)", "ok", "1"]
     slow.close()
