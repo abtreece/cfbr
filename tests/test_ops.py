@@ -172,3 +172,28 @@ def test_weekly_run_does_not_retry_a_client_error(monkeypatch, tmp_path):
 
     with pytest.raises(httpx.HTTPStatusError):
         _outage_run(monkeypatch, tmp_path, [_status_error(401)])
+
+
+def test_prep_and_ingest_use_the_tuned_config(monkeypatch):
+    """Stored model_plays must be filtered the way the model filters (tuned.toml has the
+    garbage-time filter off; default.toml has it on)."""
+    from cfbr.ingest import store
+    from cfbr.prep import plays
+
+    seen = []
+    monkeypatch.setattr(plays, "build_prep", lambda cfg: seen.append(cfg) or {})
+    cli.prep(None)
+    assert seen[0].prep.garbage_time.enabled is False
+
+    class StopClient(Exception):
+        pass
+
+    def fake_client(cfg, refresh=False):
+        seen.append(cfg)
+        raise StopClient
+
+    monkeypatch.setattr("cfbr.ingest.client.CFBDClient", fake_client)
+    monkeypatch.setattr(store, "build_store", lambda *a: {})
+    with pytest.raises(StopClient):
+        cli.ingest(season=None, week=None, backfill=False, refresh=False, config=None)
+    assert seen[1].prep.garbage_time.enabled is False

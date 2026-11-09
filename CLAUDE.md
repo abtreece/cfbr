@@ -57,7 +57,7 @@ Production (cron, `cfbr-web`, the API key, the paper-bet ledger of record) is ja
 - The site's "after week N" ratings must exactly match `cfbr rank`'s `out/{season}/wNN/` output (tested).
 - The `lines` table holds the latest row per game-provider. Live line snapshots are kept separately under `data/raw/lines/{season}/snapshots/`.
 - Offshore books (`[bets].offshore_books`) count toward the consensus line but are never used to price a bet. CFBD non-books (projections, aggregators) never price a bet either. All books are shown regardless of jurisdiction.
-- Config: every tunable lives in `config/default.toml` (pydantic schema in `config.py`). `rank`/`weekly`/`bets`/`web` use `config/tuned.toml` when it exists, and `--config` overrides. Keep old keys loadable (for example, `prior_k` stays in the schema even though it's unused) so `tuned.toml` keeps working.
+- Config: every tunable lives in `config/default.toml` (pydantic schema in `config.py`). `ingest`/`prep`/`rank`/`weekly`/`bets`/`web` use `config/tuned.toml` when it exists, and `--config` overrides. Keep old keys loadable (for example, `prior_k` stays in the schema even though it's unused) so `tuned.toml` keeps working.
 
 ## Conventions
 
