@@ -3,6 +3,8 @@
 import json
 import math
 import os
+import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -1835,6 +1837,9 @@ def test_matchup_page(web_cfg):
     assert 'name="home" id="h2h-q-home" value="Ohio State"' in form
     assert 'name="away" id="h2h-q-away" value="Texas A&amp;M"' in form
     assert 'name="neutral" id="h2h-q-neutral" value="1">' in form  # enabled, so it submits
+    # The margin split ships the unit numbers it needs and nothing fitted.
+    assert 'id="h2h-split"' in html and "Where the margin comes from" in html
+    assert '"offense": 10.0' in html and '"d_sr": 0.05' in html
     html = c.get("/matchup?season=2026&home=Nobody&away=Nobody").text
     assert html.count(" selected>") >= 2  # still two different teams picked
     # Matchup lives under Games in the nav, as the second tab.
@@ -1850,6 +1855,53 @@ def test_matchup_page(web_cfg):
     assert r.status_code == 200 and "for subscribers" in r.text and "h2h-data" not in r.text
     for leak in MODEL_STRINGS:
         assert leak not in r.text
+
+def _matchup_split_fn(html: str) -> str:
+    start = html.index('<script id="h2h-split-fn">') + len('<script id="h2h-split-fn">')
+    return html[start:html.index("</script>", start)]
+
+
+def _node(script: str) -> str:
+    return subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout.strip()
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node to run the page's JavaScript")
+@pytest.mark.parametrize("stage2", [None, {"pred": 0.05, "pred_ps": -0.1, "home_ps": 0.8}])
+@pytest.mark.parametrize("is_home", [0, 1])
+def test_matchup_split_adds_up_to_the_margin(web_cfg, stage2, is_home):
+    """The possession rows, home field and calibration row sum to the shown margin, and each
+    possession row is b_ppa × PPA edge + b_sr × success-rate edge (offense − defense)."""
+    d = _write_season(web_dir(web_cfg), datetime.now(UTC), live=False)
+    meta = json.loads((d / "meta.json").read_text())
+    cal = {"b_home": 2.5, "b_ppa": 50.0, "b_sr": 40.0, "sigma": 16.0, "stage2": stage2}
+    meta["calibration"] = cal
+    (d / "meta.json").write_text(json.dumps(meta))
+    fn = _matchup_split_fn(TestClient(create_app(web_cfg)).get("/matchup?season=2026").text)
+
+    def team(o_ppa, d_ppa, o_sr, d_sr, prior_share):
+        off, de = cal["b_ppa"] * o_ppa + cal["b_sr"] * o_sr, cal["b_ppa"] * d_ppa + cal["b_sr"] * d_sr
+        return {"rating": off + de, "offense": off, "defense": de, "o_ppa": o_ppa, "d_ppa": d_ppa,
+                "o_sr": o_sr, "d_sr": d_sr, "prior_share": prior_share}
+
+    h, a = team(0.12, 0.10, 0.08, 0.06, 0.4), team(0.05, 0.14, 0.02, 0.07, 0.6)
+    call = f"h2hSplit({json.dumps(h)}, {json.dumps(a)}, {is_home}, {json.dumps(cal)})"
+    out = json.loads(_node(fn + f"\nconsole.log(JSON.stringify({call}));"))
+    assert out["ok"]
+    parts = out["home"]["points"] + out["away"]["points"] + out["field"] + out["calibration"]
+    assert parts == pytest.approx(out["margin"], abs=1e-9)
+    assert out["field"] == pytest.approx(is_home * 2.5)
+    assert out["home"]["points"] == pytest.approx(50.0 * (0.12 - 0.14) + 40.0 * (0.08 - 0.07))
+    assert out["away"]["points"] == pytest.approx(-(50.0 * (0.05 - 0.10) + 40.0 * (0.02 - 0.06)))
+    assert out["home"]["ppa"] == [0.12, 0.14] and out["away"]["sr"] == [0.02, 0.06]
+    base = h["rating"] - a["rating"] + is_home * 2.5
+    if stage2 is None:
+        assert out["calibration"] == 0 and out["margin"] == pytest.approx(base)
+    else:
+        assert out["margin"] == pytest.approx(base + 0.05 * base - 0.1 * base * 0.5 + 0.8 * is_home * 0.5)
+    # A team missing a unit value hides the split instead of showing a wrong sum.
+    call = f"h2hSplit({json.dumps({**h, 'o_sr': None})}, {json.dumps(a)}, 1, {json.dumps(cal)})"
+    assert _node(fn + f"\nconsole.log({call}.ok);") == "false"
+
 
 def test_model_name_is_site_text_only(client):
     html = client.get("/games?season=2026&slot=r01").text

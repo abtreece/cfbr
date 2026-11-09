@@ -51,8 +51,41 @@
   <div class="tile"><div class="tile-label">Ratings</div><div class="tile-value" id="h2h-ratings">—</div><div class="tile-sub" id="h2h-ratings-sub"></div></div>
   <div class="tile"><div class="tile-label">Home-field advantage</div><div class="tile-value">{{ cal.b_home|signed }}</div><div class="tile-sub">points, calibrated{% if cal.stage2 %} (plus stage-2 terms){% endif %}; σ = {{ cal.sigma|num }}</div></div>
 </div>
+<section id="h2h-split-wrap">
+<h2 id="split">Where the margin comes from</h2>
+<div class="table-wrap">
+<table class="data h2h-split" id="h2h-split">
+  <thead><tr><th scope="col"></th><th scope="col" class="num">Points</th>
+    <th scope="col" class="num">PPA per play</th><th scope="col" class="num">Success rate</th></tr></thead>
+  <tbody>
+    <tr id="h2h-split-home"><th scope="row">—</th><td class="num strong"></td><td class="num"></td><td class="num"></td></tr>
+    <tr id="h2h-split-away"><th scope="row">—</th><td class="num strong"></td><td class="num"></td><td class="num"></td></tr>
+    <tr id="h2h-split-field"><th scope="row">Home field</th><td class="num"></td><td colspan="2" class="muted"></td></tr>
+    <tr id="h2h-split-cal" hidden><th scope="row">Calibration adjustment</th><td class="num"></td><td colspan="2" class="muted">prior-share and home terms fitted on past seasons</td></tr>
+    <tr class="total"><th scope="row">Expected margin</th><td class="num strong" id="h2h-split-total"></td><td colspan="2"></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="note">Each possession row is the offense's opponent-adjusted value against the other team's defense, both measured from the FBS average with higher better. Points name the team each part favors, and the parts add up to the expected margin.</p>
+</section>
 <p class="note"><a href="/method#matchup">How the margin and win probability are computed</a></p>
 <script id="h2h-data" type="application/json">{{ {"teams": teams, "cal": cal}|tojson }}</script>
+<script id="h2h-split-fn">
+// The expected margin as exact parts: rating = offense + defense, so
+// margin = (home off − away def) − (away off − home def) + home field (+ stage-2 terms).
+function h2hSplit(h, a, isHome, cal) {
+  let m = h.rating - a.rating + isHome * cal.b_home;
+  const base = m;
+  if (cal.stage2) {
+    const ps = ((h.prior_share ?? 1) + (a.prior_share ?? 1)) / 2;
+    m += cal.stage2.pred * m + cal.stage2.pred_ps * m * ps + cal.stage2.home_ps * isHome * ps;
+  }
+  const side = (o, d) => ({points: o.offense - d.defense, ppa: [o.o_ppa, d.d_ppa], sr: [o.o_sr, d.d_sr]});
+  const home = side(h, a), away = side(a, h);
+  const ok = [h, a].every((t) => ["offense", "defense", "o_ppa", "d_ppa", "o_sr", "d_sr"].every((k) => t[k] != null));
+  return {ok, home, away: {...away, points: -away.points}, field: isHome * cal.b_home, calibration: m - base, margin: m};
+}
+</script>
 <script>
 (function () {
   const data = JSON.parse(document.getElementById("h2h-data").textContent);
@@ -72,11 +105,8 @@
     const h = byTeam[home.value], a = byTeam[away.value];
     if (!h || !a) return;
     const isHome = neutral.checked ? 0 : 1;
-    let m = h.rating - a.rating + isHome * cal.b_home;
-    if (cal.stage2) {
-      const ps = ((h.prior_share ?? 1) + (a.prior_share ?? 1)) / 2;
-      m += cal.stage2.pred * m + cal.stage2.pred_ps * m * ps + cal.stage2.home_ps * isHome * ps;
-    }
+    const sp = h2hSplit(h, a, isHome, cal);
+    const m = sp.margin;
     const p = phi(m / cal.sigma);
     const fav = m >= 0 ? h.team : a.team;
     document.getElementById("h2h-margin").textContent = sgn(m, 1);
@@ -85,6 +115,27 @@
     document.getElementById("h2h-prob-sub").textContent = `${fav} wins · ${h.team} ${(100 * p).toFixed(0)}%, ${a.team} ${(100 * (1 - p)).toFixed(0)}%`;
     document.getElementById("h2h-ratings").textContent = `${sgn(h.rating, 1)} vs ${sgn(a.rating, 1)}`;
     document.getElementById("h2h-ratings-sub").textContent = `${h.team} #${h.rank ?? "—"} · ${a.team} #${a.rank ?? "—"}`;
+    document.getElementById("h2h-split-wrap").hidden = !sp.ok;
+    if (!sp.ok) return;
+    const vs = ([o, d], f) => `${f(o)} vs ${f(d)}`;
+    const ppa = (v) => sgn(v, 3), sr = (v) => `${sgn(100 * v, 1)}%`;
+    // Parts are signed from the home team's side; name the team each favors so a row never
+    // reads negative for the team whose offense is winning it.
+    const favors = (v) => Math.abs(v) < 0.05 ? "even" : `${v > 0 ? h.team : a.team} +${Math.abs(v).toFixed(1)}`;
+    [["home", h], ["away", a]].forEach(([k, t]) => {
+      const row = document.getElementById(`h2h-split-${k}`).children;
+      row[0].textContent = `${t.team} has the ball`;
+      row[1].textContent = favors(sp[k].points);
+      row[2].textContent = vs(sp[k].ppa, ppa);
+      row[3].textContent = vs(sp[k].sr, sr);
+    });
+    const field = document.getElementById("h2h-split-field").children;
+    field[1].textContent = isHome ? favors(sp.field) : "—";
+    field[2].textContent = isHome ? `${h.team} at home` : "neutral field";
+    const calRow = document.getElementById("h2h-split-cal");
+    calRow.hidden = !cal.stage2;
+    calRow.children[1].textContent = favors(sp.calibration);
+    document.getElementById("h2h-split-total").textContent = document.getElementById("h2h-pick").textContent;
   }
   // Keep the URL in step with the picks so the matchup can be shared or bookmarked.
   function sync() {
