@@ -761,14 +761,16 @@ def create_app(cfg: Config, store: Store | None = None) -> FastAPI:
                      home: str | None = None, away: str | None = None, neutral: bool = False,
                      premium: bool = Depends(premium_viewer)):
         """Head-to-head tool: two ratings plus the calibrated home edge, priced in the browser
-        from numbers already in the build (meta.calibration); the server fits nothing."""
+        from numbers already in the build (meta.calibration), and the margin split into each
+        side's possessions (offense vs the other defense); the server fits nothing."""
         s, locked = view(get_season(season), premium)
         week = pick_week(s, week)
         cal = s.meta.get("calibration")
         teams = []
         if not locked:
             fbs = s.ratings.filter(pl.col("fbs") & (pl.col("week") == week)).sort("team")
-            teams = fbs.select("team", "conference", "rating", "rank", "prior_share").to_dicts()
+            teams = fbs.select("team", "conference", "rating", "rank", "prior_share", "offense", "defense",
+                               "o_ppa", "d_ppa", "o_sr", "d_sr").to_dicts()
         # ?home=&away=&neutral=1 makes a matchup shareable; unknown names fall back to the defaults.
         names = [t["team"] for t in teams]
         # Defaults: the week's top two teams, a matchup people actually want to see.
