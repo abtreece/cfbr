@@ -218,7 +218,9 @@ request id go to the ledger.
 **Grounding check** (deterministic, after `submit_verdict`): every
 `evidence[].query_id` must name a query that ran without error in this
 session, and `excerpt` must be a substring of its stored result. Any failure
-downgrades the verdict to `inconclusive` with reason `ungrounded`.
+downgrades the verdict to `inconclusive` with reason `ungrounded`. (As built:
+the header line is excluded, excerpts must be non-empty, and at least one
+excerpt per verdict needs 8+ non-whitespace characters; see DECISIONS.)
 
 ### Alert
 

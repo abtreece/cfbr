@@ -121,6 +121,16 @@ def test_grounded_rules():
     assert not grounded(_verdict(evidence=[{"claim": "c", "query_id": 1, "excerpt": "result_id 1 (1 rows)"}]), results)
 
 
+def test_short_excerpt_is_grounded_only_beside_a_long_one():
+    results = {1: "result_id 1 (2 rows)\nperiod\tn\n3\t31\n4\t12", 2: "result_id 2 (1 rows)\nfinal\n45-24 Temple"}
+    short = {"claim": "Q3 and Q4 counts", "query_id": 1, "excerpt": "3\t31\n4\t12"}
+    long = {"claim": "final score", "query_id": 2, "excerpt": "45-24 Temple"}
+    assert grounded(_verdict(evidence=[short, long]), results)
+    assert not grounded(_verdict(evidence=[short]), results)                  # alone, too weak
+    assert not grounded(_verdict(evidence=[{**short, "excerpt": "3\t99"}, long]), results)  # still must match
+    assert not grounded(_verdict(evidence=[{**short, "excerpt": " "}, long]), results)      # empty fails
+
+
 def test_turn_cap_gives_inconclusive_budget(session, tmp_path):
     client = FakeClient([message([tool_use("query", {"sql": "SELECT 1"}, f"tu{i}")]) for i in range(3)])
     out = _run(client, session, tmp_path, cfg=Investigate(max_turns=3))

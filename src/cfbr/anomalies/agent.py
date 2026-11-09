@@ -29,21 +29,29 @@ def _norm(text: str) -> str:
     return " ".join(str(text).split())
 
 
+MIN_EXCERPT_CHARS = 8
+
+
 def grounded(verdict: dict, results: dict[int, str]) -> bool:
-    """Every excerpt must appear in the body of a successful result (the `result_id N (...)`
-    header line is not evidence) and carry at least 8 non-whitespace characters."""
+    """Every excerpt must be non-empty and appear in the body of a successful result (the
+    `result_id N (...)` header line is not evidence). At least one excerpt must carry
+    MIN_EXCERPT_CHARS non-whitespace characters: a lone short quote like "4" matches almost
+    anything, but short table cells next to a long quote are fine."""
     evidence = verdict.get("evidence") or []
     if verdict.get("verdict") in ("data_bug", "real") and not evidence:
         return False
+    longest = 0
     for item in evidence:
         source = results.get(item.get("query_id"))
         excerpt = _norm(item.get("excerpt", ""))
-        if source is None or len(excerpt.replace(" ", "")) < 8:
+        chars = len(excerpt.replace(" ", ""))
+        if source is None or chars == 0:
             return False
         body = source.split("\n", 1)[1] if "\n" in source else ""
         if excerpt not in _norm(body):
             return False
-    return True
+        longest = max(longest, chars)
+    return not evidence or longest >= MIN_EXCERPT_CHARS
 
 
 def _clip(verdict: dict) -> dict:
