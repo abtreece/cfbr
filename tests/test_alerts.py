@@ -1,3 +1,4 @@
+import base64
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -37,6 +38,28 @@ def test_send_posts_to_ntfy_only_with_a_topic(tmp_path, monkeypatch):
     assert url == "https://ntfy.sh/cfbr-secret" and kw["headers"]["Title"] == "cfbr weekly failed" and kw["content"] == b"boom"
     monkeypatch.setattr(alerts.httpx, "post", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
     assert alerts.send(cfg, "t", "m") is False  # never raises
+
+
+def test_send_delivers_a_non_ascii_title(tmp_path, monkeypatch):
+    """httpx encodes header values as ASCII, so a raw em dash or accented team name in the title
+    raised before the request left (the first live investigate alert was lost this way)."""
+    cfg = _cfg(tmp_path)
+    requests = []
+
+    def post(url, timeout=None, **kw):  # build the real request so httpx's header encoding runs
+        requests.append(alerts.httpx.Request("POST", url, **kw))
+        return type("R", (), {"raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr(alerts.httpx, "post", post)
+    monkeypatch.setattr(alerts, "ntfy_topic", lambda: "cfbr-secret")
+    title = "cfbr anomalies w10 — San José State"
+    assert alerts.send(cfg, title, "body — ok") is True
+    header = requests[0].headers["Title"]
+    assert header.isascii() and header.startswith("=?UTF-8?B?") and header.endswith("?=")
+    assert base64.b64decode(header[len("=?UTF-8?B?"):-2]).decode() == title
+    # A long body is cut on a character boundary, never inside the 3-byte em dash.
+    assert alerts.send(cfg, "t", "x" * 3499 + "—") is True
+    assert requests[1].headers["Title"] == "t" and requests[1].content == b"x" * 3499
 
 
 def _ledger(cfg, rows):
