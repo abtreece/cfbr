@@ -38,7 +38,7 @@ def ingest(
     from cfbr.ingest.client import CFBDClient, QuotaExceeded
     from cfbr.ingest.store import build_store
 
-    cfg = load_config(config)
+    cfg = _default_config(config)
     client = CFBDClient(cfg, refresh=refresh)
     stopped = False
     try:
@@ -68,7 +68,7 @@ def prep(config: ConfigOpt = None) -> None:
     """Build scrimmage_plays and model_plays from plays_raw."""
     from cfbr.prep.plays import build_prep
 
-    cfg = load_config(config)
+    cfg = _default_config(config)
     log.info("prep: %s", build_prep(cfg))
 
 

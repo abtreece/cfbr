@@ -46,7 +46,7 @@ Paper bets also use The Odds API for US sportsbook spreads with prices. Its key 
 | `cfbr moneyline-eval` | Market-only test: is a side's moneyline a better buy than its spread at −110, both priced with the points-to-cents table (`results/moneyline_pricing.md`); no API calls |
 | `cfbr sim --season 2026 --week 6` | Simulate the rest of the season (win totals, conference titles, playoff odds) into `out/{season}/wNN/season_sim.*`; `cfbr weekly` runs it too |
 
-`rank` and `weekly` use `config/tuned.toml` when it exists. Pass `--config` to override.
+`ingest`, `prep`, `rank`, `weekly`, `bets` and `web` use `config/tuned.toml` when it exists. Pass `--config` to override.
 
 ## Web app
 
